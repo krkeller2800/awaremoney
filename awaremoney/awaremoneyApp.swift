@@ -1,17 +1,27 @@
 //
-//  awaremoneyApp.swift
-//  awaremoney
+//  AwareMoneyApp.swift
+//  Aware Money
 //
-//  Created by Karl Keller on 1/23/26.
+//  Updated by Assistant on 1/23/26
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct awaremoneyApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
+        .modelContainer(for: [
+            Account.self,
+            Transaction.self,
+            Security.self,
+            HoldingSnapshot.self,
+            BalanceSnapshot.self,
+            ImportBatch.self
+        ])
     }
 }
+
