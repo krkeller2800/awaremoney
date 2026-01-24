@@ -9,7 +9,10 @@ import SwiftUI
 import SwiftData
 
 struct TransactionsListView: View {
-    @Query(sort: \Transaction.datePosted, order: .reverse) private var transactions: [Transaction]
+    @Query(sort: \Transaction.datePosted, order: .reverse)
+    private var transactions: [Transaction]
+
+    @State private var refreshTick: Int = 0
 
     var body: some View {
         NavigationStack {
@@ -35,6 +38,14 @@ struct TransactionsListView: View {
             }
             .navigationTitle("Transactions")
         }
+        .id(refreshTick)
+        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+            refreshTick &+= 1
+            AMLogging.log("TransactionsListView refresh tick: \(refreshTick), visible count: \(transactions.count)", component: "TransactionsListView")  // DEBUG LOG
+        }
+        .task {
+            AMLogging.log("TransactionsListView initial count: \(transactions.count)", component: "TransactionsListView")  // DEBUG LOG
+        }
     }
 
     private func format(amount: Decimal) -> String {
@@ -44,3 +55,4 @@ struct TransactionsListView: View {
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 }
+

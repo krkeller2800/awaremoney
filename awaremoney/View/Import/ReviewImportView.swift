@@ -14,6 +14,7 @@ struct ReviewImportView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Account.createdAt) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
+    @State private var startingBalanceInput: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -52,6 +53,29 @@ struct ReviewImportView: View {
                         ForEach(Account.AccountType.allCases, id: \.self) {
                             Text($0.rawValue)
                         }
+                    }
+                }
+            }
+
+            // Prompt for starting balance if none present
+            if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Starting Balance")
+                        .font(.subheadline)
+                    Text("Enter the account balance as of \(earliestDate.formatted(date: .abbreviated, time: .omitted))")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        TextField("0.00", text: $startingBalanceInput)
+                            .keyboardType(.decimalPad)
+                        Button("Set") {
+                            let sanitized = startingBalanceInput.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
+                            if let dec = Decimal(string: sanitized) {
+                                let sb = StagedBalance(asOfDate: earliestDate, balance: dec)
+                                vm.staged?.balances.append(sb)
+                                startingBalanceInput = ""
+                            }
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
             }

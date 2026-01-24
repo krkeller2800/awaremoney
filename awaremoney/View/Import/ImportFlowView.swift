@@ -28,6 +28,12 @@ struct ImportFlowView: View {
                 } label: {
                     Label("Import CSV", systemImage: "tray.and.arrow.down")
                 }
+                
+                NavigationLink {
+                    ImportsListView()
+                } label: {
+                    Label("View Imports", systemImage: "tray.full")
+                }
 
                 if let staged = vm.staged {
                     ReviewImportView(staged: staged, vm: vm)
@@ -38,6 +44,9 @@ struct ImportFlowView: View {
                 }
 
                 Spacer()
+            }
+            .onAppear {
+                AMLogging.log(String(describing: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!), component: "ImportFlowView")  // DEBUG LOG
             }
             .padding()
             .navigationTitle("Import")
@@ -58,3 +67,4 @@ struct ImportFlowView: View {
         }
     }
 }
+

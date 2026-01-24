@@ -23,6 +23,13 @@ struct BankCSVParser: StatementParser {
         let map = headerMap(headers)
         var staged: [StagedTransaction] = []
 
+        let hasBalanceColumn = map.keys.contains(where: { $0.contains("balance") })
+
+        var earliest: (date: Date, amount: Decimal, runningBalance: Decimal)? = nil
+        var latest: (date: Date, runningBalance: Decimal)? = nil
+
+        var balances: [StagedBalance] = []
+
         for row in rows {
             guard let dateStr = value(row, map, key: "date"),
                   let date = parseDate(dateStr) else { continue }
@@ -32,6 +39,26 @@ struct BankCSVParser: StatementParser {
 
             // Amount logic
             let amount = try parseAmount(row: row, map: map)
+
+            // Optional running balance column (e.g., Chase CSVs)
+            if hasBalanceColumn, let balStr = value(row, map, key: "balance"),
+               let bal = Decimal(string: sanitizeAmount(balStr)) {
+                // Track earliest transaction with a running balance
+                if let e = earliest {
+                    if date < e.date {
+                        earliest = (date, amount, bal)
+                    }
+                } else {
+                    earliest = (date, amount, bal)
+                }
+
+                // Track latest running balance by date
+                if let l = latest {
+                    if date > l.date { latest = (date, bal) }
+                } else {
+                    latest = (date, bal)
+                }
+            }
 
             let hashKey = Hashing.hashKey(date: date, amount: amount, payee: desc, memo: memo, symbol: nil, quantity: nil)
 
@@ -51,13 +78,23 @@ struct BankCSVParser: StatementParser {
             staged.append(tx)
         }
 
+        // Build balance snapshots if present
+        if let e = earliest {
+            // Opening balance before applying the earliest transaction on that date
+            let opening = e.runningBalance - e.amount
+            balances.append(StagedBalance(asOfDate: e.date, balance: opening))
+        }
+        if let l = latest {
+            balances.append(StagedBalance(asOfDate: l.date, balance: l.runningBalance))
+        }
+
         return StagedImport(
             parserId: Self.id,
             sourceFileName: "Unknown.csv",
             suggestedAccountType: .checking,
             transactions: staged,
             holdings: [],
-            balances: []
+            balances: balances
         )
     }
 
@@ -106,3 +143,4 @@ struct BankCSVParser: StatementParser {
         s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
     }
 }
+

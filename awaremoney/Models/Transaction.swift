@@ -33,7 +33,7 @@ final class Transaction {
     var fees: Decimal?
 
     // Relationships
-    var account: Account?
+    @Relationship(inverse: \Account.transactions) var account: Account?
 
     init(
         id: UUID = UUID(),
@@ -65,3 +65,4 @@ final class Transaction {
         self.account = account
     }
 }
+

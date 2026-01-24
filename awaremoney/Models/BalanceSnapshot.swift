@@ -32,3 +32,4 @@ final class BalanceSnapshot {
         self.importBatch = importBatch
     }
 }
+

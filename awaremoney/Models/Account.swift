@@ -24,8 +24,8 @@ final class Account {
 
     // Relationships
     @Relationship(deleteRule: .cascade) var transactions: [Transaction]
-    @Relationship(deleteRule: .cascade) var balanceSnapshots: [BalanceSnapshot]
-    @Relationship(deleteRule: .cascade) var holdingSnapshots: [HoldingSnapshot]
+    @Relationship(deleteRule: .cascade, inverse: \BalanceSnapshot.account) var balanceSnapshots: [BalanceSnapshot]
+    @Relationship(deleteRule: .cascade, inverse: \HoldingSnapshot.account) var holdingSnapshots: [HoldingSnapshot]
 
     init(
         id: UUID = UUID(),
@@ -48,3 +48,4 @@ final class Account {
         self.holdingSnapshots = []
     }
 }
+
