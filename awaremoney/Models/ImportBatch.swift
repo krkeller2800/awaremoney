@@ -22,6 +22,9 @@ final class ImportBatch {
     @Relationship(deleteRule: .cascade, inverse: \BalanceSnapshot.importBatch)
     var balances: [BalanceSnapshot] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \Transaction.importBatch)
+    var transactions: [Transaction] = []
+
     init(
         id: UUID = UUID(),
         createdAt: Date = .now,

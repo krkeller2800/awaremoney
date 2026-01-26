@@ -14,6 +14,9 @@ final class BalanceSnapshot {
     var asOfDate: Date
     var balance: Decimal
 
+    // Provenance
+    var isUserCreated: Bool = false
+
     // Relationships
     var account: Account?
     var importBatch: ImportBatch?
@@ -23,13 +26,15 @@ final class BalanceSnapshot {
         asOfDate: Date,
         balance: Decimal,
         account: Account? = nil,
-        importBatch: ImportBatch? = nil
+        importBatch: ImportBatch? = nil,
+        isUserCreated: Bool = false
     ) {
         self.id = id
         self.asOfDate = asOfDate
         self.balance = balance
         self.account = account
         self.importBatch = importBatch
+        self.isUserCreated = isUserCreated
     }
 }
 

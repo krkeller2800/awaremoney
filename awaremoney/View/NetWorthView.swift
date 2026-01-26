@@ -22,32 +22,72 @@ struct NetWorthView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Consolidated accounts view: single section with one card per account type and its details
                 Section("Accounts") {
-                    ForEach(byAccount) { row in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(row.account.name)
-                                Text(row.account.type.rawValue).font(.caption).foregroundStyle(.secondary)
+                    ForEach(accountTypeOrder, id: \.self) { type in
+                        let groups = groupsFor(type: type)
+                        if !groups.isEmpty {
+                            let subtotal = groups.reduce(Decimal.zero) { $0 + $1.value }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                // Header line
+                                HStack {
+                                    Text(typeDisplayName(type))
+                                        .font(.headline)
+                                }
+
+                                // Institution sublines
+                                ForEach(groups, id: \.institution) { grp in
+                                    HStack {
+                                        Text(grp.institution)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text(format(amount: grp.value))
+                                            .foregroundStyle(grp.value < .zero ? .red : .secondary)
+                                    }
+                                    .padding(.leading, 16)
+                                }
+
+                                // Sub-total line
+                                HStack {
+                                    Text("Total")
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text(format(amount: subtotal))
+                                        .font(.headline)
+                                        .foregroundStyle(subtotal < .zero ? .red : .primary)
+                                }
                             }
-                            Spacer()
-                            Text(format(amount: row.value))
-                                .foregroundStyle(row.value < .zero ? .red : .primary)
+                            .padding(.vertical, 4)
                         }
                     }
                 }
 
+                // Overall total
                 Section("Total") {
                     HStack {
                         Text("Net Worth")
                         Spacer()
                         Text(format(amount: totalNetWorth))
                             .font(.headline)
+                            .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
                     }
                 }
             }
             .navigationTitle("Net Worth")
             .task { await load() }
             .refreshable { await load() }
+            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+                Task { await load() }
+            }
+//            .toolbar {
+//                ToolbarItem(placement: .navigationBarTrailing) {
+//                    NavigationLink(destination: AccountsListView()) {
+//                        Label("Accounts", systemImage: "person.crop.circle")
+//                    }
+//                }
+//            }
         }
     }
 
@@ -55,15 +95,15 @@ struct NetWorthView: View {
         do {
             // Fetch all accounts
             let accounts = try modelContext.fetch(FetchDescriptor<Account>())
+            AMLogging.always("NetWorth load — fetched accounts: \(accounts.count)", component: "NetWorthView")
             var perAccount: [AccountValue] = []
             var total: Decimal = 0
 
             for account in accounts {
-                let latestBalance = try latestBalance(for: account)
-                let derived = try derivedBalanceFromTransactions(for: account)
-                let accountValue = latestBalance ?? derived
-                perAccount.append(AccountValue(account: account, value: accountValue))
-                total += accountValue
+                let value: Decimal = try anchoredValue(for: account)
+                AMLogging.always("Account \(account.name) — type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)"), value: \(value), tx: \(account.transactions.count)", component: "NetWorthView")
+                perAccount.append(AccountValue(account: account, value: value))
+                total += value
             }
 
             await MainActor.run {
@@ -75,21 +115,34 @@ struct NetWorthView: View {
         }
     }
 
-    private func latestBalance(for account: Account) throws -> Decimal? {
-        // Fetch the most recent balance snapshot for this account by comparing IDs (avoid comparing model instances in predicates)
-        let accountID = account.id
-        let predicate = #Predicate<BalanceSnapshot> { snap in
-            snap.account?.id == accountID
-        }
-        var descriptor = FetchDescriptor<BalanceSnapshot>(predicate: predicate)
-        descriptor.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
-        descriptor.fetchLimit = 1
-        let snapshots = try modelContext.fetch(descriptor)
-        return snapshots.first?.balance
-    }
+    private func anchoredValue(for account: Account) throws -> Decimal {
+        // Find latest snapshot date if any
+        let latestSnapDate: Date? = try {
+            let id = account.id
+            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id }
+            var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
+            desc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
+            desc.fetchLimit = 1
+            let snaps = try modelContext.fetch(desc)
+            return snaps.first?.asOfDate
+        }()
 
-    private func derivedBalanceFromTransactions(for account: Account) throws -> Decimal {
-        return account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+        if let snapDate = latestSnapDate {
+            // Get latest snapshot balance
+            let id = account.id
+            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id && snap.asOfDate == snapDate }
+            var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
+            desc.fetchLimit = 1
+            let snaps = try modelContext.fetch(desc)
+            let base = snaps.first?.balance ?? 0
+            // Sum transactions strictly after snapshot date
+            let txAfter = account.transactions.filter { $0.datePosted > snapDate }
+            let delta = txAfter.reduce(Decimal.zero) { $0 + $1.amount }
+            return base + delta
+        } else {
+            // No snapshots: sum all transactions
+            return account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+        }
     }
 
     private func format(amount: Decimal) -> String {
@@ -97,6 +150,35 @@ struct NetWorthView: View {
         nf.numberStyle = .currency
         nf.currencyCode = "USD"
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
+    // Preferred order of account types in the UI
+    private var accountTypeOrder: [Account.AccountType] {
+        [.checking, .savings, .creditCard, .brokerage, .cash, .other]
+    }
+    private func typeDisplayName(_ type: Account.AccountType) -> String {
+        switch type {
+        case .checking: return "Checking"
+        case .savings: return "Savings"
+        case .creditCard: return "Credit Cards"
+        case .brokerage: return "Stocks"
+        case .cash: return "Cash"
+        case .other: return "Other"
+        }
+    }
+
+    // Return institution-grouped totals for a specific account type
+    private func groupsFor(type: Account.AccountType) -> [(institution: String, value: Decimal)] {
+        // Filter by type
+        let rows = byAccount.filter { $0.account.type == type }
+        // Group by institution (fallback to Unknown)
+        var buckets: [String: Decimal] = [:]
+        for row in rows {
+            let inst = (row.account.institutionName?.isEmpty == false) ? row.account.institutionName! : "Unknown"
+            buckets[inst, default: .zero] += row.value
+        }
+        // Sort alphabetically by institution name
+        return buckets.keys.sorted().map { key in (institution: key, value: buckets[key] ?? .zero) }
     }
 }
 

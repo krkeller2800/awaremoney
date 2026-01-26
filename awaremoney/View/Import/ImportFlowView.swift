@@ -15,44 +15,50 @@ struct ImportFlowView: View {
         BankCSVParser(),
         BrokerageCSVParser()
     ])
+    @State private var isImporterPresented = false
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                if let error = vm.errorMessage {
-                    Text(error).foregroundColor(.red)
-                }
-
-                Button {
-                    vm.presentImporter()
-                } label: {
-                    Label("Import CSV", systemImage: "tray.and.arrow.down")
-                }
-                
-                NavigationLink {
-                    ImportsListView()
-                } label: {
-                    Label("View Imports", systemImage: "tray.full")
-                }
-
+            Group {
                 if let staged = vm.staged {
+                    // Full-screen review uses its own List and bottom action bar
                     ReviewImportView(staged: staged, vm: vm)
                         .environment(\.modelContext, modelContext)
                 } else {
-                    Text("Import a CSV statement to begin.")
-                        .foregroundStyle(.secondary)
+                    // Default to Imports list with a swipe-to-delete hint
+                    VStack(spacing: 0) {
+                        ImportsListView()
+                        Text("Hint: Swipe left on an import to delete it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    }
                 }
-
-                Spacer()
             }
-            .onAppear {
-                AMLogging.log(String(describing: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!), component: "ImportFlowView")  // DEBUG LOG
-            }
-            .padding()
             .navigationTitle("Import")
+            .onAppear {
+                AMLogging.always(String(describing: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!), component: "ImportFlowView")  // DEBUG LOG
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    NavigationLink {
+                        ImportsListView()
+                    } label: {
+                        Text("View Imports")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        vm.errorMessage = nil
+                        isImporterPresented = true
+                    } label: {
+                        Text("Import CSV")
+                    }
+                }
+            }
         }
         .fileImporter(
-            isPresented: $vm.isImporterPresented,
+            isPresented: $isImporterPresented,
             allowedContentTypes: [UTType.commaSeparatedText, .text, .data],
             allowsMultipleSelection: false
         ) { result in

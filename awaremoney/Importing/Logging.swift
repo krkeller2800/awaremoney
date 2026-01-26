@@ -24,4 +24,15 @@ enum AMLogging {
         // Identifying tag: [AM][Component] and a trailing code comment marker for easy grep: DEBUG LOG
         print("[AM][\(comp)] \(message()) — \(function):\(line)  // DEBUG LOG")
     }
+
+    static func always(
+        _ message: @autoclosure () -> String,
+        component: String? = nil,
+        file: String = #fileID,
+        function: String = #function,
+        line: Int = #line
+    ) {
+        let comp = component ?? (file as NSString).lastPathComponent
+        print("[AM][\(comp)] \(message()) — \(function):\(line)  // ALWAYS LOG")
+    }
 }

@@ -5,14 +5,13 @@
 //  Created by Karl Keller on 1/23/26.
 //
 
-
 import SwiftUI
 
 struct RootView: View {
     var body: some View {
         TabView {
-            TransactionsListView()
-                .tabItem { Label("Transactions", systemImage: "list.bullet") }
+            AccountsListView()
+                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
 
             NetWorthView()
                 .tabItem { Label("Net Worth", systemImage: "chart.pie") }

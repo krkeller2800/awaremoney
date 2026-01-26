@@ -14,27 +14,23 @@ struct ReviewImportView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Account.createdAt) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
-    @State private var startingBalanceInput: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Review Import")
-                .font(.headline)
-
-            Text("File: \(staged.sourceFileName)")
-                .font(.subheadline)
+        List {
+            Section("Details") {
+                Text("File: \(staged.sourceFileName)")
+                    .font(.subheadline)
+            }
 
             // Account selection / creation
-            Group {
+            Section("Account") {
                 Picker("Account", selection: Binding<UUID?>(
                     get: { selectedAccountId },
                     set: { newValue in
                         selectedAccountId = newValue
-                        if let id = newValue {
-                            vm.selectedAccount = accounts.first(where: { $0.id == id })
+                        vm.selectedAccountID = newValue
+                        if newValue != nil {
                             vm.newAccountName = ""
-                        } else {
-                            vm.selectedAccount = nil
                         }
                     }
                 )) {
@@ -44,7 +40,17 @@ struct ReviewImportView: View {
                     }
                 }
                 .onAppear {
-                    selectedAccountId = vm.selectedAccount?.id
+                    // Default to creating a new account for each staged import unless user explicitly picks an existing one
+                    selectedAccountId = nil
+                    vm.selectedAccountID = nil
+
+                    // Pre-fill new account name from file name when creating a new account
+                    let base = (staged.sourceFileName as NSString).deletingPathExtension
+                    if let inst = vm.guessInstitutionName(from: staged.sourceFileName), !inst.isEmpty {
+                        vm.newAccountName = "\(inst) \(vm.newAccountType.rawValue.capitalized)"
+                    } else {
+                        vm.newAccountName = base
+                    }
                 }
 
                 if selectedAccountId == nil {
@@ -54,115 +60,147 @@ struct ReviewImportView: View {
                             Text($0.rawValue)
                         }
                     }
+                    .onChange(of: vm.newAccountType) { _, newValue in
+                        // If user hasn't customized the name, keep it in sync with type
+                        let base = (staged.sourceFileName as NSString).deletingPathExtension
+                        if let inst = vm.guessInstitutionName(from: staged.sourceFileName), !inst.isEmpty {
+                            let suggested = "\(inst) \(newValue.rawValue.capitalized)"
+                            if vm.newAccountName.isEmpty || vm.newAccountName.hasPrefix(inst) {
+                                vm.newAccountName = suggested
+                            }
+                        } else if vm.newAccountName.isEmpty {
+                            vm.newAccountName = base
+                        }
+                    }
                 }
             }
 
-            // Prompt for starting balance if none present
+            // Starting balance prompt
             if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Starting Balance")
-                        .font(.subheadline)
-                    Text("Enter the account balance as of \(earliestDate.formatted(date: .abbreviated, time: .omitted))")
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        TextField("0.00", text: $startingBalanceInput)
-                            .keyboardType(.decimalPad)
-                        Button("Set") {
-                            let sanitized = startingBalanceInput.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
-                            if let dec = Decimal(string: sanitized) {
-                                let sb = StagedBalance(asOfDate: earliestDate, balance: dec)
-                                vm.staged?.balances.append(sb)
-                                startingBalanceInput = ""
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
+                StartingBalanceInlineView(asOfDate: earliestDate) { dec in
+                    let sb = StagedBalance(asOfDate: earliestDate, balance: dec)
+                    vm.staged?.balances.append(sb)
                 }
             }
 
             // Summary
-            HStack {
-                Text("Transactions: \(staged.transactions.count)")
-                if !staged.holdings.isEmpty {
-                    Text("Holdings: \(staged.holdings.count)")
+            Section("Summary") {
+                HStack {
+                    Text("Transactions: \(staged.transactions.count)")
+                    if !staged.holdings.isEmpty {
+                        Text("Holdings: \(staged.holdings.count)")
+                    }
+                    if !staged.balances.isEmpty {
+                        Text("Balances: \(staged.balances.count)")
+                    }
                 }
-                if !staged.balances.isEmpty {
-                    Text("Balances: \(staged.balances.count)")
-                }
-            }.font(.subheadline)
+                .font(.subheadline)
+            }
 
-            // Preview list
-            List {
-                Section("Transactions") {
-                    ForEach(staged.transactions.indices, id: \.self) { idx in
-                        let t = staged.transactions[idx]
-                        HStack(alignment: .firstTextBaseline) {
+            // Transactions preview
+            Section("Transactions") {
+                ForEach(staged.transactions.indices, id: \.self) { idx in
+                    let t = staged.transactions[idx]
+                    HStack(alignment: .firstTextBaseline) {
+                        Toggle("", isOn: Binding(
+                            get: { vm.staged?.transactions[idx].include ?? true },
+                            set: { vm.staged?.transactions[idx].include = $0 }
+                        ))
+                        .labelsHidden()
+
+                        VStack(alignment: .leading) {
+                            Text(t.payee)
+                            Text(t.datePosted, style: .date)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(t.amount as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                            .foregroundStyle(t.amount < 0 ? .red : .primary)
+                    }
+                }
+            }
+
+            // Holdings
+            if !staged.holdings.isEmpty {
+                Section("Holdings Snapshots") {
+                    ForEach(staged.holdings.indices, id: \.self) { idx in
+                        let h = staged.holdings[idx]
+                        HStack {
                             Toggle("", isOn: Binding(
-                                get: { vm.staged?.transactions[idx].include ?? true },
-                                set: { vm.staged?.transactions[idx].include = $0 }
+                                get: { vm.staged?.holdings[idx].include ?? true },
+                                set: { vm.staged?.holdings[idx].include = $0 }
                             ))
                             .labelsHidden()
-
-                            VStack(alignment: .leading) {
-                                Text(t.payee)
-                                Text(t.datePosted, style: .date)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("\(h.symbol) — \(h.quantity.description)")
                             Spacer()
-                            Text(t.amount as NSNumber, formatter: ReviewImportView.currencyFormatter)
-                                .foregroundStyle(t.amount < 0 ? .red : .primary)
-                        }
-                    }
-                }
-
-                if !staged.holdings.isEmpty {
-                    Section("Holdings Snapshots") {
-                        ForEach(staged.holdings.indices, id: \.self) { idx in
-                            let h = staged.holdings[idx]
-                            HStack {
-                                Toggle("", isOn: Binding(
-                                    get: { vm.staged?.holdings[idx].include ?? true },
-                                    set: { vm.staged?.holdings[idx].include = $0 }
-                                ))
-                                .labelsHidden()
-                                Text("\(h.symbol) — \(h.quantity.description)")
-                                Spacer()
-                                if let mv = h.marketValue {
-                                    Text(mv as NSNumber, formatter: ReviewImportView.currencyFormatter)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !staged.balances.isEmpty {
-                    Section("Balance Snapshots") {
-                        ForEach(staged.balances.indices, id: \.self) { idx in
-                            let b = staged.balances[idx]
-                            HStack {
-                                Toggle("", isOn: Binding(
-                                    get: { vm.staged?.balances[idx].include ?? true },
-                                    set: { vm.staged?.balances[idx].include = $0 }
-                                ))
-                                .labelsHidden()
-                                Text(b.asOfDate, style: .date)
-                                Spacer()
-                                Text(b.balance as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                            if let mv = h.marketValue {
+                                Text(mv as NSNumber, formatter: ReviewImportView.currencyFormatter)
                             }
                         }
                     }
                 }
             }
-            .frame(minHeight: 300)
 
-            Button {
-                do { try vm.approveAndSave(context: modelContext) }
-                catch { vm.errorMessage = error.localizedDescription }
-            } label: {
-                Label("Approve & Save", systemImage: "checkmark.circle.fill")
+            // Balance snapshots
+            if !staged.balances.isEmpty {
+                Section("Balance Snapshots") {
+                    ForEach(staged.balances.indices, id: \.self) { idx in
+                        let b = staged.balances[idx]
+                        HStack {
+                            Toggle("", isOn: Binding(
+                                get: { vm.staged?.balances[idx].include ?? true },
+                                set: { vm.staged?.balances[idx].include = $0 }
+                            ))
+                            .labelsHidden()
+                            Text(b.asOfDate, style: .date)
+                            Spacer()
+                            Text(b.balance as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                        }
+                    }
+                }
             }
-            .buttonStyle(.borderedProminent)
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    Button(role: .cancel) {
+                        vm.staged = nil
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "xmark.circle")
+                            Text("Cancel")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .truncationMode(.tail)
+                                .allowsTightening(true)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+
+                    Button {
+                        do { try vm.approveAndSave(context: modelContext) }
+                        catch { vm.errorMessage = error.localizedDescription }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Approve & Save")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                                .truncationMode(.tail)
+                                .allowsTightening(true)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 12)
+                .padding(.bottom, 8)
+                .background(.regularMaterial)
+            }
         }
     }
 
@@ -173,3 +211,4 @@ struct ReviewImportView: View {
         return nf
     }()
 }
+

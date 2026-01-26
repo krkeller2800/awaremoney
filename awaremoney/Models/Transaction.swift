@@ -15,6 +15,8 @@ final class Transaction {
         case bank, fee, interest, transfer
         // Brokerage-like
         case buy, sell, dividend, deposit, withdrawal
+        // System/utility
+        case adjustment
     }
 
     @Attribute(.unique) var id: UUID
@@ -25,6 +27,7 @@ final class Transaction {
     var kind: Kind
     var externalId: String? // From statement if available
     var hashKey: String     // For de-duping <= derived from fields
+    var linkedTransactionId: UUID?
 
     // Brokerage fields (optional)
     var symbol: String?
@@ -34,6 +37,18 @@ final class Transaction {
 
     // Relationships
     @Relationship(inverse: \Account.transactions) var account: Account?
+
+    // Link back to the import batch that created this transaction (optional)
+    var importBatch: ImportBatch?
+
+    // Provenance and audit
+    var isUserCreated: Bool = false
+    var isUserEdited: Bool = false
+    // Immutable key used for de-duplication across re-imports
+    var importHashKey: String?
+    // Optional originals for audit when edits occur
+    var originalAmount: Decimal?
+    var originalDate: Date?
 
     init(
         id: UUID = UUID(),
@@ -48,7 +63,13 @@ final class Transaction {
         quantity: Decimal? = nil,
         price: Decimal? = nil,
         fees: Decimal? = nil,
-        account: Account? = nil
+        account: Account? = nil,
+        importBatch: ImportBatch? = nil,
+        isUserCreated: Bool = false,
+        isUserEdited: Bool = false,
+        importHashKey: String? = nil,
+        originalAmount: Decimal? = nil,
+        originalDate: Date? = nil
     ) {
         self.id = id
         self.datePosted = datePosted
@@ -63,6 +84,12 @@ final class Transaction {
         self.price = price
         self.fees = fees
         self.account = account
+        self.importBatch = importBatch
+        self.isUserCreated = isUserCreated
+        self.isUserEdited = isUserEdited
+        self.importHashKey = importHashKey
+        self.originalAmount = originalAmount
+        self.originalDate = originalDate
     }
 }
 

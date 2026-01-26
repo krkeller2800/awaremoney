@@ -1,18 +1,10 @@
-//
-//  TransactionsListView.swift
-//  awaremoney
-//
-//  Created by Karl Keller on 1/23/26.
-//
-
 import SwiftUI
 import SwiftData
 
-struct TransactionsListView: View {
-    @Query(sort: \Transaction.datePosted, order: .reverse)
-    private var transactions: [Transaction]
-
-    @State private var refreshTick: Int = 0
+struct AccountTransactionsListView: View {
+    let account: Account
+    @Environment(\.modelContext) private var modelContext
+    @State private var transactions: [Transaction] = []
 
     var body: some View {
         NavigationStack {
@@ -40,13 +32,26 @@ struct TransactionsListView: View {
             }
             .navigationTitle("Transactions")
         }
-        .id(refreshTick)
+        .task { await load() }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            refreshTick &+= 1
-            AMLogging.log("TransactionsListView refresh tick: \(refreshTick), visible count: \(transactions.count)", component: "TransactionsListView")  // DEBUG LOG
+            Task { await load() }
         }
-        .task {
-            AMLogging.log("TransactionsListView initial count: \(transactions.count)", component: "TransactionsListView")  // DEBUG LOG
+    }
+
+    @Sendable private func load() async {
+        do {
+            let accountID = account.id
+            let predicate = #Predicate<Transaction> { tx in
+                tx.account?.id == accountID
+            }
+            var descriptor = FetchDescriptor<Transaction>(predicate: predicate)
+            descriptor.sortBy = [SortDescriptor(\Transaction.datePosted, order: .reverse)]
+            let fetched = try modelContext.fetch(descriptor)
+            await MainActor.run {
+                self.transactions = fetched
+            }
+        } catch {
+            // Ignore errors for this simple view
         }
     }
 
@@ -57,4 +62,3 @@ struct TransactionsListView: View {
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 }
-
