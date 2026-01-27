@@ -18,6 +18,10 @@ final class ImportViewModel: ObservableObject {
     @Published var selectedAccountID: UUID?
     @Published var newAccountName: String = ""
     @Published var newAccountType: Account.AccountType = .checking
+    @Published var userInstitutionName: String = ""
+    @Published var mappingSession: MappingSession? // non-nil when user needs to map columns
+    @Published var infoMessage: String?
+    @Published var isPDFTransactionsImporterPresented: Bool = false
 
     private let parsers: [StatementParser]
 
@@ -51,17 +55,31 @@ final class ImportViewModel: ObservableObject {
             }
 
             let data = try Data(contentsOf: url)
-            let (rows, headers) = try CSV.read(data: data)
-            AMLogging.log("CSV read: headers=\(headers), rowCount=\(rows.count)", component: "ImportViewModel")  // DEBUG LOG
+            let ext = url.pathExtension.lowercased()
+            let rowsAndHeaders: ([[String]], [String])
+            if ext == "pdf" {
+                rowsAndHeaders = try PDFStatementExtractor.parse(url: url)
+            } else {
+                rowsAndHeaders = try CSV.read(data: data)
+            }
+            let (rows, headers) = rowsAndHeaders
             guard !headers.isEmpty else { throw ImportError.invalidCSV }
+            AMLogging.always("Import picked — ext: \(ext), rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
 
+            let matchingParsers = parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
+            AMLogging.always("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
             if let parser = parsers.first(where: { $0.canParse(headers: headers) }) {
                 AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
                 var stagedImport = try parser.parse(rows: rows, headers: headers)
                 stagedImport.sourceFileName = url.lastPathComponent
+                AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
+                if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
+                    AMLogging.always("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
+                }
 
                 // Guess account type from filename and/or headers (e.g., credit card statements)
-                if let guessedType = guessAccountType(from: stagedImport.sourceFileName, headers: headers) {
+                let sampleForGuess = Array(rows.prefix(50))
+                if let guessedType = guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
                     stagedImport.suggestedAccountType = guessedType
                 }
 
@@ -71,13 +89,67 @@ final class ImportViewModel: ObservableObject {
                 }
 
                 self.staged = stagedImport
+
+                // Hint: Brokerage activity without balances/holdings won't affect Net Worth until a statement is imported
+                if (stagedImport.suggestedAccountType == .brokerage || self.newAccountType == .brokerage),
+                   stagedImport.balances.isEmpty,
+                   stagedImport.holdings.isEmpty,
+                   !stagedImport.transactions.isEmpty {
+                    self.infoMessage = "Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance."
+                } else {
+                    self.infoMessage = nil
+                }
             } else {
-                throw ImportError.unknownFormat
+                AMLogging.always("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
+                // Start a minimal bank-style mapping session as a fallback
+                let sample = Array(rows.prefix(10))
+                self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: sample, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
+                self.infoMessage = nil
+                return
             }
         } catch {
             let ns = error as NSError
             AMLogging.log("Importer error: \(ns.domain) (\(ns.code)) — \(ns.localizedDescription) — \(ns.userInfo)", component: "ImportViewModel")  // DEBUG LOG
             self.errorMessage = ns.localizedDescription
+            self.infoMessage = nil
+            self.staged = nil
+        }
+    }
+
+    func handlePickedPDFTransactionsURL(_ url: URL) {
+        AMLogging.log("Picked PDF (transactions): \(url.absoluteString)", component: "ImportViewModel")
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+        do {
+            // Ensure iCloud download if needed
+            if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            }
+
+            // Use extractor in transactions mode
+            let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: .transactions)
+            guard !headers.isEmpty else { throw ImportError.unknownFormat }
+            AMLogging.always("PDF Transactions — rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
+
+            // Use the dedicated PDF transactions parser
+            let parser: StatementParser = PDFBankTransactionsParser()
+            var stagedImport = try parser.parse(rows: rows, headers: headers)
+            stagedImport.sourceFileName = url.lastPathComponent
+
+            // Guess account type (bank/credit card heuristic)
+            let sampleForGuess = Array(rows.prefix(50))
+            if let guessedType = guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
+                stagedImport.suggestedAccountType = guessedType
+            }
+            if let suggested = stagedImport.suggestedAccountType { self.newAccountType = suggested }
+
+            self.staged = stagedImport
+            self.infoMessage = "PDF transactions are experimental. Please review signs before saving."
+        } catch {
+            let ns = error as NSError
+            AMLogging.log("PDF Transactions importer error: \(ns.domain) (\(ns.code)) — \(ns.localizedDescription)", component: "ImportViewModel")
+            self.errorMessage = ns.localizedDescription
+            self.infoMessage = nil
             self.staged = nil
         }
     }
@@ -91,12 +163,12 @@ final class ImportViewModel: ObservableObject {
             label: staged.sourceFileName, sourceFileName: staged.sourceFileName
         )
         context.insert(batch)
-        AMLogging.log("Created ImportBatch with label: \(batch.label)", component: "ImportViewModel")  // DEBUG LOG
-
-        AMLogging.always("Approve: guessed institution from file '\(staged.sourceFileName)': \(guessInstitutionName(from: staged.sourceFileName) ?? "(nil)")", component: "ImportViewModel")
+        
+        let providedInst = userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
+        AMLogging.always("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
 
         // Ensure account exists
-        let guessedInst = guessInstitutionName(from: staged.sourceFileName)
         let account: Account
         if let selectedID = selectedAccountID, let fetched = try? {
             let predicate = #Predicate<Account> { $0.id == selectedID }
@@ -107,22 +179,32 @@ final class ImportViewModel: ObservableObject {
             var target = fetched
             AMLogging.always("Selected account before resolution — name: \(target.name), type: \(target.type.rawValue), inst: \(target.institutionName ?? "(nil)")", component: "ImportViewModel")
 
-            // If selected account has no institution, fill it
-            if (target.institutionName == nil) || (target.institutionName?.isEmpty == true) {
-                AMLogging.always("Filling missing institution on selected account with: \(guessedInst ?? "(nil)")", component: "ImportViewModel")
-                if let guessedInst { target.institutionName = guessedInst }
-            } else if let guessedInst, let current = target.institutionName, !current.isEmpty, current.lowercased() != guessedInst.lowercased() {
-                AMLogging.always("Institution mismatch — selected: \(current), guessed: \(guessedInst). Will find or create target account.", component: "ImportViewModel")
-                // Institution mismatch: find or create an account for the guessed institution
-                if let existing = findAccount(ofType: target.type, institutionName: guessedInst, context: context) {
-                    AMLogging.always("Switching to existing account for institution: \(guessedInst)", component: "ImportViewModel")
+            // Apply user-selected account type override so it always carries through
+            if target.type != self.newAccountType {
+                AMLogging.always("Applying user-selected account type override: \(target.type.rawValue) -> \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                target.type = self.newAccountType
+            }
+
+            if !providedInst.isEmpty {
+                // User explicitly provided an institution name in the import detail screen — carry it through
+                AMLogging.always("Applying user-provided institution to selected account: '\(providedInst)'", component: "ImportViewModel")
+                target.institutionName = providedInst
+            } else if (target.institutionName == nil) || (target.institutionName?.isEmpty == true) {
+                AMLogging.always("Filling missing institution on selected account with: \(chosenInst ?? "(nil)")", component: "ImportViewModel")
+                if let chosenInst { target.institutionName = chosenInst }
+            } else if let chosenInst, let current = target.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(chosenInst) {
+                AMLogging.always("Institution mismatch — selected: \(current), chosen: \(chosenInst). Will find or create target account.", component: "ImportViewModel")
+                let resolvedType = self.newAccountType
+                // Institution mismatch: find or create an account for the chosen institution using the user-selected type
+                if let existing = findAccount(ofType: resolvedType, institutionName: chosenInst, context: context) {
+                    AMLogging.always("Switching to existing account for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                     target = existing
                 } else {
-                    AMLogging.always("Creating new account for institution: \(guessedInst)", component: "ImportViewModel")
+                    AMLogging.always("Creating new account for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                     let acct = Account(
-                        name: "\(guessedInst) \(target.type.rawValue.capitalized)",
-                        type: target.type,
-                        institutionName: guessedInst,
+                        name: chosenInst,
+                        type: resolvedType,
+                        institutionName: chosenInst,
                         currencyCode: "USD"
                     )
                     context.insert(acct)
@@ -131,16 +213,21 @@ final class ImportViewModel: ObservableObject {
             }
             account = target
         } else {
-            let name = newAccountName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let acct = Account(
-                name: name.isEmpty ? "Imported \(Date.now.formatted(date: .abbreviated, time: .omitted))" : name,
-                type: newAccountType,
-                institutionName: guessedInst,
-                currencyCode: "USD"
-            )
-            AMLogging.always("Creating new account (no selection) with institution: \(guessedInst ?? "(nil)") and type: \(newAccountType.rawValue)", component: "ImportViewModel")
-            context.insert(acct)
-            account = acct
+            let resolvedType = self.newAccountType
+            if let chosenInst, let existing = findAccount(ofType: resolvedType, institutionName: chosenInst, context: context) {
+                AMLogging.always("Reusing existing account (no selection) for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                account = existing
+            } else {
+                let acct = Account(
+                    name: chosenInst ?? "",
+                    type: resolvedType,
+                    institutionName: chosenInst,
+                    currencyCode: "USD"
+                )
+                AMLogging.always("Creating new account (no selection) with institution: \(chosenInst ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                context.insert(acct)
+                account = acct
+            }
         }
         AMLogging.log("Resolved account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), existing tx count: \(account.transactions.count)", component: "ImportViewModel")  // DEBUG LOG
         AMLogging.always("Using account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)")", component: "ImportViewModel")
@@ -375,11 +462,91 @@ final class ImportViewModel: ObservableObject {
             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
 
             self.staged = nil
+            self.userInstitutionName = ""
+            self.infoMessage = nil
         } catch {
             AMLogging.log("Context save failed: \(error)", component: "ImportViewModel")  // DEBUG LOG
             self.errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    func applyBankMapping() {
+        guard var session = mappingSession else { return }
+        // Require at least date and (amount or debit/credit)
+        guard let dateIdx = session.dateIndex else { return }
+        let descIdx = session.descriptionIndex
+        let amountIdx = session.amountIndex
+        let debitIdx = session.debitIndex
+        let creditIdx = session.creditIndex
+
+        // Build rows using the full set of available rows (not only sample)
+        // Re-read the last picked file is complex here; for MVP we'll reuse sampleRows as the body and headers as header
+        let rows = session.sampleRows
+        let headers = session.headers
+
+        // Convert to StagedTransactions
+        var stagedTx: [StagedTransaction] = []
+        let dateFormats = [session.dateFormat].compactMap { $0 } + ["MM/dd/yyyy", "yyyy-MM-dd", "M/d/yyyy"]
+
+        func parseDate(_ s: String) -> Date? {
+            for fmt in dateFormats {
+                let df = DateFormatter()
+                df.locale = Locale(identifier: "en_US_POSIX")
+                df.timeZone = TimeZone(secondsFromGMT: 0)
+                df.dateFormat = fmt
+                if let d = df.date(from: s) { return d }
+            }
+            return nil
+        }
+
+        func sanitize(_ s: String) -> String {
+            s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
+        }
+
+        for row in rows {
+            let dateStr = row[safe: dateIdx] ?? ""
+            guard let date = parseDate(dateStr) else { continue }
+            let payee = descIdx.flatMap { row[safe: $0] } ?? "Unknown"
+
+            var amount: Decimal = 0
+            if let aIdx = amountIdx, let a = Decimal(string: sanitize(row[safe: aIdx] ?? "")) {
+                amount = a
+            } else if let dIdx = debitIdx, let dec = Decimal(string: sanitize(row[safe: dIdx] ?? "")) {
+                amount = -dec
+            } else if let cIdx = creditIdx, let dec = Decimal(string: sanitize(row[safe: cIdx] ?? "")) {
+                amount = dec
+            } else {
+                continue
+            }
+
+            let hashKey = Hashing.hashKey(date: date, amount: amount, payee: payee, memo: nil, symbol: nil, quantity: nil)
+            let tx = StagedTransaction(
+                datePosted: date,
+                amount: amount,
+                payee: payee,
+                memo: nil,
+                kind: .bank,
+                externalId: nil,
+                symbol: nil,
+                quantity: nil,
+                price: nil,
+                fees: nil,
+                hashKey: hashKey
+            )
+            stagedTx.append(tx)
+        }
+
+        let stagedImport = StagedImport(
+            parserId: "mapping.bank",
+            sourceFileName: "Mapped.csv",
+            suggestedAccountType: .checking,
+            transactions: stagedTx,
+            holdings: [],
+            balances: []
+        )
+        self.staged = stagedImport
+        self.mappingSession = nil
     }
 
     private func existingTransactionHashes(for account: Account, context: ModelContext) throws -> Set<String> {
@@ -396,11 +563,33 @@ final class ImportViewModel: ObservableObject {
         return sec
     }
 
+    // Normalize institution names for matching (e.g., "Fidelity" vs "Fidelity Investments")
+    private func normalizeInstitutionName(_ raw: String?) -> String {
+        guard let raw = raw else { return "" }
+        let lower = raw.lowercased()
+        // Replace punctuation with spaces, collapse multiple spaces, and split into tokens
+        let separators = CharacterSet(charactersIn: ",./-_&()[]{}:")
+        let spaced = lower.components(separatedBy: separators).joined(separator: " ")
+        let tokens = spaced
+            .split(separator: " ")
+            .map { String($0) }
+        // Remove common suffix/generic tokens that shouldn't affect identity
+        let banned: Set<String> = [
+            "investment", "investments", "inc", "corp", "co", "company", "llc", "l.l.c", "na", "n.a", "services", "financial", "fsb"
+        ]
+        let filtered = tokens.filter { !banned.contains($0) }
+        // Join without spaces for robust comparison
+        return filtered.joined()
+    }
+
     // Find an existing account by type and institution name (case-insensitive)
     private func findAccount(ofType type: Account.AccountType, institutionName: String, context: ModelContext) -> Account? {
+        let needle = normalizeInstitutionName(institutionName)
         if let accounts = try? context.fetch(FetchDescriptor<Account>()) {
             return accounts.first { acct in
-                acct.type == type && ((acct.institutionName ?? "").lowercased() == institutionName.lowercased())
+                guard acct.type == type else { return false }
+                let hay = normalizeInstitutionName(acct.institutionName)
+                return hay == needle && !hay.isEmpty
             }
         }
         return nil
@@ -438,38 +627,75 @@ final class ImportViewModel: ObservableObject {
             return match.display
         }
 
-        // Fallback: take the first token and strip non-letters
-        let separators = CharacterSet(charactersIn: "-_ ")
-        let firstToken = base.components(separatedBy: separators).first ?? base
-        let letters = firstToken.filter { $0.isLetter }
-        if !letters.isEmpty {
-            return String(letters).capitalized
-        }
+        // No fallback to tokens from filename — require explicit user input if no known match
         return nil
     }
 
-    // Best-effort account type inference from filename/headers
-    private func guessAccountType(from fileName: String, headers: [String]) -> Account.AccountType? {
+    // Best-effort account type inference from filename/headers and sample row content
+    private func guessAccountType(from fileName: String, headers: [String], sampleRows: [[String]]) -> Account.AccountType? {
         let normalizedFile = fileName
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: "_", with: "")
 
-        // Credit card heuristics from filename
-        if normalizedFile.contains("creditcard") || (normalizedFile.contains("credit") && normalizedFile.contains("card")) || normalizedFile.contains("cc") {
-            return .creditCard
+        let lowerHeaders = headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        // 1) Brokerage signals in headers
+        let brokerageHeaderSignals = [
+            "symbol", "ticker", "cusip", "qty", "quantity", "shares", "share", "price", "security"
+        ]
+        let hasBrokerageHeader = lowerHeaders.contains { h in
+            brokerageHeaderSignals.contains { sig in h == sig || h.contains(sig) }
+        }
+        if hasBrokerageHeader {
+            AMLogging.always("GuessAccountType: Brokerage by header signal", component: "ImportViewModel")
+            return .brokerage
         }
 
-        // Header-based heuristics: many credit card CSVs include Category and Type columns (e.g., Sale, Payment, Fee)
-        let lowerHeaders = headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        // 2) Brokerage signals in row descriptions (buy/sell/dividend/options, etc.)
+        // Try to find a likely description column
+        func probableDescriptionIndex() -> Int? {
+            let keys = ["description", "activity", "action", "details", "detail", "type", "transaction type"]
+            for (idx, h) in lowerHeaders.enumerated() {
+                if keys.contains(where: { h == $0 || h.contains($0) }) { return idx }
+            }
+            return nil
+        }
+        let descIdx = probableDescriptionIndex()
+        let brokerageKeywords = [
+            "buy", "bought", "sell", "sold", "dividend", "reinvest", "reinvestment", "interest", "cap gain", "capital gain",
+            "distribution", "split", "spinoff", "spin-off", "option", "call", "put", "exercise", "assign", "assignment", "expiration",
+            "short", "cover"
+        ]
+        var brokerageHits = 0
+        for row in sampleRows {
+            let text: String = {
+                if let i = descIdx, row.indices.contains(i) { return row[i] } else { return row.joined(separator: " ") }
+            }().lowercased()
+            if brokerageKeywords.contains(where: { text.contains($0) }) {
+                brokerageHits += 1
+                if brokerageHits >= 2 { break }
+            }
+        }
+        if brokerageHits >= 2 || (brokerageHits == 1 && sampleRows.count <= 5) {
+            AMLogging.always("GuessAccountType: Brokerage by row keyword hits = \(brokerageHits)", component: "ImportViewModel")
+            return .brokerage
+        }
+
+        // 3) Credit card heuristics (applied only if no brokerage signals)
         let hasCategory = lowerHeaders.contains(where: { $0.contains("category") })
         let hasType = lowerHeaders.contains(where: { $0 == "type" || $0.contains("transaction type") || $0.contains("type") })
         let hasDebitCredit = lowerHeaders.contains("debit") || lowerHeaders.contains("credit")
         let hasBalance = lowerHeaders.contains(where: { $0.contains("balance") })
-
-        // If we see Category+Type but not explicit Debit/Credit or Balance, strongly suggest credit card
         if hasCategory && hasType && !hasDebitCredit && !hasBalance {
+            AMLogging.always("GuessAccountType: CreditCard by header heuristic", component: "ImportViewModel")
+            return .creditCard
+        }
+
+        // 4) Filename-based hints (fallback only)
+        if normalizedFile.contains("creditcard") || (normalizedFile.contains("credit") && normalizedFile.contains("card")) || normalizedFile.contains("cc") {
+            AMLogging.always("GuessAccountType: CreditCard by filename", component: "ImportViewModel")
             return .creditCard
         }
 
@@ -547,7 +773,28 @@ final class ImportViewModel: ObservableObject {
     }
 }
 
+struct MappingSession {
+    enum Kind { case bank }
+    var kind: Kind
+    var headers: [String]
+    var sampleRows: [[String]]
+    // User-selected column indices
+    var dateIndex: Int?
+    var descriptionIndex: Int?
+    var amountIndex: Int?
+    var debitIndex: Int?
+    var creditIndex: Int?
+    var balanceIndex: Int?
+    var dateFormat: String? // optional override
+}
+
 extension Notification.Name {
     static let transactionsDidChange = Notification.Name("TransactionsDidChange")
+}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
 }
 

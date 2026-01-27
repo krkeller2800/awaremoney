@@ -12,20 +12,23 @@ import UniformTypeIdentifiers
 struct ImportFlowView: View {
     @Environment(\.modelContext) private var modelContext
     @StateObject private var vm = ImportViewModel(parsers: [
+        PDFSummaryParser(),
         BankCSVParser(),
-        BrokerageCSVParser()
+        BrokerageCSVParser(),
+        GenericHoldingsStatementCSVParser()
     ])
     @State private var isImporterPresented = false
+    @State private var isPDFTxImporterPresented = false
 
     var body: some View {
         NavigationStack {
             Group {
                 if let staged = vm.staged {
-                    // Full-screen review uses its own List and bottom action bar
                     ReviewImportView(staged: staged, vm: vm)
                         .environment(\.modelContext, modelContext)
+                } else if vm.mappingSession != nil {
+                    MappingView(vm: vm)
                 } else {
-                    // Default to Imports list with a swipe-to-delete hint
                     VStack(spacing: 0) {
                         ImportsListView()
                         Text("Hint: Swipe left on an import to delete it.")
@@ -47,25 +50,47 @@ struct ImportFlowView: View {
                         Text("View Imports")
                     }
                 }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        vm.errorMessage = nil
+                        isPDFTxImporterPresented = true
+                    } label: {
+                        Text("Import PDF Transactions")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         vm.errorMessage = nil
                         isImporterPresented = true
                     } label: {
-                        Text("Import CSV")
+                        Text("Import")
                     }
                 }
             }
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [UTType.commaSeparatedText, .text, .data],
+            allowedContentTypes: [UTType.commaSeparatedText, .text, .data, .pdf],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 if let url = urls.first {
                     vm.handlePickedURL(url)
+                }
+            case .failure(let error):
+                vm.errorMessage = error.localizedDescription
+            }
+        }
+        .fileImporter(
+            isPresented: $isPDFTxImporterPresented,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    vm.handlePickedPDFTransactionsURL(url)
                 }
             case .failure(let error):
                 vm.errorMessage = error.localizedDescription

@@ -7,12 +7,15 @@
 
 import Foundation
 
+private let LOG_COMPONENT = "BrokerageCSVParser"
+
 struct BrokerageCSVParser: StatementParser {
     static let dateFormats = ["MM/dd/yyyy", "yyyy-MM-dd"]
     static var id: String { "brokerage.csv" }
 
     func canParse(headers: [String]) -> Bool {
         let lower = headers.map { $0.lowercased() }
+        AMLogging.always("canParse? headers: \(lower)", component: LOG_COMPONENT)
         return lower.contains(where: { $0.contains("action") }) &&
                lower.contains(where: { $0.contains("symbol") }) &&
                lower.contains(where: { $0.contains("date") })
@@ -20,19 +23,23 @@ struct BrokerageCSVParser: StatementParser {
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {
         let map = headerMap(headers)
+        AMLogging.always("parse() — rows: \(rows.count), headers: \(headers)", component: LOG_COMPONENT)
+        AMLogging.always("header map keys: \(Array(map.keys))", component: LOG_COMPONENT)
         var txs: [StagedTransaction] = []
         let holdings: [StagedHolding] = [] // Optional snapshot rows if present
 
         for row in rows {
-            guard let dateStr = value(row, map, key: "date"),
+            let rawRow = row.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if rawRow.allSatisfy({ $0.isEmpty }) { continue }
+            guard let dateStr = value(rawRow, map, key: "date"),
                   let date = parseDate(dateStr) else { continue }
 
-            let action = (value(row, map, key: "action") ?? "").lowercased()
-            let symbol = value(row, map, key: "symbol") ?? ""
-            let quantity = Decimal(string: sanitize(value(row, map, key: "quantity")))
-            let price = Decimal(string: sanitize(value(row, map, key: "price")))
-            let fees = Decimal(string: sanitize(value(row, map, key: "fees")))
-            let amount = Decimal(string: sanitize(value(row, map, key: "amount")))
+            let action = (value(rawRow, map, key: "action") ?? "").lowercased()
+            let symbol = value(rawRow, map, key: "symbol") ?? ""
+            let quantity = Decimal(string: sanitize(value(rawRow, map, key: "quantity")))
+            let price = Decimal(string: sanitize(value(rawRow, map, key: "price")))
+            let fees = Decimal(string: sanitize(value(rawRow, map, key: "fees")))
+            let amount = Decimal(string: sanitize(value(rawRow, map, key: "amount")))
 
             let kind: Transaction.Kind
             switch action {
@@ -57,6 +64,8 @@ struct BrokerageCSVParser: StatementParser {
                 return 0
             }()
 
+            AMLogging.log("Row parsed — action: \(action), symbol: \(symbol), qty: \(String(describing: quantity)), price: \(String(describing: price)), fees: \(String(describing: fees)), amount: \(String(describing: amount)) => computed: \(computedAmount)", component: LOG_COMPONENT)
+
             let payee = symbol.isEmpty ? action.capitalized : "\(action.capitalized) \(symbol)"
             let hashKey = Hashing.hashKey(date: date, amount: computedAmount, payee: payee, memo: nil, symbol: symbol.isEmpty ? nil : symbol, quantity: quantity)
 
@@ -66,7 +75,7 @@ struct BrokerageCSVParser: StatementParser {
                 payee: payee,
                 memo: nil,
                 kind: kind,
-                externalId: value(row, map, key: "id"),
+                externalId: value(rawRow, map, key: "id"),
                 symbol: symbol.isEmpty ? nil : symbol,
                 quantity: quantity,
                 price: price,
@@ -75,9 +84,14 @@ struct BrokerageCSVParser: StatementParser {
             )
             txs.append(tx)
 
+            if tx.kind == .bank && (symbol.isEmpty || quantity == nil) {
+                AMLogging.log("Skipped brokerage-specific fields; defaulted kind .bank — row may be non-trade activity", component: LOG_COMPONENT)
+            }
+
             // Optional: detect snapshot rows (broker-specific). For MVP, skip unless explicit.
         }
 
+        AMLogging.always("parse() result — tx: \(txs.count), holdings: 0, balances: 0", component: LOG_COMPONENT)
         return StagedImport(
             parserId: Self.id,
             sourceFileName: "Unknown.csv",
@@ -123,3 +137,4 @@ struct BrokerageCSVParser: StatementParser {
         return s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
     }
 }
+

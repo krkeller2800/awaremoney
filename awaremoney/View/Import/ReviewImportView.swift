@@ -17,6 +17,19 @@ struct ReviewImportView: View {
 
     var body: some View {
         List {
+            if let info = vm.infoMessage, !info.isEmpty {
+                Section {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.blue)
+                        Text(info)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             Section("Details") {
                 Text("File: \(staged.sourceFileName)")
                     .font(.subheadline)
@@ -44,32 +57,25 @@ struct ReviewImportView: View {
                     selectedAccountId = nil
                     vm.selectedAccountID = nil
 
-                    // Pre-fill new account name from file name when creating a new account
-                    let base = (staged.sourceFileName as NSString).deletingPathExtension
-                    if let inst = vm.guessInstitutionName(from: staged.sourceFileName), !inst.isEmpty {
-                        vm.newAccountName = "\(inst) \(vm.newAccountType.rawValue.capitalized)"
+                    // Pre-fill type from suggested type if available
+                    if let suggested = staged.suggestedAccountType {
+                        vm.newAccountType = suggested
+                    }
+
+                    // If we can guess an institution, seed it; otherwise require user input
+                    if let inst = vm.guessInstitutionName(from: staged.sourceFileName) {
+                        vm.userInstitutionName = inst
                     } else {
-                        vm.newAccountName = base
+                        vm.userInstitutionName = ""
                     }
                 }
 
                 if selectedAccountId == nil {
-                    TextField("New Account Name", text: $vm.newAccountName)
+                    TextField("Institution (required)", text: $vm.userInstitutionName)
+                        .textInputAutocapitalization(.words)
                     Picker("Type", selection: $vm.newAccountType) {
                         ForEach(Account.AccountType.allCases, id: \.self) {
                             Text($0.rawValue)
-                        }
-                    }
-                    .onChange(of: vm.newAccountType) { _, newValue in
-                        // If user hasn't customized the name, keep it in sync with type
-                        let base = (staged.sourceFileName as NSString).deletingPathExtension
-                        if let inst = vm.guessInstitutionName(from: staged.sourceFileName), !inst.isEmpty {
-                            let suggested = "\(inst) \(newValue.rawValue.capitalized)"
-                            if vm.newAccountName.isEmpty || vm.newAccountName.hasPrefix(inst) {
-                                vm.newAccountName = suggested
-                            }
-                        } else if vm.newAccountName.isEmpty {
-                            vm.newAccountName = base
                         }
                     }
                 }
@@ -167,6 +173,7 @@ struct ReviewImportView: View {
                 HStack {
                     Button(role: .cancel) {
                         vm.staged = nil
+                        vm.infoMessage = nil
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "xmark.circle")
@@ -194,6 +201,7 @@ struct ReviewImportView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(selectedAccountId == nil && vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal)

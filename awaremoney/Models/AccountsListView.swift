@@ -12,7 +12,7 @@ struct AccountsListView: View {
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(account.name)
-                                Text(account.institutionName ?? "Unknown")
+                                Text(account.type.rawValue.capitalized)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

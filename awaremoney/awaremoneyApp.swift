@@ -157,13 +157,7 @@ struct awaremoneyApp: App {
             return match.display
         }
 
-        // Fallback: take the first token and strip non-letters
-        let separators = CharacterSet(charactersIn: "-_ ")
-        let firstToken = base.components(separatedBy: separators).first ?? base
-        let letters = firstToken.filter { $0.isLetter }
-        if !letters.isEmpty {
-            return String(letters).capitalized
-        }
+        // No fallback to tokens from filename — require explicit user input if no known match
         return nil
     }
 }

@@ -53,6 +53,32 @@ struct ImportsListView: View {
                 }
             }
 
+            // Also gather accounts referenced by holdings in this batch (brokerage-only imports may have no transactions)
+            let holdPred = #Predicate<HoldingSnapshot> { snap in
+                snap.importBatch?.id == batchID
+            }
+            let holdDesc = FetchDescriptor<HoldingSnapshot>(predicate: holdPred)
+            if let holds = try? context.fetch(holdDesc) {
+                for snap in holds {
+                    if let acct = snap.account {
+                        impactedAccountIDs.insert(acct.id)
+                    }
+                }
+            }
+
+            // And accounts referenced by balances in this batch
+            let balPred = #Predicate<BalanceSnapshot> { snap in
+                snap.importBatch?.id == batchID
+            }
+            let balDesc = FetchDescriptor<BalanceSnapshot>(predicate: balPred)
+            if let bals = try? context.fetch(balDesc) {
+                for snap in bals {
+                    if let acct = snap.account {
+                        impactedAccountIDs.insert(acct.id)
+                    }
+                }
+            }
+
             context.delete(batch)
         }
 
@@ -74,3 +100,4 @@ struct ImportsListView: View {
         try? context.save()
     }
 }
+

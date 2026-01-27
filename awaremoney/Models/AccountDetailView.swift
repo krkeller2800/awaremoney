@@ -8,6 +8,10 @@ struct AccountDetailView: View {
     @State private var account: Account?
     @State private var showStartingBalanceSheet = false
     @State private var showRecordedBalanceInfo = false
+    @State private var showInstitutionEditSheet = false
+    @State private var tempInstitutionName: String = ""
+    @State private var showMergeSheet = false
+    @State private var mergeTargetID: UUID?
 
     var body: some View {
         Group {
@@ -15,8 +19,39 @@ struct AccountDetailView: View {
                 List {
                     Section("Details") {
                         LabeledContent("Name", value: account.name)
-                        LabeledContent("Institution", value: account.institutionName ?? "Unknown")
+                        if isInvalidInstitutionName(account.institutionName) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text("Institution")
+                                    Spacer()
+                                    Button {
+                                        tempInstitutionName = ""
+                                        showInstitutionEditSheet = true
+                                    } label: {
+                                        Label("Set Institution…", systemImage: "exclamationmark.triangle.fill")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                Text("Required. We couldn't derive this from your import.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
+                        } else {
+                            LabeledContent("Institution", value: account.institutionName ?? "")
+                        }
                         LabeledContent("Type", value: account.type.rawValue.capitalized)
+                        if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Image(systemName: "info.circle")
+                                        .foregroundStyle(.blue)
+                                    Text("Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance.")
+                                }
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 4)
+                        }
                     }
 
                     Section("Balance Info") {
@@ -112,10 +147,55 @@ struct AccountDetailView: View {
                             }
                         }
                     }
+
+                    Section("Maintenance") {
+                        Button(role: .destructive) {
+                            mergeTargetID = nil
+                            showMergeSheet = true
+                        } label: {
+                            Label("Merge Into Another Account…", systemImage: "arrow.triangle.merge")
+                        }
+                    }
                 }
                 .navigationTitle(account.name)
                 .sheet(isPresented: $showStartingBalanceSheet) {
                     StartingBalanceSheet(account: account, defaultDate: defaultStartingBalanceDate(for: account))
+                }
+                .sheet(isPresented: $showInstitutionEditSheet) {
+                    NavigationStack {
+                        Form {
+                            Section("Institution") {
+                                TextField("Institution name", text: $tempInstitutionName)
+                            }
+                            if isInvalidInstitutionName(tempInstitutionName) {
+                                Text("Please enter the bank or institution name (not a generic word like 'statement').")
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .navigationTitle("Set Institution")
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { showInstitutionEditSheet = false }
+                            }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Save") {
+                                    let trimmed = tempInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !isInvalidInstitutionName(trimmed) else { return }
+                                    account.institutionName = trimmed
+                                    do { try modelContext.save() } catch {}
+                                    showInstitutionEditSheet = false
+                                }
+                                .disabled(isInvalidInstitutionName(tempInstitutionName))
+                            }
+                        }
+                    }
+                }
+                .sheet(isPresented: $showMergeSheet) {
+                    NavigationStack {
+                        MergeAccountSheet(currentAccountID: account.id, selectedTargetID: $mergeTargetID)
+                            .environment(\.modelContext, modelContext)
+                    }
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -199,8 +279,100 @@ struct AccountDetailView: View {
         nf.currencyCode = "USD"
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
+    
+    private func isInvalidInstitutionName(_ name: String?) -> Bool {
+        guard let raw = name?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return true }
+        let lower = raw.lowercased()
+        let banned: Set<String> = [
+            "statement", "statements", "stmt", "report", "reports", "summary", "summaries",
+            "transaction", "transactions", "activity", "history", "export", "exports", "download", "downloads"
+        ]
+        return banned.contains(lower)
+    }
 }
 
 #Preview {
     Text("Preview requires model data")
 }
+struct MergeAccountSheet: View {
+    let currentAccountID: UUID
+    @Binding var selectedTargetID: UUID?
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var accounts: [Account] = []
+
+    var body: some View {
+        Form {
+            Section("Merge into") {
+                Picker("Target Account", selection: Binding(get: {
+                    selectedTargetID ?? UUID()
+                }, set: { newValue in
+                    selectedTargetID = newValue
+                })) {
+                    ForEach(accounts.filter { $0.id != currentAccountID }, id: \.id) { acct in
+                        Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(acct.id)
+                    }
+                }
+            }
+            Section {
+                Button("Merge", role: .destructive) {
+                    guard let targetID = selectedTargetID,
+                          let source = accounts.first(where: { $0.id == currentAccountID }),
+                          let target = accounts.first(where: { $0.id == targetID }) else { return }
+                    do {
+                        try mergeAccounts(source: source, target: target)
+                        dismiss()
+                    } catch {
+                        // For MVP, ignore errors
+                        dismiss()
+                    }
+                }
+                .disabled(mergeDisabled)
+            }
+        }
+        .navigationTitle("Merge Accounts")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+        }
+        .task { await loadAccounts() }
+    }
+
+    private var mergeDisabled: Bool {
+        guard let id = selectedTargetID else { return true }
+        return id == currentAccountID
+    }
+
+    private func loadAccounts() async {
+        do {
+            let fetched = try modelContext.fetch(FetchDescriptor<Account>())
+            await MainActor.run { self.accounts = fetched }
+        } catch {
+            await MainActor.run { self.accounts = [] }
+        }
+    }
+
+    private func mergeAccounts(source: Account, target: Account) throws {
+        // Move transactions
+        for tx in source.transactions {
+            tx.account = target
+        }
+        // Move holdings
+        for hs in source.holdingSnapshots {
+            hs.account = target
+        }
+        // Move balances
+        for bs in source.balanceSnapshots {
+            bs.account = target
+        }
+        // If source has a more specific institution name, prefer it
+        if let srcInst = source.institutionName, !(srcInst.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+            target.institutionName = srcInst
+        }
+        // Delete the now-empty source account
+        modelContext.delete(source)
+        try modelContext.save()
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+    }
+}
+

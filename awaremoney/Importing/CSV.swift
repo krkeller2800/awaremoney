@@ -13,11 +13,23 @@ enum CSV {
             throw ImportError.invalidCSV
         }
         let rows = parse(csv: s)
-        guard let header = rows.first else {
+
+        // Find the first non-blank row to treat as the header. A blank row is one where all fields are empty/whitespace.
+        func isBlankRow(_ row: [String]) -> Bool {
+            return row.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        guard let headerIndex = rows.firstIndex(where: { !isBlankRow($0) }) else {
             throw ImportError.invalidCSV
         }
-        let body = Array(rows.dropFirst())
-        return (body, header.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+
+        let rawHeader = rows[headerIndex]
+        let header = rawHeader.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        // Body is all rows after the header, excluding blank rows
+        let tail = rows.dropFirst(headerIndex + 1)
+        let body = tail.filter { !isBlankRow($0) }
+
+        return (body, header)
     }
 
     // Simple CSV parser with quote handling
