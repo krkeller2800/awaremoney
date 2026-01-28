@@ -6,12 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		DFA5C5F22F28307000860312 /* PDFStatementExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFA5C5F12F28307000860312 /* PDFStatementExtractor.swift */; };
-		DFFC9A272F294F4900C83407 /* PDFSummaryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFFC9A262F294F4800C83407 /* PDFSummaryParser.swift */; };
-		DFFC9A292F29580000C83407 /* PDFBankTransactionsParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFFC9A282F29580000C83407 /* PDFBankTransactionsParser.swift */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXCopyFilesBuildPhase section */
 		DFF289762F266E0C00122962 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -27,9 +21,6 @@
 
 /* Begin PBXFileReference section */
 		DF1800CC2F23D66800F6A522 /* awaremoney.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = awaremoney.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		DFA5C5F12F28307000860312 /* PDFStatementExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFStatementExtractor.swift; sourceTree = "<group>"; };
-		DFFC9A262F294F4800C83407 /* PDFSummaryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFSummaryParser.swift; sourceTree = "<group>"; };
-		DFFC9A282F29580000C83407 /* PDFBankTransactionsParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFBankTransactionsParser.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -69,9 +60,6 @@
 			children = (
 				DF1800CE2F23D66800F6A522 /* awaremoney */,
 				DF1800CD2F23D66800F6A522 /* Products */,
-				DFA5C5F12F28307000860312 /* PDFStatementExtractor.swift */,
-				DFFC9A262F294F4800C83407 /* PDFSummaryParser.swift */,
-				DFFC9A282F29580000C83407 /* PDFBankTransactionsParser.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -158,9 +146,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DFFC9A272F294F4900C83407 /* PDFSummaryParser.swift in Sources */,
-				DFFC9A292F29580000C83407 /* PDFBankTransactionsParser.swift in Sources */,
-				DFA5C5F22F28307000860312 /* PDFStatementExtractor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -18,7 +18,8 @@ struct ImportFlowView: View {
         GenericHoldingsStatementCSVParser()
     ])
     @State private var isImporterPresented = false
-    @State private var isPDFTxImporterPresented = false
+    private enum ImportMode { case general, pdfTransactions }
+    @State private var importMode: ImportMode = .general
 
     var body: some View {
         NavigationStack {
@@ -44,23 +45,22 @@ struct ImportFlowView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    NavigationLink {
-                        ImportsListView()
+                    Menu {
+                        Button {
+                            vm.errorMessage = nil
+                            importMode = .pdfTransactions
+                            isImporterPresented = true
+                        } label: {
+                            Text("Import PDF Transactions")
+                        }
                     } label: {
-                        Text("View Imports")
-                    }
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        vm.errorMessage = nil
-                        isPDFTxImporterPresented = true
-                    } label: {
-                        Text("Import PDF Transactions")
+                        Text("More")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         vm.errorMessage = nil
+                        importMode = .general
                         isImporterPresented = true
                     } label: {
                         Text("Import")
@@ -70,27 +70,18 @@ struct ImportFlowView: View {
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [UTType.commaSeparatedText, .text, .data, .pdf],
+            allowedContentTypes: importMode == .pdfTransactions ? [.pdf] : [UTType.commaSeparatedText, .text, .data, .pdf],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    vm.handlePickedURL(url)
-                }
-            case .failure(let error):
-                vm.errorMessage = error.localizedDescription
-            }
-        }
-        .fileImporter(
-            isPresented: $isPDFTxImporterPresented,
-            allowedContentTypes: [.pdf],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    vm.handlePickedPDFTransactionsURL(url)
+                    switch importMode {
+                    case .general:
+                        vm.handlePickedURL(url)
+                    case .pdfTransactions:
+                        vm.handlePickedPDFTransactionsURL(url)
+                    }
                 }
             case .failure(let error):
                 vm.errorMessage = error.localizedDescription

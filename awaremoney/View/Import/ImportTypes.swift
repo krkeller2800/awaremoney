@@ -21,6 +21,7 @@ struct StagedTransaction: Identifiable, Hashable {
     var price: Decimal?
     var fees: Decimal?
     var hashKey: String
+    var sourceAccountLabel: String? = nil
     var include: Bool = true
 }
 
@@ -68,3 +69,4 @@ enum ImportError: Error, LocalizedError {
         }
     }
 }
+

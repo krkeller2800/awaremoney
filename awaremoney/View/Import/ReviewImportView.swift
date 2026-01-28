@@ -114,11 +114,22 @@ struct ReviewImportView: View {
                         ))
                         .labelsHidden()
 
-                        VStack(alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(t.payee)
-                            Text(t.datePosted, style: .date)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                if let acct = t.sourceAccountLabel, !acct.isEmpty {
+                                    Text(acct.capitalized)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.secondary.opacity(0.12))
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                }
+                                Text(t.datePosted, style: .date)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         Text(t.amount as NSNumber, formatter: ReviewImportView.currencyFormatter)
@@ -201,7 +212,7 @@ struct ReviewImportView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(selectedAccountId == nil && vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(false)
                     .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal)

@@ -168,8 +168,89 @@ final class ImportViewModel: ObservableObject {
         let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
         AMLogging.always("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
 
-        // Ensure account exists
-        let account: Account
+        // Helper to normalize PDF labels to canonical strings
+        func normalizedLabel(_ raw: String?) -> String? {
+            guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
+            if s.contains("checking") { return "checking" }
+            if s.contains("savings") { return "savings" }
+            return nil
+        }
+        func typeForLabel(_ label: String?) -> Account.AccountType? {
+            switch normalizedLabel(label) {
+            case "checking": return .checking
+            case "savings": return .savings
+            default: return nil
+            }
+        }
+
+        // Compute included transactions
+        let includedTransactions = staged.transactions.filter { ($0.include) }
+        let excludedCount = staged.transactions.count - includedTransactions.count
+
+        // Group transactions by source account label (checking/savings). Unlabeled will be handled separately.
+        var labeledGroups: [String: [StagedTransaction]] = [:]
+        var unlabeled: [StagedTransaction] = []
+        for t in includedTransactions {
+            if let key = normalizedLabel(t.sourceAccountLabel) {
+                labeledGroups[key, default: []].append(t)
+            } else {
+                unlabeled.append(t)
+            }
+        }
+        AMLogging.always("Approve: label groups => \(labeledGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", ")), unlabeled: \(unlabeled.count)", component: "ImportViewModel")
+
+        // Function to resolve or create an account for a given type/institution
+        func resolveAccount(ofType resolvedType: Account.AccountType, institutionName: String?, preferExisting existing: Account?) -> Account {
+            // If an existing account was provided and matches the type and institution (or institution empty), reuse it
+            if let existing {
+                if existing.type == resolvedType {
+                    if let inst = institutionName, !inst.isEmpty {
+                        // If institution provided differs, update or switch to a matching account
+                        if let current = existing.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(inst) {
+                            if let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
+                                AMLogging.always("Switching to existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                                return found
+                            } else {
+                                AMLogging.always("Creating new account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                                let acct = Account(
+                                    name: inst,
+                                    type: resolvedType,
+                                    institutionName: inst,
+                                    currencyCode: "USD"
+                                )
+                                context.insert(acct)
+                                return acct
+                            }
+                        } else {
+                            // Ensure institution name is set
+                            if existing.institutionName == nil || existing.institutionName?.isEmpty == true {
+                                existing.institutionName = inst
+                            }
+                        }
+                    }
+                    return existing
+                }
+            }
+            // No suitable existing: find by institution, else create
+            if let inst = institutionName, let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
+                AMLogging.always("Reusing existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                return found
+            } else {
+                let name = institutionName ?? ""
+                let acct = Account(
+                    name: name,
+                    type: resolvedType,
+                    institutionName: institutionName,
+                    currencyCode: "USD"
+                )
+                AMLogging.always("Creating new account with institution: \(institutionName ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                context.insert(acct)
+                return acct
+            }
+        }
+
+        // Resolve selected account if any (used as anchor for matching label/type)
+        var selectedAccount: Account? = nil
         if let selectedID = selectedAccountID, let fetched = try? {
             let predicate = #Predicate<Account> { $0.id == selectedID }
             var descriptor = FetchDescriptor<Account>(predicate: predicate)
@@ -186,107 +267,75 @@ final class ImportViewModel: ObservableObject {
             }
 
             if !providedInst.isEmpty {
-                // User explicitly provided an institution name in the import detail screen — carry it through
                 AMLogging.always("Applying user-provided institution to selected account: '\(providedInst)'", component: "ImportViewModel")
                 target.institutionName = providedInst
             } else if (target.institutionName == nil) || (target.institutionName?.isEmpty == true) {
                 AMLogging.always("Filling missing institution on selected account with: \(chosenInst ?? "(nil)")", component: "ImportViewModel")
                 if let chosenInst { target.institutionName = chosenInst }
             } else if let chosenInst, let current = target.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(chosenInst) {
-                AMLogging.always("Institution mismatch — selected: \(current), chosen: \(chosenInst). Will find or create target account.", component: "ImportViewModel")
-                let resolvedType = self.newAccountType
-                // Institution mismatch: find or create an account for the chosen institution using the user-selected type
-                if let existing = findAccount(ofType: resolvedType, institutionName: chosenInst, context: context) {
-                    AMLogging.always("Switching to existing account for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
-                    target = existing
-                } else {
-                    AMLogging.always("Creating new account for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
-                    let acct = Account(
-                        name: chosenInst,
-                        type: resolvedType,
-                        institutionName: chosenInst,
-                        currencyCode: "USD"
-                    )
-                    context.insert(acct)
-                    target = acct
-                }
+                AMLogging.always("Institution mismatch — selected: \(current), chosen: \(chosenInst).", component: "ImportViewModel")
+                // We'll allow per-label account resolution below to create/find matching accounts for other labels
             }
-            account = target
-        } else {
-            let resolvedType = self.newAccountType
-            if let chosenInst, let existing = findAccount(ofType: resolvedType, institutionName: chosenInst, context: context) {
-                AMLogging.always("Reusing existing account (no selection) for institution: \(chosenInst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
-                account = existing
-            } else {
-                let acct = Account(
-                    name: chosenInst ?? "",
-                    type: resolvedType,
-                    institutionName: chosenInst,
-                    currencyCode: "USD"
-                )
-                AMLogging.always("Creating new account (no selection) with institution: \(chosenInst ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
-                context.insert(acct)
-                account = acct
-            }
+            selectedAccount = target
         }
-        AMLogging.log("Resolved account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), existing tx count: \(account.transactions.count)", component: "ImportViewModel")  // DEBUG LOG
-        AMLogging.always("Using account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)")", component: "ImportViewModel")
-        self.selectedAccountID = account.id
 
-        // De-dupe by hashKey per account
-        let existingHashes = try existingTransactionHashes(for: account, context: context)
+        // Build accounts per label (checking/savings). If no label groups exist, fall back to single-account path.
+        var accountsByLabel: [String: Account] = [:]
+        if labeledGroups.isEmpty {
+            // Single-account path (original behavior)
+            let resolvedType = self.newAccountType
+            let account = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: selectedAccount)
+            AMLogging.log("Resolved account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), existing tx count: \(account.transactions.count)", component: "ImportViewModel")  // DEBUG LOG
+            AMLogging.always("Using account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)")", component: "ImportViewModel")
+            self.selectedAccountID = account.id
+            accountsByLabel["default"] = account
+        } else {
+            // Multi-account path: resolve an account for each label
+            for (label, group) in labeledGroups {
+                let resolvedType = typeForLabel(label) ?? self.newAccountType
+                let preferExisting: Account? = {
+                    // If user selected an account whose type matches this label, prefer it for this label
+                    if let sel = selectedAccount, sel.type == resolvedType { return sel }
+                    return nil
+                }()
+                let acct = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: preferExisting)
+                accountsByLabel[label] = acct
+                AMLogging.always("Label '\(label)' -> account id: \(acct.id), name: \(acct.name), type: \(acct.type.rawValue)", component: "ImportViewModel")
+                AMLogging.always("Group counts — label: \(label), tx: \(group.count)", component: "ImportViewModel")
+            }
+            // Assign unlabeled transactions: prefer selected account, else any resolved account, else create default using newAccountType
+            if !unlabeled.isEmpty {
+                let unlabeledAccount: Account = {
+                    if let sel = selectedAccount { return sel }
+                    if let any = accountsByLabel.values.first { return any }
+                    return resolveAccount(ofType: self.newAccountType, institutionName: chosenInst, preferExisting: nil)
+                }()
+                accountsByLabel["unlabeled"] = unlabeledAccount
+                AMLogging.always("Unlabeled -> account id: \(unlabeledAccount.id), name: \(unlabeledAccount.name)", component: "ImportViewModel")
+            }
+            // Keep UI selection pointing at the first account for continuity
+            if let first = accountsByLabel.values.first { self.selectedAccountID = first.id }
+        }
 
-        // Compute included and new transactions
-        let includedTransactions = staged.transactions.filter { ($0.include) }
-        let excludedCount = staged.transactions.count - includedTransactions.count
-
-        // Determine sign convention for credit card statements (data-driven: detect payment vs purchase signs)
-        let shouldFlipCreditCardAmounts: Bool = {
+        // Helper for credit card sign decision per account
+        func shouldFlipCreditCardAmounts(for account: Account, transactions: [StagedTransaction]) -> Bool {
             guard account.type == .creditCard else { return false }
-
-            // Identify payment-like rows using description keywords in payee/memo
+            let includedTransactions = transactions
             func isPaymentLike(_ payee: String?, _ memo: String?) -> Bool {
                 let text = ((payee ?? "") + " " + (memo ?? "")).lowercased()
                 let keywords = [
-                    "payment",
-                    "auto pay",
-                    "autopay",
-                    "online payment",
-                    "thank you",
-                    "pmt",
-                    "cardmember serv",
-                    "card member serv",
-                    "ach credit",
-                    "ach payment",
-                    "directpay",
-                    "direct pay",
-                    "bill pay",
-                    "billpay"
+                    "payment","auto pay","autopay","online payment","thank you","pmt","cardmember serv","card member serv","ach credit","ach payment","directpay","direct pay","bill pay","billpay"
                 ]
                 return keywords.contains { text.contains($0) }
             }
-
             let paymentRows = includedTransactions.filter { isPaymentLike($0.payee, $0.memo) }
             let purchaseRows = includedTransactions.filter { !isPaymentLike($0.payee, $0.memo) }
-
             let paymentPos = paymentRows.filter { $0.amount > 0 }.count
             let paymentNeg = paymentRows.filter { $0.amount < 0 }.count
-
-            // Primary signal: how payments are signed
-            if paymentPos != paymentNeg && (paymentPos + paymentNeg) > 0 {
-                // If payments are mostly negative, purchases are likely positive -> flip
-                return paymentNeg > paymentPos
-            }
-
-            // Secondary signal: how purchases are signed
+            if paymentPos != paymentNeg && (paymentPos + paymentNeg) > 0 { return paymentNeg > paymentPos }
             let purchasePos = purchaseRows.filter { $0.amount > 0 }.count
             let purchaseNeg = purchaseRows.filter { $0.amount < 0 }.count
-            if purchasePos != purchaseNeg && (purchasePos + purchaseNeg) > 0 {
-                // If purchases are mostly positive -> flip, else don't
-                return purchasePos > purchaseNeg
-            }
-
-            // Fallback: overall majority / sum
+            if purchasePos != purchaseNeg && (purchasePos + purchaseNeg) > 0 { return purchasePos > purchaseNeg }
             let positives = includedTransactions.filter { $0.amount > 0 }.count
             let negatives = includedTransactions.filter { $0.amount < 0 }.count
             if positives == negatives {
@@ -295,64 +344,81 @@ final class ImportViewModel: ObservableObject {
             } else {
                 return positives > negatives
             }
-        }()
-
-        AMLogging.always("Credit card sign decision (data-driven) — flip: \(shouldFlipCreditCardAmounts)", component: "ImportViewModel")
-
-        let newTransactions = includedTransactions.filter { t in
-            // For credit cards, flip the sign only if needed so purchases are negative (liability increases) and payments are positive
-            let adjustedAmount = (account.type == .creditCard && shouldFlipCreditCardAmounts) ? -t.amount : t.amount
-            let saveKey = Hashing.hashKey(
-                date: t.datePosted,
-                amount: adjustedAmount,
-                payee: t.payee,
-                memo: t.memo,
-                symbol: t.symbol,
-                quantity: t.quantity
-            )
-            return !existingHashes.contains(saveKey)
         }
 
-        AMLogging.log("Tx filter — included: \(includedTransactions.count), excluded: \(excludedCount), existingHashes: \(existingHashes.count), new: \(newTransactions.count)", component: "ImportViewModel")  // DEBUG LOG
-
-        // Save transactions
+        // Insert transactions per account group
         var insertedTxCount = 0
         var newlyInserted: [Transaction] = []
-        for t in newTransactions {
-            let adjustedAmount = (account.type == .creditCard && shouldFlipCreditCardAmounts) ? -t.amount : t.amount
-            let saveKey = Hashing.hashKey(
-                date: t.datePosted,
-                amount: adjustedAmount,
-                payee: t.payee,
-                memo: t.memo,
-                symbol: t.symbol,
-                quantity: t.quantity
-            )
 
-            let tx = Transaction(
-                datePosted: t.datePosted,
-                amount: adjustedAmount,
-                payee: t.payee,
-                memo: t.memo,
-                kind: t.kind,
-                externalId: t.externalId,
-                hashKey: saveKey,
-                symbol: t.symbol,
-                quantity: t.quantity,
-                price: t.price,
-                fees: t.fees,
-                account: account,
-                importBatch: batch,
-                importHashKey: saveKey
-            )
-            context.insert(tx)
-            insertedTxCount += 1
-            AMLogging.log("Inserted tx — date: \(t.datePosted), amount: \(adjustedAmount), payee: \(t.payee), hash: \(saveKey))", component: "ImportViewModel")  // DEBUG LOG
-            newlyInserted.append(tx)
-            batch.transactions.append(tx)
+        // Build a map of label -> transactions array to iterate (include unlabeled and default paths)
+        var groupsToProcess: [(label: String, transactions: [StagedTransaction]) ] = []
+        if labeledGroups.isEmpty {
+            let all = labeledGroups["default"] != nil ? [] : includedTransactions
+            groupsToProcess.append((label: "default", transactions: all))
+        } else {
+            for (label, list) in labeledGroups { groupsToProcess.append((label: label, transactions: list)) }
+            if !unlabeled.isEmpty { groupsToProcess.append((label: "unlabeled", transactions: unlabeled)) }
         }
 
-        AMLogging.always("Inserted transactions this batch: \(insertedTxCount) of new: \(newTransactions.count) (included: \(includedTransactions.count), excluded: \(excludedCount))", component: "ImportViewModel")
+        for entry in groupsToProcess {
+            guard let account = accountsByLabel[entry.label] else { continue }
+            AMLogging.always("Processing group '\(entry.label)' for account: \(account.name) — tx: \(entry.transactions.count)", component: "ImportViewModel")
+            let shouldFlip = shouldFlipCreditCardAmounts(for: account, transactions: entry.transactions)
+            AMLogging.always("Credit card sign decision (data-driven) — flip: \(shouldFlip) for account: \(account.name)", component: "ImportViewModel")
+
+            // De-dupe set per account
+            let existingHashes = try existingTransactionHashes(for: account, context: context)
+
+            // Compute new transactions for this account
+            let newTransactions = entry.transactions.filter { t in
+                let adjustedAmount = (account.type == .creditCard && shouldFlip) ? -t.amount : t.amount
+                let saveKey = Hashing.hashKey(
+                    date: t.datePosted,
+                    amount: adjustedAmount,
+                    payee: t.payee,
+                    memo: t.memo,
+                    symbol: t.symbol,
+                    quantity: t.quantity
+                )
+                return !existingHashes.contains(saveKey)
+            }
+
+            for t in newTransactions {
+                let adjustedAmount = (account.type == .creditCard && shouldFlip) ? -t.amount : t.amount
+                let saveKey = Hashing.hashKey(
+                    date: t.datePosted,
+                    amount: adjustedAmount,
+                    payee: t.payee,
+                    memo: t.memo,
+                    symbol: t.symbol,
+                    quantity: t.quantity
+                )
+
+                let tx = Transaction(
+                    datePosted: t.datePosted,
+                    amount: adjustedAmount,
+                    payee: t.payee,
+                    memo: t.memo,
+                    kind: t.kind,
+                    externalId: t.externalId,
+                    hashKey: saveKey,
+                    symbol: t.symbol,
+                    quantity: t.quantity,
+                    price: t.price,
+                    fees: t.fees,
+                    account: account,
+                    importBatch: batch,
+                    importHashKey: saveKey
+                )
+                context.insert(tx)
+                insertedTxCount += 1
+                AMLogging.log("Inserted tx — date: \(t.datePosted), amount: \(adjustedAmount), payee: \(t.payee), hash: \(saveKey))", component: "ImportViewModel")  // DEBUG LOG
+                newlyInserted.append(tx)
+                batch.transactions.append(tx)
+            }
+        }
+
+        AMLogging.always("Inserted transactions this batch: \(insertedTxCount) of included: \(includedTransactions.count), excluded: \(excludedCount)", component: "ImportViewModel")
 
         // Attempt to reconcile transfers across accounts for newly inserted transactions (±3 days)
         do {
@@ -362,15 +428,18 @@ final class ImportViewModel: ObservableObject {
             AMLogging.log("ReconcileTransfers failed: \(error)", component: "ImportViewModel")  // DEBUG LOG
         }
 
-        // Save holdings (create Security as needed)
+        // Save holdings (create Security as needed) — attach to the first resolved account if multiple
         var insertedHoldingsCount = 0
+        let firstAccountForAssets: Account? = accountsByLabel.values.first
         for h in staged.holdings where (h.include) {
+            let accountForHolding = firstAccountForAssets ?? accountsByLabel.values.first
+            guard let targetAccount = accountForHolding else { continue }
             let security = fetchOrCreateSecurity(symbol: h.symbol, context: context)
             let hs = HoldingSnapshot(
                 asOfDate: h.asOfDate,
                 quantity: h.quantity,
                 marketValue: h.marketValue,
-                account: account,
+                account: targetAccount,
                 security: security,
                 importBatch: batch
             )
@@ -380,13 +449,15 @@ final class ImportViewModel: ObservableObject {
             AMLogging.log("Inserted holding — symbol: \(h.symbol), qty: \(h.quantity), mv: \(String(describing: h.marketValue))", component: "ImportViewModel")  // DEBUG LOG
         }
 
-        // Save balances
+        // Save balances — attach to the first resolved account if multiple
         var insertedBalancesCount = 0
         for b in staged.balances where (b.include) {
+            let accountForBalance = firstAccountForAssets ?? accountsByLabel.values.first
+            guard let targetAccount = accountForBalance else { continue }
             let bs = BalanceSnapshot(
                 asOfDate: b.asOfDate,
                 balance: b.balance,
-                account: account,
+                account: targetAccount,
                 importBatch: batch
             )
             context.insert(bs)
@@ -397,7 +468,7 @@ final class ImportViewModel: ObservableObject {
 
         AMLogging.log("Insert summary — tx: \(insertedTxCount), holdings: \(insertedHoldingsCount), balances: \(insertedBalancesCount)", component: "ImportViewModel")  // DEBUG LOG
 
-        if newTransactions.isEmpty {
+        if newlyInserted.isEmpty {
             // Surface a helpful message if nothing was saved due to duplicates/exclusions
             self.errorMessage = "No new transactions to save (all duplicates or excluded)."
         } else {
@@ -411,14 +482,7 @@ final class ImportViewModel: ObservableObject {
             // Debug: post-save counts
             do {
                 let totalTx = try context.fetchCount(FetchDescriptor<Transaction>())
-                let accountID = account.id
-                let acctPredicate = #Predicate<Transaction> { tx in
-                    tx.account?.id == accountID
-                }
-                let acctDescriptor = FetchDescriptor<Transaction>(predicate: acctPredicate)
-                let acctTx = try context.fetchCount(acctDescriptor)
-                let acctName = account.name
-                AMLogging.log("Post-save counts — total transactions: \(totalTx), for account \(acctName): \(acctTx)", component: "ImportViewModel")  // DEBUG LOG
+                AMLogging.log("Post-save counts — total transactions: \(totalTx)", component: "ImportViewModel")  // DEBUG LOG
 
                 // Additional diagnostics: counts of other models
                 let accountCount = try context.fetchCount(FetchDescriptor<Account>())
