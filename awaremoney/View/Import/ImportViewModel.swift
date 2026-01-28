@@ -22,6 +22,9 @@ final class ImportViewModel: ObservableObject {
     @Published var mappingSession: MappingSession? // non-nil when user needs to map columns
     @Published var infoMessage: String?
     @Published var isPDFTransactionsImporterPresented: Bool = false
+    @Published var isImporting: Bool = false
+
+    private let importer = StatementImporter()
 
     private let parsers: [StatementParser]
 
@@ -41,116 +44,214 @@ final class ImportViewModel: ObservableObject {
     func handlePickedURL(_ url: URL) {
         AMLogging.log("Picked URL: \(url.absoluteString)", component: "ImportViewModel")  // DEBUG LOG
 
-        // Begin security-scoped access for files picked from the Files app
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer {
-            if didStart { url.stopAccessingSecurityScopedResource() }
-        }
+        // Show spinner immediately
+        self.isImporting = true
 
-        do {
-            // If the file is in iCloud, trigger a download if needed
-            if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]),
-               values.isUbiquitousItem == true {
-                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        Task.detached { [weak self] in
+            guard let self else { return }
+            // Begin security-scoped access for files picked from the Files app
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer {
+                if didStart { url.stopAccessingSecurityScopedResource() }
             }
 
-            let data = try Data(contentsOf: url)
-            let ext = url.pathExtension.lowercased()
-            let rowsAndHeaders: ([[String]], [String])
-            if ext == "pdf" {
-                rowsAndHeaders = try PDFStatementExtractor.parse(url: url)
-            } else {
-                rowsAndHeaders = try CSV.read(data: data)
-            }
-            let (rows, headers) = rowsAndHeaders
-            guard !headers.isEmpty else { throw ImportError.invalidCSV }
-            AMLogging.always("Import picked — ext: \(ext), rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
-
-            let matchingParsers = parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
-            AMLogging.always("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
-            if let parser = parsers.first(where: { $0.canParse(headers: headers) }) {
-                AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
-                var stagedImport = try parser.parse(rows: rows, headers: headers)
-                stagedImport.sourceFileName = url.lastPathComponent
-                AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
-                if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
-                    AMLogging.always("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
+            do {
+                // If the file is in iCloud, trigger a download if needed
+                if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]),
+                   values.isUbiquitousItem == true {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: url)
                 }
 
-                // Guess account type from filename and/or headers (e.g., credit card statements)
-                let sampleForGuess = Array(rows.prefix(50))
-                if let guessedType = guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
-                    stagedImport.suggestedAccountType = guessedType
+                // Run the coordinator on main actor to get confidence/warnings (method is @MainActor)
+                var coordinatorResult: StatementImportResult? = nil
+                do {
+                    coordinatorResult = try await MainActor.run {
+                        try self.importer.importStatement(from: url, prefer: .summaryOnly)
+                    }
+                } catch {
+                    // Ignore coordinator errors here; continue with legacy path
                 }
 
-                // Preselect the new account type in the UI if creating a new account
-                if let suggested = stagedImport.suggestedAccountType {
-                    self.newAccountType = suggested
-                }
-
-                self.staged = stagedImport
-
-                // Hint: Brokerage activity without balances/holdings won't affect Net Worth until a statement is imported
-                if (stagedImport.suggestedAccountType == .brokerage || self.newAccountType == .brokerage),
-                   stagedImport.balances.isEmpty,
-                   stagedImport.holdings.isEmpty,
-                   !stagedImport.transactions.isEmpty {
-                    self.infoMessage = "Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance."
+                // Extract rows/headers (heavy work)
+                let ext = url.pathExtension.lowercased()
+                let rowsAndHeaders: ([[String]], [String])
+                if ext == "pdf" {
+                    rowsAndHeaders = try await MainActor.run {
+                        try PDFStatementExtractor.parse(url: url)
+                    }
                 } else {
-                    self.infoMessage = nil
+                    let data = try Data(contentsOf: url)
+                    rowsAndHeaders = try await MainActor.run {
+                        try CSV.read(data: data)
+                    }
                 }
-            } else {
-                AMLogging.always("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
-                // Start a minimal bank-style mapping session as a fallback
-                let sample = Array(rows.prefix(10))
-                self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: sample, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
-                self.infoMessage = nil
-                return
+                let (rows, headers) = rowsAndHeaders
+
+                await MainActor.run { [coordinatorResult] in
+                    guard !headers.isEmpty else {
+                        self.errorMessage = ImportError.invalidCSV.localizedDescription
+                        self.infoMessage = nil
+                        self.staged = nil
+                        self.isImporting = false
+                        return
+                    }
+                    AMLogging.always("Import picked — ext: \(ext), rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
+
+                    let matchingParsers = self.parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
+                    AMLogging.always("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
+                    if let parser = self.parsers.first(where: { $0.canParse(headers: headers) }) {
+                        AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
+                        do {
+                            var stagedImport = try parser.parse(rows: rows, headers: headers)
+                            stagedImport.sourceFileName = url.lastPathComponent
+                            AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
+                            if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
+                                AMLogging.always("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
+                            }
+
+                            // Guess account type
+                            let sampleForGuess = Array(rows.prefix(50))
+                            if let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
+                                stagedImport.suggestedAccountType = guessedType
+                            }
+                            if let suggested = stagedImport.suggestedAccountType {
+                                self.newAccountType = suggested
+                            }
+
+                            self.staged = stagedImport
+
+                            // Build info messages
+                            var messages: [String] = []
+                            if let res = coordinatorResult {
+                                for w in res.warnings { if !messages.contains(w) { messages.append(w) } }
+                                if res.source == .pdf && res.confidence <= .low {
+                                    let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
+                                    if !messages.contains(warn) { messages.append(warn) }
+                                }
+                            }
+                            if (stagedImport.suggestedAccountType == .brokerage || self.newAccountType == .brokerage),
+                               stagedImport.balances.isEmpty,
+                               stagedImport.holdings.isEmpty,
+                               !stagedImport.transactions.isEmpty {
+                                let hint = "Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance."
+                                if !messages.contains(hint) { messages.append(hint) }
+                            }
+                            self.infoMessage = messages.isEmpty ? nil : messages.joined(separator: "\n")
+                        } catch {
+                            self.errorMessage = error.localizedDescription
+                            self.infoMessage = nil
+                            self.staged = nil
+                        }
+                    } else {
+                        AMLogging.always("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
+                        let sample = Array(rows.prefix(10))
+                        self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: sample, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
+                        if let res = coordinatorResult, (!res.warnings.isEmpty || res.confidence <= .low) {
+                            var msgs: [String] = []
+                            for w in res.warnings { if !msgs.contains(w) { msgs.append(w) } }
+                            if res.source == .pdf && res.confidence <= .low {
+                                let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
+                                if !msgs.contains(warn) { msgs.append(warn) }
+                            }
+                            self.infoMessage = msgs.joined(separator: "\n")
+                        } else {
+                            self.infoMessage = nil
+                        }
+                    }
+
+                    self.isImporting = false
+                }
+            } catch {
+                await MainActor.run {
+                    let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    AMLogging.always("Importer error (user-facing): \(userMessage)", component: "ImportViewModel")
+                    self.errorMessage = userMessage
+                    self.infoMessage = nil
+                    self.staged = nil
+                    self.isImporting = false
+                }
             }
-        } catch {
-            let ns = error as NSError
-            AMLogging.log("Importer error: \(ns.domain) (\(ns.code)) — \(ns.localizedDescription) — \(ns.userInfo)", component: "ImportViewModel")  // DEBUG LOG
-            self.errorMessage = ns.localizedDescription
-            self.infoMessage = nil
-            self.staged = nil
         }
     }
 
     func handlePickedPDFTransactionsURL(_ url: URL) {
         AMLogging.log("Picked PDF (transactions): \(url.absoluteString)", component: "ImportViewModel")
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-        do {
-            // Ensure iCloud download if needed
-            if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
-                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        self.isImporting = true
+
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+            do {
+                // Ensure iCloud download if needed
+                if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
+                    try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+                }
+
+                // Coordinator for confidence/warnings in transactions mode (method is @MainActor)
+                var coordinatorResult: StatementImportResult? = nil
+                do {
+                    coordinatorResult = try await MainActor.run {
+                        try self.importer.importStatement(from: url, prefer: .transactions)
+                    }
+                } catch {
+                    // Ignore coordinator errors here; continue with legacy path
+                }
+
+                // Use extractor in transactions mode (heavy)
+                let (rows, headers) = try await MainActor.run {
+                    try PDFStatementExtractor.parse(url: url, mode: .transactions)
+                }
+                await MainActor.run { [coordinatorResult] in
+                    guard !headers.isEmpty else {
+                        self.errorMessage = ImportError.unknownFormat.localizedDescription
+                        self.infoMessage = nil
+                        self.staged = nil
+                        self.isImporting = false
+                        return
+                    }
+                    AMLogging.always("PDF Transactions — rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
+
+                    let parser: StatementParser = PDFBankTransactionsParser()
+                    do {
+                        var stagedImport = try parser.parse(rows: rows, headers: headers)
+                        stagedImport.sourceFileName = url.lastPathComponent
+
+                        // Guess account type (bank/credit card heuristic)
+                        let sampleForGuess = Array(rows.prefix(50))
+                        if let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
+                            stagedImport.suggestedAccountType = guessedType
+                        }
+                        if let suggested = stagedImport.suggestedAccountType { self.newAccountType = suggested }
+
+                        self.staged = stagedImport
+                        var messages: [String] = ["PDF transactions are experimental. Please review signs before saving."]
+                        if let res = coordinatorResult {
+                            for w in res.warnings { if !messages.contains(w) { messages.append(w) } }
+                            if res.confidence <= .low {
+                                let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
+                                if !messages.contains(warn) { messages.append(warn) }
+                            }
+                        }
+                        self.infoMessage = messages.joined(separator: "\n")
+                    } catch {
+                        self.errorMessage = error.localizedDescription
+                        self.infoMessage = nil
+                        self.staged = nil
+                    }
+
+                    self.isImporting = false
+                }
+            } catch {
+                await MainActor.run {
+                    let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    AMLogging.always("PDF Transactions importer error (user-facing): \(userMessage)", component: "ImportViewModel")
+                    self.errorMessage = userMessage
+                    self.infoMessage = nil
+                    self.staged = nil
+                    self.isImporting = false
+                }
             }
-
-            // Use extractor in transactions mode
-            let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: .transactions)
-            guard !headers.isEmpty else { throw ImportError.unknownFormat }
-            AMLogging.always("PDF Transactions — rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
-
-            // Use the dedicated PDF transactions parser
-            let parser: StatementParser = PDFBankTransactionsParser()
-            var stagedImport = try parser.parse(rows: rows, headers: headers)
-            stagedImport.sourceFileName = url.lastPathComponent
-
-            // Guess account type (bank/credit card heuristic)
-            let sampleForGuess = Array(rows.prefix(50))
-            if let guessedType = guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
-                stagedImport.suggestedAccountType = guessedType
-            }
-            if let suggested = stagedImport.suggestedAccountType { self.newAccountType = suggested }
-
-            self.staged = stagedImport
-            self.infoMessage = "PDF transactions are experimental. Please review signs before saving."
-        } catch {
-            let ns = error as NSError
-            AMLogging.log("PDF Transactions importer error: \(ns.domain) (\(ns.code)) — \(ns.localizedDescription)", component: "ImportViewModel")
-            self.errorMessage = ns.localizedDescription
-            self.infoMessage = nil
-            self.staged = nil
         }
     }
 
@@ -160,7 +261,9 @@ final class ImportViewModel: ObservableObject {
         AMLogging.log("Staged counts — tx: \(staged.transactions.count), holdings: \(staged.holdings.count), balances: \(staged.balances.count)", component: "ImportViewModel")  // DEBUG LOG
 
         let batch = ImportBatch(
-            label: staged.sourceFileName, sourceFileName: staged.sourceFileName
+            label: staged.sourceFileName,
+            sourceFileName: staged.sourceFileName,
+            parserId: staged.parserId
         )
         context.insert(batch)
         
@@ -257,7 +360,7 @@ final class ImportViewModel: ObservableObject {
             descriptor.fetchLimit = 1
             return try context.fetch(descriptor).first
         }() {
-            var target = fetched
+            let target = fetched
             AMLogging.always("Selected account before resolution — name: \(target.name), type: \(target.type.rawValue), inst: \(target.institutionName ?? "(nil)")", component: "ImportViewModel")
 
             // Apply user-selected account type override so it always carries through
@@ -524,6 +627,7 @@ final class ImportViewModel: ObservableObject {
 
             // Notify UI that transactions changed (helps tabs refresh if needed)
             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
 
             self.staged = nil
             self.userInstitutionName = ""
@@ -536,7 +640,7 @@ final class ImportViewModel: ObservableObject {
     }
 
     func applyBankMapping() {
-        guard var session = mappingSession else { return }
+        guard let session = mappingSession else { return }
         // Require at least date and (amount or debit/credit)
         guard let dateIdx = session.dateIndex else { return }
         let descIdx = session.descriptionIndex
@@ -547,7 +651,7 @@ final class ImportViewModel: ObservableObject {
         // Build rows using the full set of available rows (not only sample)
         // Re-read the last picked file is complex here; for MVP we'll reuse sampleRows as the body and headers as header
         let rows = session.sampleRows
-        let headers = session.headers
+        _ = session.headers
 
         // Convert to StagedTransactions
         var stagedTx: [StagedTransaction] = []
@@ -854,6 +958,7 @@ struct MappingSession {
 
 extension Notification.Name {
     static let transactionsDidChange = Notification.Name("TransactionsDidChange")
+    static let accountsDidChange = Notification.Name("AccountsDidChange")
 }
 
 private extension Array {

@@ -67,7 +67,7 @@ struct FidelityStatementCSVParser: StatementParser {
                     // Expect: symbol, description, quantity, price, beginning value, ending value, cost basis
                     if r.count >= 3 {
                         let symbol = r[safe: 0] ?? ""
-                        let description = r[safe: 1] ?? ""
+                        _ = r[safe: 1] ?? ""
                         let quantityStr = r[safe: 2] ?? ""
                         let endingValueStr = r[safe: 5] ?? "" // column 6 if present
 

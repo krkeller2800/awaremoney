@@ -97,9 +97,9 @@ struct awaremoneyApp: App {
                         return latestBal?.importBatch?.sourceFileName
                     case let (b?, h?) where h > b:
                         return latestHold?.importBatch?.sourceFileName
-                    case (let b?, nil):
+                    case ( _?, nil):
                         return latestBal?.importBatch?.sourceFileName
-                    case (nil, let h?):
+                    case (nil, _?):
                         return latestHold?.importBatch?.sourceFileName
                     default:
                         return nil

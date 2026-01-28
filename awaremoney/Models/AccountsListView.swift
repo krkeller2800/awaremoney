@@ -3,6 +3,7 @@ import SwiftData
 
 struct AccountsListView: View {
     @Query(sort: \Account.name) private var accounts: [Account]
+    @State private var refreshTick: Int = 0
 
     var body: some View {
         NavigationStack {
@@ -11,7 +12,7 @@ struct AccountsListView: View {
                     NavigationLink(destination: AccountDetailView(accountID: account.id)) {
                         HStack {
                             VStack(alignment: .leading) {
-                                Text(account.name)
+                                Text(!account.name.isEmpty ? account.name : ((account.institutionName?.isEmpty == false) ? account.institutionName! : "Unnamed"))
                                 Text(account.type.rawValue.capitalized)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -22,6 +23,13 @@ struct AccountsListView: View {
                 }
             }
             .navigationTitle("Accounts")
+            .id(refreshTick)
+            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+                refreshTick &+= 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+                refreshTick &+= 1
+            }
         }
     }
 }

@@ -48,9 +48,9 @@ struct PDFSummaryParser: StatementParser {
 
         AMLogging.always("PDFSummaryParser — parsed balances: \(balances.count)", component: LOG_COMPONENT)
 
-        // If we didn't find any summary rows, fail so other parsers can try (e.g., BankCSVParser)
+        // If we didn't find any summary rows, surface a helpful message
         if balances.isEmpty {
-            throw ImportError.unknownFormat
+            throw ImportError.parseFailure("We couldn't detect statement balances in this PDF. Try Transactions mode to import activity, or export a CSV for best results.")
         }
 
         return StagedImport(

@@ -37,7 +37,13 @@ struct AccountDetailView: View {
                                     .foregroundStyle(.red)
                             }
                         } else {
-                            LabeledContent("Institution", value: account.institutionName ?? "")
+                            Button {
+                                tempInstitutionName = account.institutionName ?? ""
+                                showInstitutionEditSheet = true
+                            } label: {
+                                LabeledContent("Institution", value: account.institutionName ?? "")
+                            }
+                            .buttonStyle(.plain)
                         }
                         LabeledContent("Type", value: account.type.rawValue.capitalized)
                         if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
@@ -183,7 +189,11 @@ struct AccountDetailView: View {
                                     let trimmed = tempInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
                                     guard !isInvalidInstitutionName(trimmed) else { return }
                                     account.institutionName = trimmed
+                                    // Keep account name in sync with institution when edited here
+                                    if account.name != trimmed { account.name = trimmed }
                                     do { try modelContext.save() } catch {}
+                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                    Task { await load() }
                                     showInstitutionEditSheet = false
                                 }
                                 .disabled(isInvalidInstitutionName(tempInstitutionName))

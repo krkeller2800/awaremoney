@@ -124,7 +124,7 @@ struct PDFBankTransactionsParser: StatementParser {
             return signed
         }
 
-        var signedAmounts = inferSigns(using: items)
+        let signedAmounts = inferSigns(using: items)
         AMLogging.always("Signed amounts: \(signedAmounts)", component: LOG_COMPONENT)
 
         // Build staged transactions; default include=true, propagate sourceAccountLabel
@@ -132,7 +132,7 @@ struct PDFBankTransactionsParser: StatementParser {
             let it = items[i]
             let amount = (i < signedAmounts.count) ? signedAmounts[i] : it.amount
             let hashKey = Hashing.hashKey(date: it.date, amount: amount, payee: it.desc, memo: nil, symbol: nil, quantity: nil)
-            var tx = StagedTransaction(
+            let tx = StagedTransaction(
                 datePosted: it.date,
                 amount: amount,
                 payee: it.desc,
@@ -153,7 +153,7 @@ struct PDFBankTransactionsParser: StatementParser {
 
         AMLogging.always("PDFBankTransactionsParser — produced tx: \(txs.count)", component: LOG_COMPONENT)
         if txs.isEmpty {
-            throw ImportError.unknownFormat
+            throw ImportError.parseFailure("We couldn't detect any transactions in this PDF. You can try Summary Only mode to capture balances, or export a CSV for best results.")
         }
 
         return StagedImport(

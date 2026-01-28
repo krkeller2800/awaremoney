@@ -8,9 +8,8 @@ enum PDFStatementExtractor {
 
     static func parse(url: URL, mode: Mode = .summaryOnly) throws -> (rows: [[String]], headers: [String]) {
         guard let doc = PDFDocument(url: url) else {
-            throw ImportError.unknownFormat
+            throw ImportError.parseFailure("Unable to open PDF. If the file is stored in iCloud, make sure it has finished downloading. If the PDF is password-protected, please remove the password and try again.")
         }
-
         // Extract text across all pages
         var text = ""
         let pageBreakMarker = "<<<PAGE_BREAK>>>"
@@ -53,7 +52,7 @@ enum PDFStatementExtractor {
         }
         func extractMonthYear(from token: String) -> (month: Int?, year: Int?) {
             let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
-            let parts = trimmed.split(separator: " ")
+            _ = trimmed.split(separator: " ")
             // Try month name first
             if let m = monthNumber(from: trimmed) {
                 // Year may be last component if present
@@ -104,6 +103,7 @@ enum PDFStatementExtractor {
             return nil
         }
         let statementPeriod = detectStatementPeriod(in: lines)
+        let headers = ["Date", "Description", "Amount", "Balance", "Account"]
 
         // Date patterns: numeric and month-name with optional year
         let dateStartPattern = #"^(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
@@ -135,6 +135,199 @@ enum PDFStatementExtractor {
             pattern: #"^((?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))(?:\s+(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))?\s+(.*)$"#,
             options: [.caseInsensitive]
         )
+
+        // MARK: - Layout-based OCR scaffold (tokens/rows/columns)
+        struct LayoutRecognizedToken {
+            let text: String
+            let rect: CGRect   // Vision normalized boundingBox (0..1), origin bottom-left
+            let pageIndex: Int
+        }
+
+        struct LayoutColumnBands {
+            var date: ClosedRange<CGFloat>?
+            var description: ClosedRange<CGFloat>
+            var amount: ClosedRange<CGFloat>?
+            var balance: ClosedRange<CGFloat>?
+        }
+
+        func layoutIsDateLikeToken(_ s: String) -> Bool {
+            let r = NSRange(location: 0, length: s.utf16.count)
+            return dateStartRegex.firstMatch(in: s, options: [], range: r) != nil
+        }
+        func layoutIsMoneyLikeToken(_ s: String) -> Bool {
+            let r = NSRange(location: 0, length: s.utf16.count)
+            return amountAnywhereRegex.firstMatch(in: s, options: [], range: r) != nil
+        }
+
+        // Render each page and OCR with bounding boxes (normalized)
+        func layoutOCRTokensWithPositions(from doc: PDFDocument, scale: CGFloat) -> [LayoutRecognizedToken] {
+            var out: [LayoutRecognizedToken] = []
+            for pageIndex in 0..<doc.pageCount {
+                guard let page = doc.page(at: pageIndex) else { continue }
+                let box = page.bounds(for: .mediaBox)
+                let width = Int(box.width * scale)
+                let height = Int(box.height * scale)
+                guard width > 0 && height > 0 else { continue }
+                let colorSpace = CGColorSpaceCreateDeviceRGB()
+                let bytesPerPixel = 4
+                let bytesPerRow = bytesPerPixel * width
+                let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue))
+                guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else { continue }
+                ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                ctx.saveGState()
+                ctx.scaleBy(x: scale, y: scale)
+                page.draw(with: .mediaBox, to: ctx)
+                ctx.restoreGState()
+                guard let cgImage = ctx.makeImage() else { continue }
+
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                request.recognitionLanguages = ["en-US"]
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                do { try handler.perform([request]) } catch { continue }
+                guard let observations = request.results else { continue }
+                for obs in observations {
+                    if let top = obs.topCandidates(1).first {
+                        let s = top.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !s.isEmpty {
+                            out.append(LayoutRecognizedToken(text: s, rect: obs.boundingBox, pageIndex: pageIndex))
+                        }
+                    }
+                }
+            }
+            return out
+        }
+
+        func layoutGroupIntoRowsPerPage(_ tokens: [LayoutRecognizedToken]) -> [[LayoutRecognizedToken]] {
+            var allRows: [[LayoutRecognizedToken]] = []
+            let groupedByPage = Dictionary(grouping: tokens, by: { $0.pageIndex })
+            for (_, pageTokens) in groupedByPage.sorted(by: { $0.key < $1.key }) {
+                let sorted = pageTokens.sorted { $0.rect.midY > $1.rect.midY }
+                var rows: [[LayoutRecognizedToken]] = []
+                let yThreshold: CGFloat = 0.01 // normalized units
+                for t in sorted {
+                    if var last = rows.last, let y = last.first?.rect.midY, abs(t.rect.midY - y) < yThreshold {
+                        last.append(t)
+                        rows[rows.count - 1] = last
+                    } else {
+                        rows.append([t])
+                    }
+                }
+                rows = rows.map { $0.sorted { $0.rect.minX < $1.rect.minX } }
+                allRows.append(contentsOf: rows)
+            }
+            return allRows
+        }
+        
+        func ocrExtractLines(from doc: PDFDocument, scale: CGFloat) -> [String] {
+            // Use the same OCR tokenization and row grouping to reconstruct lines, inserting page breaks
+            let tokens = layoutOCRTokensWithPositions(from: doc, scale: scale)
+            if tokens.isEmpty { return [] }
+            let rows = layoutGroupIntoRowsPerPage(tokens)
+            var out: [String] = []
+            var lastPageIndex: Int = -1
+            for row in rows {
+                guard let first = row.first else { continue }
+                if lastPageIndex != -1 && first.pageIndex != lastPageIndex {
+                    out.append(pageBreakMarker)
+                }
+                lastPageIndex = first.pageIndex
+                let line = row.map { $0.text }.joined(separator: " ")
+                let cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleaned.isEmpty { out.append(cleaned) }
+            }
+            return out
+        }
+
+        func layoutInferColumnBands(from rows: [[LayoutRecognizedToken]]) -> LayoutColumnBands {
+            var dateXs: [CGFloat] = []
+            var moneyXs: [CGFloat] = []
+            for row in rows {
+                for t in row {
+                    let x = t.rect.midX
+                    if layoutIsDateLikeToken(t.text) { dateXs.append(x) }
+                    if layoutIsMoneyLikeToken(t.text) { moneyXs.append(x) }
+                }
+            }
+            func clamp(_ v: CGFloat) -> CGFloat { max(0, min(1, v)) }
+            func band(around x: CGFloat, radius: CGFloat) -> ClosedRange<CGFloat> { let a = clamp(x - radius); let b = clamp(x + radius); return a...b }
+
+            let dateBand: ClosedRange<CGFloat>? = {
+                guard !dateXs.isEmpty else { return nil }
+                let sorted = dateXs.sorted()
+                let median = sorted[sorted.count/2]
+                return band(around: median, radius: 0.06)
+            }()
+
+            var amountBand: ClosedRange<CGFloat>? = nil
+            var balanceBand: ClosedRange<CGFloat>? = nil
+            if !moneyXs.isEmpty {
+                let minX = moneyXs.min() ?? 0
+                let maxX = moneyXs.max() ?? 1
+                if (maxX - minX) > 0.12 {
+                    amountBand = band(around: minX, radius: 0.05)
+                    balanceBand = band(around: maxX, radius: 0.05)
+                } else {
+                    amountBand = band(around: maxX, radius: 0.06)
+                    balanceBand = nil
+                }
+            }
+
+            let leftNumeric = min(amountBand?.lowerBound ?? 1, balanceBand?.lowerBound ?? 1)
+            let leftEdge = dateBand?.upperBound ?? 0
+            let rightEdge = leftNumeric
+            let descBand = clamp(leftEdge)...clamp(max(leftEdge + 0.05, min(rightEdge, 0.98)))
+
+            return LayoutColumnBands(date: dateBand, description: descBand, amount: amountBand, balance: balanceBand)
+        }
+
+        func layoutBuildRowsFromTokens(_ rows: [[LayoutRecognizedToken]], bands: LayoutColumnBands, inferredYear: Int?) -> [[String]] {
+            var out: [[String]] = []
+            for row in rows {
+                let dateText: String? = {
+                    guard let dBand = bands.date else { return nil }
+                    return row.first(where: { dBand.contains($0.rect.midX) && layoutIsDateLikeToken($0.text) })?.text
+                }()
+                guard let dateRaw = dateText else { continue }
+                let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
+
+                let amountText: String? = {
+                    guard let aBand = bands.amount else { return nil }
+                    let cands = row.filter { aBand.contains($0.rect.midX) && layoutIsMoneyLikeToken($0.text) }
+                    return cands.max(by: { $0.rect.maxX < $1.rect.maxX })?.text
+                }()
+                guard let amountRaw = amountText else { continue }
+                let amount = Self.sanitizeAmount(amountRaw)
+
+                let balanceText: String? = {
+                    guard let bBand = bands.balance else { return nil }
+                    let cands = row.filter { bBand.contains($0.rect.midX) && layoutIsMoneyLikeToken($0.text) }
+                    return cands.max(by: { $0.rect.maxX < $1.rect.maxX })?.text
+                }()
+                let balance = balanceText.map { Self.sanitizeAmount($0) } ?? ""
+
+                let descParts = row.filter { bands.description.contains($0.rect.midX) && !layoutIsMoneyLikeToken($0.text) }.map { $0.text }
+                let desc = cleanDesc(descParts.joined(separator: " "))
+
+                out.append([date, desc, amount, balance, "unknown"]) // account unknown in layout mode
+            }
+            return out
+        }
+
+        func layoutTryExtraction(doc: PDFDocument, inferredYear: Int?) -> (rows: [[String]], confidence: Double) {
+            let tokens = layoutOCRTokensWithPositions(from: doc, scale: 2.0)
+            if tokens.isEmpty { return ([], 0.0) }
+            let rowTokens = layoutGroupIntoRowsPerPage(tokens)
+            if rowTokens.isEmpty { return ([], 0.0) }
+            let bands = layoutInferColumnBands(from: rowTokens)
+            let built = layoutBuildRowsFromTokens(rowTokens, bands: bands, inferredYear: inferredYear)
+            let total = rowTokens.count
+            let matched = built.count
+            let conf = total == 0 ? 0.0 : min(1.0, Double(matched) / Double(max(1, total)))
+            return (built, conf)
+        }
 
         func detectInferredYear(from lines: [String]) -> Int? {
             let yearRegex = try! NSRegularExpression(pattern: #"\b(20\d{2}|19\d{2})\b"#)
@@ -273,6 +466,7 @@ enum PDFStatementExtractor {
 
         enum AccountKind { case unknown, checking, savings }
         enum FlowKind { case none, deposit, withdrawal }
+
         var currentAccount: AccountKind = .unknown
         var currentFlow: FlowKind = .none
 
@@ -296,6 +490,7 @@ enum PDFStatementExtractor {
                 }
             }
         }
+
         // Track current page during parsing
         var currentPageIndex = 0
         func accountLabelForRow() -> String {
@@ -336,7 +531,7 @@ enum PDFStatementExtractor {
                 if lower.contains("from a checking") || lower.contains("from checking") || lower.contains("transfer") || lower.contains("automatic") {
                     return false
                 }
-                if lower.contains("checking summary") || lower.hasPrefix("chase checking") { return true }
+                if lower.contains("checking summary") { return true }
                 let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
                 let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
                 return lower.contains("checking") && !lower.contains("savings") && !hasDigits && (!hasLowercase || raw.count <= 24)
@@ -350,7 +545,6 @@ enum PDFStatementExtractor {
             if lower.contains("from a checking") || lower.contains("from checking") || lower.contains("transfer") || lower.contains("automatic") { return false }
             // Strong savings signals
             if lower.contains("savings summary") { return true }
-            if lower.hasPrefix("chase savings") { return true }
             if lower.contains("savings account") { return true }
             // Generic header-like: contains 'savings', no digits, and mostly uppercase or short
             let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
@@ -367,7 +561,6 @@ enum PDFStatementExtractor {
             if lower.contains("from a checking") || lower.contains("from checking") || lower.contains("transfer") || lower.contains("automatic") { return false }
             // Strong checking signals
             if lower.contains("checking summary") { return true }
-            if lower.hasPrefix("chase checking") { return true }
             if lower.contains("checking account") {
                 if lower.contains("from a checking account") || lower.contains("from checking account") { return false }
                 return true
@@ -440,7 +633,7 @@ enum PDFStatementExtractor {
 
             var j = start + 1
             var amountStr: String? = nil
-            var balanceStr: String? = nil
+            let balanceStr: String? = nil
 
             while j < srcLines.count {
                 let ln = srcLines[j]
@@ -495,140 +688,79 @@ enum PDFStatementExtractor {
         }
 
         var rows: [[String]] = []
+        var usedLayout: Bool = false
+        do {
+            let layout = layoutTryExtraction(doc: doc, inferredYear: inferredYear)
+            AMLogging.always("PDF layout-based attempt — rows: \(layout.rows.count), conf: \(String(format: "%.2f", layout.confidence))", component: "PDFStatementExtractor")
+            if layout.rows.count >= 5 && layout.confidence >= 0.6 {
+                rows = layout.rows
+                usedLayout = true
+                AMLogging.always("PDF layout-based extraction accepted (using layout rows)", component: "PDFStatementExtractor")
+            }
+        }
 
-        var i = 0
-        while i < lines.count {
-            let line = lines[i]
+        if !usedLayout {
+            var i = 0
+            while i < lines.count {
+                let line = lines[i]
 
-            if !isDateStart(line) {
-                // Page break reset
-                if isPageBreak(line) {
-                    AMLogging.always("PDF page break — resetting section/account state", component: "PDFStatementExtractor")
-                    currentAccount = .unknown
-                    currentFlow = .none
-                    recentContext.removeAll()
-                    currentPageIndex += 1
+                if !isDateStart(line) {
+                    // Page break reset
+                    if isPageBreak(line) {
+                        AMLogging.always("PDF page break — resetting section/account state", component: "PDFStatementExtractor")
+                        currentAccount = .unknown
+                        currentFlow = .none
+                        recentContext.removeAll()
+                        currentPageIndex += 1
+                        i += 1
+                        continue
+                    }
+
+                    pushContext(line)
+                    // Update section/account state on non-date lines
+                    if isSavingsHeader(line) { currentAccount = .savings; AMLogging.always("PDF section: SAVINGS detected at line \(i)", component: "PDFStatementExtractor") }
+                    else if isCheckingHeader(line) { currentAccount = .checking; AMLogging.always("PDF section: CHECKING detected at line \(i)", component: "PDFStatementExtractor") }
+                    // Account meta lines like "Primary Account: ..." can also indicate checking/savings
+                    if isAccountMetaLine(line) {
+                        let lower = line.lowercased()
+                        if lower.contains("savings") { currentAccount = .savings; AMLogging.always("PDF account meta => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
+                        else if lower.contains("checking") { currentAccount = .checking; AMLogging.always("PDF account meta => CHECKING at line \(i)", component: "PDFStatementExtractor") }
+                    }
+                    if isDepositsHeader(line) { currentFlow = .deposit; AMLogging.always("PDF flow: DEPOSITS detected at line \(i)", component: "PDFStatementExtractor") }
+                    else if isWithdrawalsHeader(line) { currentFlow = .withdrawal; AMLogging.always("PDF flow: WITHDRAWALS detected at line \(i)", component: "PDFStatementExtractor") }
                     i += 1
                     continue
                 }
 
-                pushContext(line)
-                // Update section/account state on non-date lines
-                if isSavingsHeader(line) { currentAccount = .savings; AMLogging.always("PDF section: SAVINGS detected at line \(i)", component: "PDFStatementExtractor") }
-                else if isCheckingHeader(line) { currentAccount = .checking; AMLogging.always("PDF section: CHECKING detected at line \(i)", component: "PDFStatementExtractor") }
-                // Account meta lines like "Primary Account: ..." can also indicate checking/savings
-                if isAccountMetaLine(line) {
-                    let lower = line.lowercased()
-                    if lower.contains("savings") { currentAccount = .savings; AMLogging.always("PDF account meta => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
-                    else if lower.contains("checking") { currentAccount = .checking; AMLogging.always("PDF account meta => CHECKING at line \(i)", component: "PDFStatementExtractor") }
-                }
-                if isDepositsHeader(line) { currentFlow = .deposit; AMLogging.always("PDF flow: DEPOSITS detected at line \(i)", component: "PDFStatementExtractor") }
-                else if isWithdrawalsHeader(line) { currentFlow = .withdrawal; AMLogging.always("PDF flow: WITHDRAWALS detected at line \(i)", component: "PDFStatementExtractor") }
-                i += 1
-                continue
-            }
-
-            // Skip page/section headers that start with a date but represent a period header (e.g., "Dec 17, 2025 through Jan 20, 2026")
-            if isDateRangeLine(line) || isStatementPeriodLine(line) || isAccountMetaLine(line) {
-                i += 1
-                continue
-            }
-
-            // If account not yet determined, infer from recent context buffer
-            if currentAccount == .unknown {
-                if contextIndicatesSavings() { currentAccount = .savings; AMLogging.always("PDF context => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
-                else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.always("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
-            }
-
-            // Try multi-line reconstruction before strict single-line match
-            if let multi = attemptMultiLineRow(in: lines, start: i) {
-                var row = multi.row
-                if row.count >= 3 { row[2] = applySectionSign(amount: row[2]) }
-                row.append(accountLabelForRow())
-                rows.append(row)
-                AMLogging.always("PDF multi-line row matched (\(accountLabelForRow())) at line \(i) consuming \(multi.consumed) lines", component: "PDFStatementExtractor")
-                i += multi.consumed
-                continue
-            }
-
-            // Try full single-line match first
-            if let match = firstMatch(rowRegex, in: line) {
-                func group(_ idx: Int) -> String {
-                    let r = match.range(at: idx)
-                    if let range = Range(r, in: line) {
-                        return String(line[range]).trimmingCharacters(in: .whitespaces)
-                    }
-                    return ""
-                }
-                let dateRaw = group(1)
-                let descRaw = group(3)
-                let amtRaw = group(4)
-                let balRaw = group(5)
-
-                // Prefer second date (post date) if present
-                let dateTokenChoice = { () -> String in
-                    if let r = Range(match.range(at: 2), in: line), !String(line[r]).trimmingCharacters(in: .whitespaces).isEmpty {
-                        return String(line[r])
-                    }
-                    return dateRaw
-                }()
-                let date = normalizeDateString(dateTokenChoice, inferredYear: inferredYear)
-                let desc = cleanDesc(descRaw)
-                // If the description itself indicates Savings in a date-start line, treat it as savings
-                if isSavingsHeader(desc) { currentAccount = .savings }
-                let amount = applySectionSign(amount: sanitizeAmount(amtRaw))
-                let balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
-                rows.append([date, desc, amount, balance, accountLabelForRow()])
-                AMLogging.always("PDF single-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
-                i += 1
-                continue
-            }
-
-            // Fallback: two-line row where next line is amount-only (no balance)
-            if i + 1 < lines.count {
-                let next = lines[i + 1]
-                if firstMatch(amountOnlyRegex, in: next) != nil,
-                   let ddMatch = firstMatch(dateAndDescRegex, in: line) {
-                    func groupFrom(_ match: NSTextCheckingResult, in string: String, idx: Int) -> String {
-                        let r = match.range(at: idx)
-                        if let range = Range(r, in: string) {
-                            return String(string[range]).trimmingCharacters(in: .whitespaces)
-                        }
-                        return ""
-                    }
-                    let dateRaw = groupFrom(ddMatch, in: line, idx: 1)
-                    let descRaw = groupFrom(ddMatch, in: line, idx: 2)
-                    let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
-                    let desc = cleanDesc(descRaw)
-                    if isSavingsHeader(desc) { currentAccount = .savings }
-                    let amount = applySectionSign(amount: sanitizeAmount(next))
-                    rows.append([date, desc, amount, "", accountLabelForRow()]) // no balance captured in this shape
-                    AMLogging.always("PDF two-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
-                    i += 2
+                // Skip page/section headers that start with a date but represent a period header (e.g., "Dec 17, 2025 through Jan 20, 2026")
+                if isDateRangeLine(line) || isStatementPeriodLine(line) || isAccountMetaLine(line) {
+                    i += 1
                     continue
                 }
-            }
 
-            // Nothing captured from this block; advance
-            i += 1
-        }
+                // If account not yet determined, infer from recent context buffer
+                if currentAccount == .unknown {
+                    if contextIndicatesSavings() { currentAccount = .savings; AMLogging.always("PDF context => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
+                    else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.always("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
+                }
 
-        // Permissive fallback: if the primary pass found no rows, retry with relaxed rules
-        if rows.isEmpty {
-            AMLogging.always("PDF primary pass found 0 rows — running permissive fallback", component: "PDFStatementExtractor")
-            var simple: [[String]] = []
-            var createdAny = false
-            var k = 0
-            while k < lines.count {
-                let ln = lines[k]
-                if !isDateStart(ln) { k += 1; continue }
+                // Try multi-line reconstruction before strict single-line match
+                if let multi = attemptMultiLineRow(in: lines, start: i) {
+                    var row = multi.row
+                    if row.count >= 3 { row[2] = applySectionSign(amount: row[2]) }
+                    row.append(accountLabelForRow())
+                    rows.append(row)
+                    AMLogging.always("PDF multi-line row matched (\(accountLabelForRow())) at line \(i) consuming \(multi.consumed) lines", component: "PDFStatementExtractor")
+                    i += multi.consumed
+                    continue
+                }
 
-                // Try strict single-line row first
-                if let match = firstMatch(rowRegex, in: ln) {
+                // Try full single-line match first
+                if let match = firstMatch(rowRegex, in: line) {
                     func group(_ idx: Int) -> String {
                         let r = match.range(at: idx)
-                        if let range = Range(r, in: ln) {
-                            return String(ln[range]).trimmingCharacters(in: .whitespaces)
+                        if let range = Range(r, in: line) {
+                            return String(line[range]).trimmingCharacters(in: .whitespaces)
                         }
                         return ""
                     }
@@ -636,79 +768,61 @@ enum PDFStatementExtractor {
                     let descRaw = group(3)
                     let amtRaw = group(4)
                     let balRaw = group(5)
-                    let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
+
+                    // Prefer second date (post date) if present
+                    let dateTokenChoice = { () -> String in
+                        if let r = Range(match.range(at: 2), in: line), !String(line[r]).trimmingCharacters(in: .whitespaces).isEmpty {
+                            return String(line[r])
+                        }
+                        return dateRaw
+                    }()
+                    let date = normalizeDateString(dateTokenChoice, inferredYear: inferredYear)
                     let desc = cleanDesc(descRaw)
+                    // If the description itself indicates Savings in a date-start line, treat it as savings
                     if isSavingsHeader(desc) { currentAccount = .savings }
                     let amount = applySectionSign(amount: sanitizeAmount(amtRaw))
                     let balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
-                    createdAny = true
-                    simple.append([date, desc, amount, balance, accountLabelForRow()])
-                    AMLogging.always("PDF permissive row matched (\(accountLabelForRow())) at line \(k)", component: "PDFStatementExtractor")
-                    k += 1
+                    rows.append([date, desc, amount, balance, accountLabelForRow()])
+                    AMLogging.always("PDF single-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
+                    i += 1
                     continue
                 }
 
-                // Try date + desc + amount on same line (amount anywhere)
-                if let dd = firstMatch(dateAndDescRegex, in: ln) {
-                    let dr = dd.range(at: 1)
-                    let rr = dd.range(at: 2)
-                    let dateRaw = (Range(dr, in: ln).map { String(ln[$0]) } ?? "")
-                    let rest = (Range(rr, in: ln).map { String(ln[$0]) } ?? "")
-                    let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
-                    // amount anywhere on same line
-                    if let am = amountAnywhereRegex.firstMatch(in: ln, options: [], range: NSRange(location: 0, length: ln.utf16.count)), let ar = Range(am.range, in: ln) {
-                        let amount = applySectionSign(amount: sanitizeAmount(String(ln[ar])))
-                        let desc = cleanDesc(rest.replacingOccurrences(of: String(ln[ar]), with: ""))
-                        if isSavingsHeader(desc) { currentAccount = .savings }
-                        createdAny = true
-                        simple.append([date, desc, amount, "", accountLabelForRow()]) // no balance in permissive mode
-                        AMLogging.always("PDF permissive row matched (\(accountLabelForRow())) at line \(k)", component: "PDFStatementExtractor")
-                        k += 1
-                        continue
-                    }
-                    // amount-only next line
-                    if k + 1 < lines.count {
-                        let nxt = lines[k + 1]
-                        if amountOnlyRegex.firstMatch(in: nxt, options: [], range: NSRange(location: 0, length: nxt.utf16.count)) != nil {
-                            let amount = applySectionSign(amount: sanitizeAmount(nxt))
-                            let desc = cleanDesc(rest)
-                            if isSavingsHeader(desc) { currentAccount = .savings }
-                            createdAny = true
-                            simple.append([date, desc, amount, "", accountLabelForRow()]) // no balance in permissive mode
-                            AMLogging.always("PDF permissive row matched (\(accountLabelForRow())) at line \(k)", component: "PDFStatementExtractor")
-                            k += 2
-                            continue
+                // Fallback: two-line row where next line is amount-only (no balance)
+                if i + 1 < lines.count {
+                    let next = lines[i + 1]
+                    if firstMatch(amountOnlyRegex, in: next) != nil,
+                       let ddMatch = firstMatch(dateAndDescRegex, in: line) {
+                        func groupFrom(_ match: NSTextCheckingResult, in string: String, idx: Int) -> String {
+                            let r = match.range(at: idx)
+                            if let range = Range(r, in: string) {
+                                return String(string[range]).trimmingCharacters(in: .whitespaces)
+                            }
+                            return ""
                         }
+                        let dateRaw = groupFrom(ddMatch, in: line, idx: 1)
+                        let descRaw = groupFrom(ddMatch, in: line, idx: 2)
+                        let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
+                        let desc = cleanDesc(descRaw)
+                        if isSavingsHeader(desc) { currentAccount = .savings }
+                        let amount = applySectionSign(amount: sanitizeAmount(next))
+                        rows.append([date, desc, amount, "", accountLabelForRow()]) // no balance captured in this shape
+                        AMLogging.always("PDF two-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
+                        i += 2
+                        continue
                     }
                 }
 
-                k += 1
-            }
-            if !createdAny {
-                // leave rows empty
-            } else {
-                rows = simple
+                // Nothing captured from this block; advance
+                i += 1
             }
         }
 
-        // OCR fallback: if still too few rows, render pages and use Vision text recognition
-        if rows.count < 5 {
-            AMLogging.always("PDF rows still low (\(rows.count)) — attempting OCR fallback", component: "PDFStatementExtractor")
-            let ocrLines = ocrExtractLines(from: doc, scale: 2.0)
-            AMLogging.always("OCR extracted lines: \(ocrLines.count)", component: "PDFStatementExtractor")
-            let sample = ocrLines.prefix(10).joined(separator: " | ")
-            AMLogging.always("OCR sample: \(sample)", component: "PDFStatementExtractor")
-            let ocrRows = parseOCRLines(ocrLines, inferredYear: inferredYear)
-            AMLogging.always("OCR matched rows: \(ocrRows.count)", component: "PDFStatementExtractor")
-            if !ocrRows.isEmpty {
-                rows = ocrRows
-            }
-        }
+        
 
-        // Detect statement summary balances (Beginning/Ending Balance) and synthesize balance rows
-        var didAppendSummary = false
+        // Attempt summary synthesis (decoupled from transactions) and OCR-based summary fallback
         do {
-            // Helper to parse normalized dates (we normalized to MM/dd/yyyy earlier)
+            // Helper to parse normalized date "MM/dd/yyyy"
             func parseNormalizedDate(_ s: String) -> Date? {
                 let df = DateFormatter()
                 df.locale = Locale(identifier: "en_US_POSIX")
@@ -717,20 +831,14 @@ enum PDFStatementExtractor {
                 return df.date(from: s)
             }
 
-            // Compute earliest/latest dates from already extracted rows
-            let dates: [Date] = rows.compactMap { $0.first }.compactMap { parseNormalizedDate($0) }
-            let earliestDate = dates.min()
-            let latestDate = dates.max()
-
-            // Only proceed if we have at least one dated row
-            if let earliestDate, let latestDate {
-                // Find lines containing summary labels
+            // Find beginning/ending balance amounts in a set of lines
+            func findBeginningAndEndingBalances(in src: [String]) -> (begin: String?, end: String?) {
                 let beginLabel = "beginning balance"
                 let endLabel = "ending balance"
                 var beginningAmount: String? = nil
                 var endingAmount: String? = nil
 
-                func amountNear(lineIndex: Int, label: String) -> String? {
+                func amountNear(lineIndex: Int, label: String, in lines: [String]) -> String? {
                     guard lineIndex >= 0 && lineIndex < lines.count else { return nil }
                     let current = lines[lineIndex]
                     let lower = current.lowercased()
@@ -748,13 +856,12 @@ enum PDFStatementExtractor {
                     if let last = sameMatches.last, let r = Range(last.range, in: current) {
                         return sanitizeAmount(String(current[r]))
                     }
-                    // Else check the immediate next line for an amount-only token
+                    // Else check the immediate next line for an amount-only token or any money token
                     if lineIndex + 1 < lines.count {
                         let next = lines[lineIndex + 1]
                         if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count)) != nil {
                             return sanitizeAmount(next)
                         }
-                        // Or any money token in the next line
                         let nextMatches = amountAnywhereRegex.matches(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count))
                         if let last = nextMatches.last, let r = Range(last.range, in: next) {
                             return sanitizeAmount(String(next[r]))
@@ -763,57 +870,118 @@ enum PDFStatementExtractor {
                     return nil
                 }
 
-                for (idx, l) in lines.enumerated() {
+                for (idx, l) in src.enumerated() {
                     let lower = l.lowercased()
                     if lower.contains(beginLabel), beginningAmount == nil {
-                        beginningAmount = amountNear(lineIndex: idx, label: beginLabel)
+                        beginningAmount = amountNear(lineIndex: idx, label: beginLabel, in: src)
                     }
                     if lower.contains(endLabel), endingAmount == nil {
-                        endingAmount = amountNear(lineIndex: idx, label: endLabel)
+                        endingAmount = amountNear(lineIndex: idx, label: endLabel, in: src)
                     }
                     if beginningAmount != nil && endingAmount != nil { break }
                 }
+                return (beginningAmount, endingAmount)
+            }
 
-                // Append synthetic rows if we detected summary balances
-                if (beginningAmount != nil || endingAmount != nil) {
-                    let df = DateFormatter()
-                    df.locale = Locale(identifier: "en_US_POSIX")
-                    df.timeZone = TimeZone(secondsFromGMT: 0)
-                    df.dateFormat = "MM/dd/yyyy"
-                    let cal = Calendar(identifier: .gregorian)
-                    let earliestMinusOne = cal.date(byAdding: .day, value: -1, to: earliestDate) ?? earliestDate
-                    let earliestStr = df.string(from: earliestMinusOne)
-                    let latestStr = df.string(from: latestDate)
+            // Compute summary dates from a detected statement period (begin = day before start month, end = last day of end month)
+            func summaryDates(from period: StatementPeriod) -> (begin: Date, end: Date)? {
+                var cal = Calendar(identifier: .gregorian)
+                cal.timeZone = TimeZone(secondsFromGMT: 0)!
+                var startComps = DateComponents()
+                startComps.year = period.startYear
+                startComps.month = period.startMonth
+                startComps.day = 1
+                guard let firstOfStart = cal.date(from: startComps) else { return nil }
+                guard let beginDate = cal.date(byAdding: .day, value: -1, to: firstOfStart) else { return nil }
 
-                    if let b = beginningAmount {
-                        rows.append([earliestStr, "Statement Beginning Balance", "0", b, "unknown"])
-                        didAppendSummary = true
-                        AMLogging.always("PDF summary: beginning balance detected = \(b) @ \(earliestStr)", component: "PDFStatementExtractor")
-                    }
-                    if let e = endingAmount {
-                        rows.append([latestStr, "Statement Ending Balance", "0", e, "unknown"])
-                        didAppendSummary = true
-                        AMLogging.always("PDF summary: ending balance detected = \(e) @ \(latestStr)", component: "PDFStatementExtractor")
+                var endComps = DateComponents()
+                endComps.year = period.endYear
+                endComps.month = period.endMonth
+                endComps.day = 1
+                guard let firstOfEnd = cal.date(from: endComps) else { return nil }
+                guard let endDate = cal.date(byAdding: .month, value: 1, to: firstOfEnd).flatMap({ cal.date(byAdding: .day, value: -1, to: $0) }) else { return nil }
+
+                return (beginDate, endDate)
+            }
+
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            df.dateFormat = "MM/dd/yyyy"
+
+            // Compute earliest/latest dates from any already-extracted rows
+            var earliestDate: Date? = nil
+            var latestDate: Date? = nil
+            do {
+                let dates: [Date] = rows.compactMap { $0.first }.compactMap { parseNormalizedDate($0) }
+                earliestDate = dates.min()
+                latestDate = dates.max()
+            }
+
+            // Try to find summary amounts in extracted lines first
+            var beginningAmount: String?
+            var endingAmount: String?
+            (beginningAmount, endingAmount) = findBeginningAndEndingBalances(in: lines)
+
+            // Prefer statement period detected from text extraction; fall back to OCR if needed
+            var periodForSummary = statementPeriod
+
+            // If not found, try OCR lines for summary amounts and period
+            if beginningAmount == nil && endingAmount == nil {
+                let ocrLines = ocrExtractLines(from: doc, scale: 2.0)
+                let (b2, e2) = findBeginningAndEndingBalances(in: ocrLines)
+                if b2 != nil || e2 != nil {
+                    beginningAmount = b2
+                    endingAmount = e2
+                    if periodForSummary == nil {
+                        periodForSummary = detectStatementPeriod(in: ocrLines)
                     }
                 }
             }
-        }
-        // If we synthesized statement summary balances, discard any other parsed rows to avoid bogus transactions from headers/body text
-        if didAppendSummary && mode == .summaryOnly {
-            rows = rows.filter { r in
-                guard r.count >= 2 else { return false }
-                let d = r[1].lowercased()
-                return d.contains("statement beginning balance") || d.contains("statement ending balance")
-            }
-        }
 
-        // In transactions mode, preserve per-row balances for sign inference; only clear in summary-only mode
-        if mode == .summaryOnly {
-            for idx in 0..<rows.count {
-                if rows[idx].count >= 4 && !rows[idx][3].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    let descLower = rows[idx][1].lowercased()
-                    if !descLower.contains("statement beginning balance") && !descLower.contains("statement ending balance") {
-                        rows[idx][3] = ""
+            var didAppendSummary = false
+            if beginningAmount != nil || endingAmount != nil {
+                var beginDateStr: String? = nil
+                var endDateStr: String? = nil
+
+                if let e = earliestDate, let l = latestDate {
+                    let begin = Calendar(identifier: .gregorian).date(byAdding: .day, value: -1, to: e) ?? e
+                    beginDateStr = df.string(from: begin)
+                    endDateStr = df.string(from: l)
+                } else if let sp = periodForSummary, let (beginDate, endDate) = summaryDates(from: sp) {
+                    beginDateStr = df.string(from: beginDate)
+                    endDateStr = df.string(from: endDate)
+                }
+
+                if let bAmt = beginningAmount, let bDate = beginDateStr {
+                    rows.append([bDate, "Statement Beginning Balance", "0", bAmt, "unknown"])
+                    didAppendSummary = true
+                    AMLogging.always("PDF summary (decoupled): beginning balance detected = \(bAmt) @ \(bDate)", component: "PDFStatementExtractor")
+                }
+                if let eAmt = endingAmount, let eDate = endDateStr {
+                    rows.append([eDate, "Statement Ending Balance", "0", eAmt, "unknown"])
+                    didAppendSummary = true
+                    AMLogging.always("PDF summary (decoupled): ending balance detected = \(eAmt) @ \(eDate)", component: "PDFStatementExtractor")
+                }
+
+                // If we synthesized statement summary balances and we're in summary-only mode, discard other rows
+                if didAppendSummary && mode == .summaryOnly {
+                    rows = rows.filter { r in
+                        guard r.count >= 2 else { return false }
+                        let d = r[1].lowercased()
+                        return d.contains("statement beginning balance") || d.contains("statement ending balance")
+                    }
+                }
+            }
+
+            // In summary-only mode, clear balances for non-summary rows
+            if mode == .summaryOnly {
+                for idx in 0..<rows.count {
+                    if rows[idx].count >= 4 && !rows[idx][3].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let descLower = rows[idx][1].lowercased()
+                        if !descLower.contains("statement beginning balance") && !descLower.contains("statement ending balance") {
+                            rows[idx][3] = ""
+                        }
                     }
                 }
             }
@@ -822,203 +990,21 @@ enum PDFStatementExtractor {
         AMLogging.always("PDF matched rows: \(rows.count)", component: "PDFStatementExtractor")
 
         guard !rows.isEmpty else {
-            throw ImportError.unknownFormat
+            let message = userFacingFailureMessage(for: url, mode: mode)
+            AMLogging.always("PDF parse failed — returning user-facing message: \(message)", component: "PDFStatementExtractor")
+            throw ImportError.parseFailure(message)
         }
-
-        // Always include balance column; rows that lack it will contain an empty string
-        let headers = ["date", "description", "amount", "balance", "account"]
-
-        func renderPageToCGImage(page: PDFPage, scale: CGFloat) -> CGImage? {
-            let box = page.bounds(for: .mediaBox)
-            let width = Int(box.width * scale)
-            let height = Int(box.height * scale)
-            guard width > 0 && height > 0 else { return nil }
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let bytesPerPixel = 4
-            let bytesPerRow = bytesPerPixel * width
-            let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue))
-            guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else { return nil }
-            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-            ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-            ctx.saveGState()
-            ctx.scaleBy(x: scale, y: scale)
-            page.draw(with: .mediaBox, to: ctx)
-            ctx.restoreGState()
-            return ctx.makeImage()
-        }
-
-        func ocrExtractLines(from doc: PDFDocument, scale: CGFloat) -> [String] {
-            var results: [String] = []
-            for pageIndex in 0..<doc.pageCount {
-                guard let page = doc.page(at: pageIndex), let cgImage = renderPageToCGImage(page: page, scale: scale) else { continue }
-                let request = VNRecognizeTextRequest()
-                request.recognitionLevel = .accurate
-                request.usesLanguageCorrection = true
-                request.recognitionLanguages = ["en-US"]
-                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                do {
-                    try handler.perform([request])
-                } catch {
-                    AMLogging.always("OCR error on page \(pageIndex): \(error)", component: "PDFStatementExtractor")
-                    continue
-                }
-                guard let observations = request.results as? [VNRecognizedTextObservation] else { continue }
-                for obs in observations {
-                    if let top = obs.topCandidates(1).first {
-                        let s = top.string.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !s.isEmpty { results.append(s) }
-                    }
-                }
-                // Insert page break marker between pages
-                if pageIndex < doc.pageCount - 1 { results.append("<<<PAGE_BREAK>>>") }
-            }
-            return results
-        }
-
-        func parseOCRLines(_ lines: [String], inferredYear: Int?) -> [[String]] {
-            var out: [[String]] = []
-            var idx = 0
-
-            // Pre-scan pages for default account labels in OCR lines
-            var pageDefaultsOCR: [Int: AccountKind] = [:]
-            do {
-                var p = 0
-                for l in lines {
-                    if isPageBreak(l) { p += 1; continue }
-                    if pageDefaultsOCR[p] == nil {
-                        if isSavingsHeader(l) { pageDefaultsOCR[p] = .savings }
-                        else if isCheckingHeader(l) { pageDefaultsOCR[p] = .checking }
-                    }
-                }
-            }
-            var currentPageOCR = 0
-            func accountLabelForRowOCR() -> String {
-                switch currentAccount {
-                case .checking: return "checking"
-                case .savings: return "savings"
-                case .unknown:
-                    if let def = pageDefaultsOCR[currentPageOCR] {
-                        switch def {
-                        case .checking: return "checking"
-                        case .savings: return "savings"
-                        default: break
-                        }
-                    }
-                    return "unknown"
-                }
-            }
-
-            while idx < lines.count {
-                let ln = lines[idx]
-
-                if isPageBreak(ln) {
-                    AMLogging.always("PDF (OCR) page break — resetting section/account state", component: "PDFStatementExtractor")
-                    currentAccount = .unknown
-                    currentFlow = .none
-                    recentContext.removeAll()
-                    currentPageOCR += 1
-                    idx += 1
-                    continue
-                }
-
-                if !isDateStart(ln) {
-                    pushContext(ln)
-                    // Update section/account state for OCR lines on non-date rows
-                    if isSavingsHeader(ln) { currentAccount = .savings; AMLogging.always("PDF (OCR) section: SAVINGS detected at line \(idx)", component: "PDFStatementExtractor") }
-                    else if isCheckingHeader(ln) { currentAccount = .checking; AMLogging.always("PDF (OCR) section: CHECKING detected at line \(idx)", component: "PDFStatementExtractor") }
-                    if isAccountMetaLine(ln) {
-                        let lower = ln.lowercased()
-                        if lower.contains("savings") { currentAccount = .savings; AMLogging.always("PDF (OCR) account meta => SAVINGS at line \(idx)", component: "PDFStatementExtractor") }
-                        else if lower.contains("checking") { currentAccount = .checking; AMLogging.always("PDF (OCR) account meta => CHECKING at line \(idx)", component: "PDFStatementExtractor") }
-                    }
-                    if isDepositsHeader(ln) { currentFlow = .deposit; AMLogging.always("PDF (OCR) flow: DEPOSITS detected at line \(idx)", component: "PDFStatementExtractor") }
-                    else if isWithdrawalsHeader(ln) { currentFlow = .withdrawal; AMLogging.always("PDF (OCR) flow: WITHDRAWALS detected at line \(idx)", component: "PDFStatementExtractor") }
-                    idx += 1
-                    continue
-                }
-
-                // Skip page/section headers that start with a date but represent a period header
-                if isDateRangeLine(ln) || isStatementPeriodLine(ln) || isAccountMetaLine(ln) {
-                    idx += 1
-                    continue
-                }
-
-                // Infer account from recent context if unknown
-                if currentAccount == .unknown {
-                    if contextIndicatesSavings() { currentAccount = .savings; AMLogging.always("PDF (OCR) context => SAVINGS at line \(idx)", component: "PDFStatementExtractor") }
-                    else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.always("PDF (OCR) context => CHECKING at line \(idx)", component: "PDFStatementExtractor") }
-                }
-
-                // Prefer multi-line reconstruction in OCR too
-                if let multi = attemptMultiLineRow(in: lines, start: idx) {
-                    var r = multi.row
-                    if r.count >= 3 { r[2] = applySectionSign(amount: r[2]) }
-                    r.append(accountLabelForRowOCR())
-                    out.append(r)
-                    idx += multi.consumed
-                    continue
-                }
-
-                if let match = firstMatch(rowRegex, in: ln) {
-                    func group(_ idx: Int) -> String {
-                        let r = match.range(at: idx)
-                        if let range = Range(r, in: ln) {
-                            return String(ln[range]).trimmingCharacters(in: .whitespaces)
-                        }
-                        return ""
-                    }
-                    let dateRaw = group(1)
-                    let descRaw = group(3)
-                    let amtRaw = group(4)
-                    let balRaw = group(5)
-
-                    // Prefer second date (post date) if present
-                    let dateTokenChoice = { () -> String in
-                        if let r = Range(match.range(at: 2), in: ln), !String(ln[r]).trimmingCharacters(in: .whitespaces).isEmpty {
-                            return String(ln[r])
-                        }
-                        return dateRaw
-                    }()
-                    let date = normalizeDateString(dateTokenChoice, inferredYear: inferredYear)
-                    let desc = cleanDesc(descRaw)
-                    if isSavingsHeader(desc) { currentAccount = .savings }
-                    let amount = applySectionSign(amount: sanitizeAmount(amtRaw))
-                    let balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
-                    out.append([date, desc, amount, balance, accountLabelForRowOCR()])
-                    idx += 1
-                    continue
-                }
-
-                // Fallback: date+desc with amount anywhere on line or next line amount-only
-                if let dd = firstMatch(dateAndDescRegex, in: ln) {
-                    let dr = dd.range(at: 1)
-                    let rr = dd.range(at: 2)
-                    let dateRaw = (Range(dr, in: ln).map { String(ln[$0]) } ?? "")
-                    let rest = (Range(rr, in: ln).map { String(ln[$0]) } ?? "")
-                    let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
-                    if let am = amountAnywhereRegex.firstMatch(in: ln, options: [], range: NSRange(location: 0, length: ln.utf16.count)), let ar = Range(am.range, in: ln) {
-                        let amount = applySectionSign(amount: sanitizeAmount(String(ln[ar])))
-                        let desc = cleanDesc(rest.replacingOccurrences(of: String(ln[ar]), with: ""))
-                        if isSavingsHeader(desc) { currentAccount = .savings }
-                        out.append([date, desc, amount, "", accountLabelForRowOCR()]) ; idx += 1 ; continue
-                    }
-                    if idx + 1 < lines.count {
-                        let nxt = lines[idx + 1]
-                        if amountOnlyRegex.firstMatch(in: nxt, options: [], range: NSRange(location: 0, length: nxt.utf16.count)) != nil {
-                            let amount = applySectionSign(amount: sanitizeAmount(nxt))
-                            let desc = cleanDesc(rest)
-                            if isSavingsHeader(desc) { currentAccount = .savings }
-                            out.append([date, desc, amount, "", accountLabelForRowOCR()]) ; idx += 2 ; continue
-                        }
-                    }
-                }
-
-                idx += 1
-            }
-            return out
-        }
-
         return (rows, headers)
+    }
+
+    private static func userFacingFailureMessage(for url: URL, mode: Mode) -> String {
+        let base = "We couldn't parse this PDF statement. If the file is stored in iCloud, make sure it has finished downloading. If the PDF is password-protected or a scanned image, please remove the password or export a text-based PDF and try again."
+        switch mode {
+        case .summaryOnly:
+            return base + " You can also try switching to the full transactions mode and re-importing."
+        case .transactions:
+            return base
+        }
     }
 
     private static func sanitizeAmount(_ s: String) -> String {

@@ -14,6 +14,7 @@ final class ImportBatch {
     var createdAt: Date
     var label: String
     var sourceFileName: String
+    var parserId: String?
 
     // Relationships (cascade delete will remove related records when a batch is deleted)
     @Relationship(deleteRule: .cascade, inverse: \HoldingSnapshot.importBatch)
@@ -29,11 +30,13 @@ final class ImportBatch {
         id: UUID = UUID(),
         createdAt: Date = .now,
         label: String,
-        sourceFileName: String
+        sourceFileName: String,
+        parserId: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
         self.label = label
         self.sourceFileName = sourceFileName
+        self.parserId = parserId
     }
 }

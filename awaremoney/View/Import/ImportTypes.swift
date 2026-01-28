@@ -65,7 +65,7 @@ enum ImportError: Error, LocalizedError {
         switch self {
         case .unknownFormat: return "Unknown file format."
         case .invalidCSV: return "Invalid or unreadable CSV."
-        case .parseFailure(let msg): return "Parse error: \(msg)"
+        case .parseFailure(let msg): return msg
         }
     }
 }
