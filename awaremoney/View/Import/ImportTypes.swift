@@ -39,6 +39,7 @@ struct StagedBalance: Identifiable, Hashable {
     var asOfDate: Date
     var balance: Decimal
     var include: Bool = true
+    var sourceAccountLabel: String? = nil
 }
 
 struct StagedImport {

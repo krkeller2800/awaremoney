@@ -39,7 +39,7 @@ enum PDFStatementExtractor {
             AMLogging.always("PDF inferred year: <none>", component: "PDFStatementExtractor")
         }
 
-        struct StatementPeriod { let startMonth: Int; let startYear: Int; let endMonth: Int; let endYear: Int }
+        struct StatementPeriod { let startMonth: Int; let startYear: Int; let startDay: Int?; let endMonth: Int; let endYear: Int; let endDay: Int? }
         func monthNumber(from token: String) -> Int? {
             let lower = token.lowercased()
             let months = ["january":1,"february":2,"march":3,"april":4,"may":5,"june":6,"july":7,"august":8,"september":9,"october":10,"november":11,"december":12,
@@ -50,28 +50,43 @@ enum PDFStatementExtractor {
             if comps.count >= 1, let m = Int(comps[0]) { return max(1, min(12, m)) }
             return nil
         }
-        func extractMonthYear(from token: String) -> (month: Int?, year: Int?) {
+        func extractMonthYear(from token: String) -> (month: Int?, day: Int?, year: Int?) {
             let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
-            _ = trimmed.split(separator: " ")
-            // Try month name first
-            if let m = monthNumber(from: trimmed) {
-                // Year may be last component if present
-                let yearRegex = try! NSRegularExpression(pattern: #"\b(20\d{2}|19\d{2})\b"#)
-                if let match = yearRegex.firstMatch(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count)), let r = Range(match.range(at: 1), in: trimmed) {
-                    return (m, Int(trimmed[r]))
-                }
-                return (m, nil)
-            }
             // Try numeric mm/dd(/yy)
             let comps = trimmed.split(separator: "/")
-            if comps.count >= 2, let m = Int(comps[0]) {
+            if comps.count >= 2, let m = Int(comps[0]), let d = Int(comps[1]) {
                 let y: Int?
                 if comps.count >= 3, let yy = Int(comps[2]) {
                     y = (yy < 100 ? (2000 + yy) : yy)
                 } else { y = nil }
-                return (m, y)
+                return (max(1, min(12, m)), max(1, min(31, d)), y)
             }
-            return (nil, nil)
+            // Try month name with day and optional year (e.g., "Dec 31, 2025" or "December 31 2025")
+            let nameRegex = try! NSRegularExpression(pattern: "^(?i)(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\\s+(\\d{1,2})(?:,?\\s*(\\d{2,4}))?$")
+            let range = NSRange(location: 0, length: trimmed.utf16.count)
+            if let m = nameRegex.firstMatch(in: trimmed, options: [], range: range) {
+                func group(_ idx: Int) -> String? {
+                    let r = m.range(at: idx)
+                    if let rr = Range(r, in: trimmed) { return String(trimmed[rr]) }
+                    return nil
+                }
+                let monthStr = group(1) ?? ""
+                let dayStr = group(2)
+                let yearStr = group(3)
+                let monthVal = monthNumber(from: monthStr)
+                let dayVal = dayStr.flatMap { Int($0) }
+                let yearVal: Int? = {
+                    guard let ys = yearStr else { return nil }
+                    if let v = Int(ys) { return v < 100 ? (2000 + v) : v }
+                    return nil
+                }()
+                return (monthVal, dayVal, yearVal)
+            }
+            // Fallback: month name without explicit day/year
+            if let m = monthNumber(from: trimmed) {
+                return (m, nil, nil)
+            }
+            return (nil, nil, nil)
         }
         func detectStatementPeriod(in lines: [String]) -> StatementPeriod? {
             // Local date token and range regex to avoid capturing outer variables before declaration
@@ -92,10 +107,11 @@ enum PDFStatementExtractor {
                     let aComp = extractMonthYear(from: a)
                     let bComp = extractMonthYear(from: b)
                     if let am = aComp.month, let bm = bComp.month {
-                        let ay = aComp.year ?? inferredYear ?? Calendar.current.component(.year, from: Date())
-                        let by = bComp.year ?? inferredYear ?? Calendar.current.component(.year, from: Date())
-                        let period = StatementPeriod(startMonth: am, startYear: ay, endMonth: bm, endYear: by)
-                        AMLogging.always("PDF detected statement period: \(a) -> \(b) => start=\(am)/\(ay) end=\(bm)/\(by)", component: "PDFStatementExtractor")
+                        let currentYear = Calendar.current.component(.year, from: Date())
+                        let ay = aComp.year ?? inferredYear ?? currentYear
+                        let by = bComp.year ?? inferredYear ?? currentYear
+                        let period = StatementPeriod(startMonth: am, startYear: ay, startDay: aComp.day, endMonth: bm, endYear: by, endDay: bComp.day)
+                        AMLogging.always("PDF detected statement period: \(a) -> \(b) => start=\(am)/\(ay) d=\(aComp.day ?? -1) end=\(bm)/\(by) d=\(bComp.day ?? -1)", component: "PDFStatementExtractor")
                         return period
                     }
                 }
@@ -822,6 +838,7 @@ enum PDFStatementExtractor {
 
         // Attempt summary synthesis (decoupled from transactions) and OCR-based summary fallback
         do {
+            AMLogging.always("PDF summary synthesis: begin", component: "PDFStatementExtractor")
             // Helper to parse normalized date "MM/dd/yyyy"
             func parseNormalizedDate(_ s: String) -> Date? {
                 let df = DateFormatter()
@@ -831,32 +848,74 @@ enum PDFStatementExtractor {
                 return df.date(from: s)
             }
 
-            // Find beginning/ending balance amounts in a set of lines
-            func findBeginningAndEndingBalances(in src: [String]) -> (begin: String?, end: String?) {
-                let beginLabel = "beginning balance"
-                let endLabel = "ending balance"
-                var beginningAmount: String? = nil
-                var endingAmount: String? = nil
+            // Infer account context by scanning nearby lines for strong signals
+            func inferAccountContext(around index: Int, in lines: [String]) -> AccountKind {
+                let window = 20
+                // Scan backward first for stronger locality
+                var i = index
+                while i >= max(0, index - window) {
+                    let l = lines[i]
+                    if isSavingsHeader(l) { return .savings }
+                    if isCheckingHeader(l) { return .checking }
+                    let lower = l.lowercased()
+                    if lower.contains("savings account") || lower.contains("savings summary") || lower.contains("savings") {
+                        if !lower.contains("from a checking") && !lower.contains("from checking") { return .savings }
+                    }
+                    if lower.contains("checking account") || lower.contains("checking summary") || lower.contains("checking") {
+                        if !lower.contains("from a checking") && !lower.contains("from checking") { return .checking }
+                    }
+                    if isPageBreak(l) { break }
+                    i -= 1
+                }
+                // Scan forward a short distance in case header follows label
+                i = index + 1
+                while i <= min(lines.count - 1, index + window) {
+                    let l = lines[i]
+                    if isSavingsHeader(l) { return .savings }
+                    if isCheckingHeader(l) { return .checking }
+                    let lower = l.lowercased()
+                    if lower.contains("savings account") || lower.contains("savings summary") || lower.contains("savings") {
+                        if !lower.contains("from a checking") && !lower.contains("from checking") { return .savings }
+                    }
+                    if lower.contains("checking account") || lower.contains("checking summary") || lower.contains("checking") {
+                        if !lower.contains("from a checking") && !lower.contains("from checking") { return .checking }
+                    }
+                    if isPageBreak(l) { break }
+                    i += 1
+                }
+                return .unknown
+            }
 
-                func amountNear(lineIndex: Int, label: String, in lines: [String]) -> String? {
+            // Find beginning/ending balances grouped by account context
+            func findBalancesPerAccount(in src: [String]) -> [AccountKind: (begin: String?, end: String?)] {
+                let beginLabels = ["beginning balance", "opening balance"]
+                let endLabels = ["ending balance", "current balance", "closing balance"]
+
+                var result: [AccountKind: (begin: String?, end: String?)] = [:]
+
+                func rangeOfAnyLabel(_ labels: [String], in lower: String) -> Range<String.Index>? {
+                    for lbl in labels {
+                        if let r = lower.range(of: lbl) { return r }
+                    }
+                    return nil
+                }
+
+                func amountNear(lineIndex: Int, labels: [String], in lines: [String]) -> String? {
                     guard lineIndex >= 0 && lineIndex < lines.count else { return nil }
                     let current = lines[lineIndex]
                     let lower = current.lowercased()
-                    if let range = lower.range(of: label) {
+                    if let range = rangeOfAnyLabel(labels, in: lower) {
                         let suffixStart = range.upperBound
                         let suffix = String(current[suffixStart...])
-                        // Prefer amount on the same line, after the label (take the last token in the suffix)
                         let matches = amountAnywhereRegex.matches(in: suffix, options: [], range: NSRange(location: 0, length: suffix.utf16.count))
                         if let last = matches.last, let r = Range(last.range, in: suffix) {
                             return sanitizeAmount(String(suffix[r]))
                         }
                     }
-                    // Fallback: any amount on the same line (take the last token)
                     let sameMatches = amountAnywhereRegex.matches(in: current, options: [], range: NSRange(location: 0, length: current.utf16.count))
                     if let last = sameMatches.last, let r = Range(last.range, in: current) {
                         return sanitizeAmount(String(current[r]))
                     }
-                    // Else check the immediate next line for an amount-only token or any money token
                     if lineIndex + 1 < lines.count {
                         let next = lines[lineIndex + 1]
                         if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count)) != nil {
@@ -872,36 +931,107 @@ enum PDFStatementExtractor {
 
                 for (idx, l) in src.enumerated() {
                     let lower = l.lowercased()
-                    if lower.contains(beginLabel), beginningAmount == nil {
-                        beginningAmount = amountNear(lineIndex: idx, label: beginLabel, in: src)
+                    if rangeOfAnyLabel(beginLabels, in: lower) != nil {
+                        let amt = amountNear(lineIndex: idx, labels: beginLabels, in: src)
+                        let acct = inferAccountContext(around: idx, in: src)
+                        var tuple = result[acct] ?? (begin: nil, end: nil)
+                        if tuple.begin == nil { tuple.begin = amt }
+                        result[acct] = tuple
                     }
-                    if lower.contains(endLabel), endingAmount == nil {
-                        endingAmount = amountNear(lineIndex: idx, label: endLabel, in: src)
+                    if rangeOfAnyLabel(endLabels, in: lower) != nil {
+                        let amt = amountNear(lineIndex: idx, labels: endLabels, in: src)
+                        let acct = inferAccountContext(around: idx, in: src)
+                        var tuple = result[acct] ?? (begin: nil, end: nil)
+                        if tuple.end == nil { tuple.end = amt }
+                        result[acct] = tuple
                     }
-                    if beginningAmount != nil && endingAmount != nil { break }
                 }
-                return (beginningAmount, endingAmount)
+                return result
+            }
+
+            // Debug helpers for logging
+            func kindName(_ k: AccountKind) -> String {
+                switch k { case .checking: return "checking"; case .savings: return "savings"; default: return "unknown" }
+            }
+            func debugBalances(_ dict: [AccountKind: (begin: String?, end: String?)]) -> String {
+                return dict.map { (k, v) in
+                    "\(kindName(k)): begin=\(v.begin ?? "nil"), end=\(v.end ?? "nil")"
+                }.sorted().joined(separator: "; ")
+            }
+
+            // Attempt to extract a 4-digit account suffix (e.g., 0411) near headers for a given account kind
+            func detectAccountSuffix(for kind: AccountKind, in lines: [String]) -> String? {
+                let keyword: String = {
+                    switch kind { case .savings: return "savings"; case .checking: return "checking"; default: return "" }
+                }()
+                if keyword.isEmpty { return nil }
+                let suffixRegex = try! NSRegularExpression(pattern: #"(?:^|[^0-9])(\d{4})(?:[^0-9]|$)"#)
+                for line in lines {
+                    let lower = line.lowercased()
+                    if lower.contains(keyword) {
+                        // Prefer lines that also mention 'account' or look like a header with a dash
+                        if lower.contains("account") || lower.contains("acct") || line.contains(" - ") || line.contains("—") || line.contains("–") {
+                            let ns = line as NSString
+                            let range = NSRange(location: 0, length: ns.length)
+                            if let m = suffixRegex.matches(in: line, options: [], range: range).last {
+                                if m.numberOfRanges >= 2 {
+                                    let r = m.range(at: 1)
+                                    if r.location != NSNotFound {
+                                        let last4 = ns.substring(with: r)
+                                        AMLogging.always("PDF summary: detected suffix \(last4) for \(keyword) in line: \(line)", component: "PDFStatementExtractor")
+                                        return last4
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return nil
+            }
+
+            func accountDisplayLabel(for kind: AccountKind, using lines: [String]) -> String {
+                let base: String = {
+                    switch kind { case .savings: return "Savings"; case .checking: return "Checking"; default: return "unknown" }
+                }()
+                if base == "unknown" { return base }
+                if let last4 = detectAccountSuffix(for: kind, in: lines) {
+                    return "\(base) •\(last4)"
+                }
+                return base
+            }
+
+            func accountTypeKey(for kind: AccountKind) -> String {
+                switch kind {
+                case .savings: return "savings"
+                case .checking: return "checking"
+                default: return "unknown"
+                }
             }
 
             // Compute summary dates from a detected statement period (begin = day before start month, end = last day of end month)
             func summaryDates(from period: StatementPeriod) -> (begin: Date, end: Date)? {
                 var cal = Calendar(identifier: .gregorian)
                 cal.timeZone = TimeZone(secondsFromGMT: 0)!
+                // Build start date using day if available, else default to day 1
                 var startComps = DateComponents()
                 startComps.year = period.startYear
                 startComps.month = period.startMonth
-                startComps.day = 1
-                guard let firstOfStart = cal.date(from: startComps) else { return nil }
-                guard let beginDate = cal.date(byAdding: .day, value: -1, to: firstOfStart) else { return nil }
-
+                startComps.day = period.startDay ?? 1
+                guard let startDate = cal.date(from: startComps) else { return nil }
+                // Build end date using day if available, else last day of month
                 var endComps = DateComponents()
                 endComps.year = period.endYear
                 endComps.month = period.endMonth
-                endComps.day = 1
-                guard let firstOfEnd = cal.date(from: endComps) else { return nil }
-                guard let endDate = cal.date(byAdding: .month, value: 1, to: firstOfEnd).flatMap({ cal.date(byAdding: .day, value: -1, to: $0) }) else { return nil }
-
-                return (beginDate, endDate)
+                if let d = period.endDay {
+                    endComps.day = d
+                    guard let endDate = cal.date(from: endComps) else { return nil }
+                    return (startDate, endDate)
+                } else {
+                    endComps.day = 1
+                    guard let firstOfEnd = cal.date(from: endComps) else { return nil }
+                    guard let endDate = cal.date(byAdding: .month, value: 1, to: firstOfEnd).flatMap({ cal.date(byAdding: .day, value: -1, to: $0) }) else { return nil }
+                    return (startDate, endDate)
+                }
             }
 
             let df = DateFormatter()
@@ -918,59 +1048,90 @@ enum PDFStatementExtractor {
                 latestDate = dates.max()
             }
 
-            // Try to find summary amounts in extracted lines first
-            var beginningAmount: String?
-            var endingAmount: String?
-            (beginningAmount, endingAmount) = findBeginningAndEndingBalances(in: lines)
+            // Try to find summary amounts grouped by account in extracted lines first
+            var balancesByAccount: [AccountKind: (begin: String?, end: String?)] = findBalancesPerAccount(in: lines)
+            AMLogging.always("PDF summary: balancesByAccount (text) = \(debugBalances(balancesByAccount))", component: "PDFStatementExtractor")
 
             // Prefer statement period detected from text extraction; fall back to OCR if needed
             var periodForSummary = statementPeriod
 
-            // If not found, try OCR lines for summary amounts and period
-            if beginningAmount == nil && endingAmount == nil {
+            var balancesFromOCR = false
+            var ocrLinesLocal: [String] = []
+
+            // If none found, try OCR lines for summary amounts and period
+            let hasAnyTextBalances = balancesByAccount.values.contains { $0.begin != nil || $0.end != nil }
+            if !hasAnyTextBalances {
                 let ocrLines = ocrExtractLines(from: doc, scale: 2.0)
-                let (b2, e2) = findBeginningAndEndingBalances(in: ocrLines)
-                if b2 != nil || e2 != nil {
-                    beginningAmount = b2
-                    endingAmount = e2
+                let ocrBalances = findBalancesPerAccount(in: ocrLines)
+                let hasAnyOCR = ocrBalances.values.contains { $0.begin != nil || $0.end != nil }
+                if hasAnyOCR {
+                    balancesByAccount = ocrBalances
+                    balancesFromOCR = true
+                    ocrLinesLocal = ocrLines
                     if periodForSummary == nil {
                         periodForSummary = detectStatementPeriod(in: ocrLines)
                     }
+                    AMLogging.always("PDF summary: using OCR balances = \(debugBalances(ocrBalances))", component: "PDFStatementExtractor")
+                }
+            }
+
+            // Fallback: if balances are under .unknown, try to assign based on document-wide hints
+            if let unknownPair = balancesByAccount[.unknown], (unknownPair.begin != nil || unknownPair.end != nil) {
+                let sourceLinesAll = balancesFromOCR ? ocrLinesLocal : lines
+                let docHasSavings = sourceLinesAll.contains { $0.lowercased().contains("savings") }
+                let docHasChecking = sourceLinesAll.contains { $0.lowercased().contains("checking") }
+                if balancesByAccount[.savings] == nil && docHasSavings && !docHasChecking {
+                    balancesByAccount[.savings] = unknownPair
+                    balancesByAccount.removeValue(forKey: .unknown)
+                    AMLogging.always("PDF summary: mapped unknown balances to savings based on document hints", component: "PDFStatementExtractor")
+                } else if balancesByAccount[.checking] == nil && docHasChecking && !docHasSavings {
+                    balancesByAccount[.checking] = unknownPair
+                    balancesByAccount.removeValue(forKey: .unknown)
+                    AMLogging.always("PDF summary: mapped unknown balances to checking based on document hints", component: "PDFStatementExtractor")
                 }
             }
 
             var didAppendSummary = false
-            if beginningAmount != nil || endingAmount != nil {
-                var beginDateStr: String? = nil
-                var endDateStr: String? = nil
+            // Compute shared dates once
+            var beginDateStr: String? = nil
+            var endDateStr: String? = nil
+            if let sp = periodForSummary, let (beginDate, endDate) = summaryDates(from: sp) {
+                beginDateStr = df.string(from: beginDate)
+                endDateStr = df.string(from: endDate)
+            } else if let e = earliestDate, let l = latestDate {
+                var cal = Calendar(identifier: .gregorian)
+                cal.timeZone = TimeZone(secondsFromGMT: 0)!
+                let begin = cal.date(byAdding: .day, value: -1, to: e) ?? e
+                beginDateStr = df.string(from: begin)
+                endDateStr = df.string(from: l)
+            }
 
-                if let e = earliestDate, let l = latestDate {
-                    let begin = Calendar(identifier: .gregorian).date(byAdding: .day, value: -1, to: e) ?? e
-                    beginDateStr = df.string(from: begin)
-                    endDateStr = df.string(from: l)
-                } else if let sp = periodForSummary, let (beginDate, endDate) = summaryDates(from: sp) {
-                    beginDateStr = df.string(from: beginDate)
-                    endDateStr = df.string(from: endDate)
-                }
-
-                if let bAmt = beginningAmount, let bDate = beginDateStr {
-                    rows.append([bDate, "Statement Beginning Balance", "0", bAmt, "unknown"])
+            // Append summaries per-account when available
+            for (acct, pair) in balancesByAccount {
+                let sourceLines = balancesFromOCR ? ocrLinesLocal : lines
+                let accountLabelDisplay = accountDisplayLabel(for: acct, using: sourceLines)
+                let accountKey = accountTypeKey(for: acct)
+                AMLogging.always("PDF summary: account label resolved for \(kindName(acct)) => \(accountLabelDisplay)", component: "PDFStatementExtractor")
+                if let bAmt = pair.begin, let bDate = beginDateStr {
+                    rows.append([bDate, "Statement Beginning Balance (\(accountLabelDisplay))", "0", bAmt, accountKey])
+                    AMLogging.always("PDF summary: appended beginning row accountKey=\(accountKey)", component: "PDFStatementExtractor")
                     didAppendSummary = true
-                    AMLogging.always("PDF summary (decoupled): beginning balance detected = \(bAmt) @ \(bDate)", component: "PDFStatementExtractor")
+                    AMLogging.always("PDF summary (decoupled): beginning balance detected = \(bAmt) @ \(bDate) [\(accountLabelDisplay)]", component: "PDFStatementExtractor")
                 }
-                if let eAmt = endingAmount, let eDate = endDateStr {
-                    rows.append([eDate, "Statement Ending Balance", "0", eAmt, "unknown"])
+                if let eAmt = pair.end, let eDate = endDateStr {
+                    rows.append([eDate, "Statement Ending Balance (\(accountLabelDisplay))", "0", eAmt, accountKey])
+                    AMLogging.always("PDF summary: appended ending row accountKey=\(accountKey)", component: "PDFStatementExtractor")
                     didAppendSummary = true
-                    AMLogging.always("PDF summary (decoupled): ending balance detected = \(eAmt) @ \(eDate)", component: "PDFStatementExtractor")
+                    AMLogging.always("PDF summary (decoupled): ending balance detected = \(eAmt) @ \(eDate) [\(accountLabelDisplay)]", component: "PDFStatementExtractor")
                 }
+            }
 
-                // If we synthesized statement summary balances and we're in summary-only mode, discard other rows
-                if didAppendSummary && mode == .summaryOnly {
-                    rows = rows.filter { r in
-                        guard r.count >= 2 else { return false }
-                        let d = r[1].lowercased()
-                        return d.contains("statement beginning balance") || d.contains("statement ending balance")
-                    }
+            // If we synthesized statement summary balances and we're in summary-only mode, discard other rows
+            if didAppendSummary && mode == .summaryOnly {
+                rows = rows.filter { r in
+                    guard r.count >= 2 else { return false }
+                    let d = r[1].lowercased()
+                    return d.contains("statement beginning balance") || d.contains("statement ending balance")
                 }
             }
 
@@ -986,6 +1147,25 @@ enum PDFStatementExtractor {
                 }
             }
         }
+
+        // Final normalization: ensure Account column uses canonical keys for summary-only rows
+        if mode == .summaryOnly {
+            for idx in 0..<rows.count {
+                if rows[idx].count >= 5 {
+                    var key = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if key.isEmpty || key == "unknown" || key.contains("•") || key.contains("account") {
+                        let descLower = rows[idx][1].lowercased()
+                        if descLower.contains("savings") { key = "savings" }
+                        else if descLower.contains("checking") { key = "checking" }
+                    }
+                    rows[idx][4] = key.isEmpty ? "unknown" : key
+                }
+            }
+        }
+
+        // Debug: list unique account keys present in the extracted rows
+        let uniqueAccounts = Set(rows.compactMap { $0.count >= 5 ? $0[4] : nil })
+        AMLogging.always("PDF rows account keys: \(Array(uniqueAccounts))", component: "PDFStatementExtractor")
 
         AMLogging.always("PDF matched rows: \(rows.count)", component: "PDFStatementExtractor")
 

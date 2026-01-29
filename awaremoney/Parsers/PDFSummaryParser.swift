@@ -31,6 +31,13 @@ struct PDFSummaryParser: StatementParser {
             return df.date(from: s)
         }
 
+        func normalizedLabel(_ raw: String?) -> String? {
+            guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
+            if s.contains("checking") { return "checking" }
+            if s.contains("savings") { return "savings" }
+            return nil
+        }
+
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
             let desc = value(row, map, key: "description")?.lowercased() ?? ""
@@ -43,7 +50,11 @@ struct PDFSummaryParser: StatementParser {
             let cleaned = balRaw.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
             guard let dec = Decimal(string: cleaned) else { continue }
 
-            balances.append(StagedBalance(asOfDate: date, balance: dec))
+            var sb = StagedBalance(asOfDate: date, balance: dec)
+            // Prefer explicit Account column, fallback to description text
+            let accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
+            sb.sourceAccountLabel = accountKey
+            balances.append(sb)
         }
 
         AMLogging.always("PDFSummaryParser — parsed balances: \(balances.count)", component: LOG_COMPONENT)
@@ -82,3 +93,4 @@ struct PDFSummaryParser: StatementParser {
         return nil
     }
 }
+

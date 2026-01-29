@@ -14,9 +14,9 @@
             filePath = "awaremoney/Parsers/PDFStatementExtractor.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "995"
-            endingLineNumber = "995"
-            landmarkName = "parse(url:mode:)"
+            startingLineNumber = "1175"
+            endingLineNumber = "1175"
+            landmarkName = "sanitizeAmount(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

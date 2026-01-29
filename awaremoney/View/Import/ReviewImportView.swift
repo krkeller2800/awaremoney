@@ -165,13 +165,28 @@ struct ReviewImportView: View {
                     Section("Balance Snapshots") {
                         ForEach(staged.balances.indices, id: \.self) { idx in
                             let b = staged.balances[idx]
-                            HStack {
+                            HStack(alignment: .firstTextBaseline) {
                                 Toggle("", isOn: Binding(
                                     get: { vm.staged?.balances[idx].include ?? true },
                                     set: { vm.staged?.balances[idx].include = $0 }
                                 ))
                                 .labelsHidden()
-                                Text(b.asOfDate, style: .date)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(b.asOfDate, style: .date)
+                                            .font(.subheadline)
+                                        if let label = b.sourceAccountLabel, !label.isEmpty {
+                                            Text(label.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.secondary.opacity(0.12))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
+                                    }
+                                }
                                 Spacer()
                                 Text(b.balance as NSNumber, formatter: ReviewImportView.currencyFormatter)
                             }

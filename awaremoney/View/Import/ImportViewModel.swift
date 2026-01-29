@@ -278,17 +278,20 @@ final class ImportViewModel: ObservableObject {
             if s.contains("savings") { return "savings" }
             return nil
         }
-        func typeForLabel(_ label: String?) -> Account.AccountType? {
-            switch normalizedLabel(label) {
-            case "checking": return .checking
-            case "savings": return .savings
-            default: return nil
-            }
-        }
 
-        // Compute included transactions
+        // Group balances by source account label
         let includedTransactions = staged.transactions.filter { ($0.include) }
         let excludedCount = staged.transactions.count - includedTransactions.count
+        
+        let includedBalances = staged.balances.filter { $0.include }
+        var balanceGroups: [String: [StagedBalance]] = [:]
+        for b in includedBalances {
+            if let key = normalizedLabel(b.sourceAccountLabel) {
+                balanceGroups[key, default: []].append(b)
+            } else {
+                balanceGroups["default", default: []].append(b)
+            }
+        }
 
         // Group transactions by source account label (checking/savings). Unlabeled will be handled separately.
         var labeledGroups: [String: [StagedTransaction]] = [:]
@@ -300,10 +303,20 @@ final class ImportViewModel: ObservableObject {
                 unlabeled.append(t)
             }
         }
-        AMLogging.always("Approve: label groups => \(labeledGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", ")), unlabeled: \(unlabeled.count)", component: "ImportViewModel")
+        AMLogging.always("Approve: label groups (tx) => \(labeledGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", ")), unlabeled: \(unlabeled.count)", component: "ImportViewModel")
+        AMLogging.always("Approve: label groups (balances) => \(balanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
 
         // Function to resolve or create an account for a given type/institution
         func resolveAccount(ofType resolvedType: Account.AccountType, institutionName: String?, preferExisting existing: Account?) -> Account {
+            switch normalizedLabel(existing?.name) {
+            case .some(let label):
+                if label != "checking" && label != "savings" {
+                    // fallback to normal logic below
+                    break
+                }
+            case .none:
+                break
+            }
             // If an existing account was provided and matches the type and institution (or institution empty), reuse it
             if let existing {
                 if existing.type == resolvedType {
@@ -382,9 +395,10 @@ final class ImportViewModel: ObservableObject {
             selectedAccount = target
         }
 
-        // Build accounts per label (checking/savings). If no label groups exist, fall back to single-account path.
+        // Build accounts per label (checking/savings) using both tx and balances labels.
         var accountsByLabel: [String: Account] = [:]
-        if labeledGroups.isEmpty {
+        let allLabels: Set<String> = Set(labeledGroups.keys).union(Set(balanceGroups.keys))
+        if allLabels.isEmpty {
             // Single-account path (original behavior)
             let resolvedType = self.newAccountType
             let account = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: selectedAccount)
@@ -393,30 +407,21 @@ final class ImportViewModel: ObservableObject {
             self.selectedAccountID = account.id
             accountsByLabel["default"] = account
         } else {
-            // Multi-account path: resolve an account for each label
-            for (label, group) in labeledGroups {
+            for label in allLabels where label != "default" {
                 let resolvedType = typeForLabel(label) ?? self.newAccountType
                 let preferExisting: Account? = {
-                    // If user selected an account whose type matches this label, prefer it for this label
                     if let sel = selectedAccount, sel.type == resolvedType { return sel }
                     return nil
                 }()
                 let acct = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: preferExisting)
                 accountsByLabel[label] = acct
                 AMLogging.always("Label '\(label)' -> account id: \(acct.id), name: \(acct.name), type: \(acct.type.rawValue)", component: "ImportViewModel")
-                AMLogging.always("Group counts — label: \(label), tx: \(group.count)", component: "ImportViewModel")
+                AMLogging.always("Group counts — label: \(label), tx: \(labeledGroups[label]?.count ?? 0), balances: \(balanceGroups[label]?.count ?? 0)", component: "ImportViewModel")
             }
-            // Assign unlabeled transactions: prefer selected account, else any resolved account, else create default using newAccountType
-            if !unlabeled.isEmpty {
-                let unlabeledAccount: Account = {
-                    if let sel = selectedAccount { return sel }
-                    if let any = accountsByLabel.values.first { return any }
-                    return resolveAccount(ofType: self.newAccountType, institutionName: chosenInst, preferExisting: nil)
-                }()
-                accountsByLabel["unlabeled"] = unlabeledAccount
-                AMLogging.always("Unlabeled -> account id: \(unlabeledAccount.id), name: \(unlabeledAccount.name)", component: "ImportViewModel")
+            // Handle default label (no label present)
+            if accountsByLabel.isEmpty, let firstLabel = allLabels.first {
+                accountsByLabel[firstLabel] = resolveAccount(ofType: self.newAccountType, institutionName: chosenInst, preferExisting: selectedAccount)
             }
-            // Keep UI selection pointing at the first account for continuity
             if let first = accountsByLabel.values.first { self.selectedAccountID = first.id }
         }
 
@@ -552,28 +557,29 @@ final class ImportViewModel: ObservableObject {
             AMLogging.log("Inserted holding — symbol: \(h.symbol), qty: \(h.quantity), mv: \(String(describing: h.marketValue))", component: "ImportViewModel")  // DEBUG LOG
         }
 
-        // Save balances — attach to the first resolved account if multiple
+        // Save balances — attach to the resolved account per label if available
         var insertedBalancesCount = 0
         for b in staged.balances where (b.include) {
-            let accountForBalance = firstAccountForAssets ?? accountsByLabel.values.first
-            guard let targetAccount = accountForBalance else { continue }
+            let key = normalizedLabel(b.sourceAccountLabel) ?? "default"
+            let targetAccount = accountsByLabel[key] ?? accountsByLabel.values.first
+            guard let account = targetAccount else { continue }
             let bs = BalanceSnapshot(
                 asOfDate: b.asOfDate,
                 balance: b.balance,
-                account: targetAccount,
+                account: account,
                 importBatch: batch
             )
             context.insert(bs)
             batch.balances.append(bs)
             insertedBalancesCount += 1
-            AMLogging.log("Inserted balance — asOf: \(b.asOfDate), balance: \(b.balance)", component: "ImportViewModel")  // DEBUG LOG
+            AMLogging.always("Inserted balance — asOf: \(b.asOfDate), balance: \(b.balance), label: \(key), account: \(account.name)", component: "ImportViewModel")
         }
 
         AMLogging.log("Insert summary — tx: \(insertedTxCount), holdings: \(insertedHoldingsCount), balances: \(insertedBalancesCount)", component: "ImportViewModel")  // DEBUG LOG
 
-        if newlyInserted.isEmpty {
-            // Surface a helpful message if nothing was saved due to duplicates/exclusions
-            self.errorMessage = "No new transactions to save (all duplicates or excluded)."
+        // Only surface an error if nothing at all was saved (no transactions, holdings, or balances)
+        if insertedTxCount == 0 && insertedHoldingsCount == 0 && insertedBalancesCount == 0 {
+            self.errorMessage = "No new items to save (all duplicates or excluded)."
         } else {
             self.errorMessage = nil
         }
@@ -868,6 +874,20 @@ final class ImportViewModel: ObservableObject {
         }
 
         return nil
+    }
+
+    // Map a normalized source account label to an Account.AccountType
+    // Currently recognizes common bank labels we emit from PDF/CSV (e.g., "checking", "savings").
+    private func typeForLabel(_ label: String) -> Account.AccountType? {
+        let lower = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch lower {
+        case "checking":
+            return .checking
+        case "savings":
+            return .savings
+        default:
+            return nil
+        }
     }
 
     // Helpers for diagnostics
