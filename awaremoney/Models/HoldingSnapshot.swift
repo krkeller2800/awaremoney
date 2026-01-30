@@ -14,6 +14,8 @@ final class HoldingSnapshot {
     var asOfDate: Date
     var quantity: Decimal
     var marketValue: Decimal?
+    var isExcluded: Bool = false
+    var isUserModified: Bool = false
 
     // Relationships
     var account: Account?
@@ -27,7 +29,9 @@ final class HoldingSnapshot {
         marketValue: Decimal? = nil,
         account: Account? = nil,
         security: Security? = nil,
-        importBatch: ImportBatch? = nil
+        importBatch: ImportBatch? = nil,
+        isExcluded: Bool = false,
+        isUserModified: Bool = false
     ) {
         self.id = id
         self.asOfDate = asOfDate
@@ -36,5 +40,7 @@ final class HoldingSnapshot {
         self.account = account
         self.security = security
         self.importBatch = importBatch
+        self.isExcluded = isExcluded
+        self.isUserModified = isUserModified
     }
 }

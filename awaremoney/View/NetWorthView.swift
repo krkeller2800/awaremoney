@@ -18,6 +18,7 @@ struct NetWorthView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var totalNetWorth: Decimal = 0
     @State private var byAccount: [AccountValue] = []
+    @State private var showNetWorthChart = false
 
     var body: some View {
         NavigationStack {
@@ -66,13 +67,23 @@ struct NetWorthView: View {
 
                 // Overall total
                 Section("Total") {
-                    HStack {
-                        Text("Net Worth")
-                        Spacer()
-                        Text(format(amount: totalNetWorth))
-                            .font(.headline)
-                            .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
+                    Button {
+                        showNetWorthChart = true
+                    } label: {
+                        HStack {
+                            Text("Net Worth")
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Text(format(amount: totalNetWorth))
+                                    .font(.headline)
+                                    .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
+                                Image(systemName: "chevron.up")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .navigationTitle("Net Worth")
@@ -80,6 +91,9 @@ struct NetWorthView: View {
             .refreshable { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
                 Task { await load() }
+            }
+            .sheet(isPresented: $showNetWorthChart) {
+                NetWorthChartView()
             }
 //            .toolbar {
 //                ToolbarItem(placement: .navigationBarTrailing) {

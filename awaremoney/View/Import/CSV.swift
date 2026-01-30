@@ -9,10 +9,26 @@ import Foundation
 
 enum CSV {
     static func read(data: Data, encoding: String.Encoding = .utf8) throws -> (rows: [[String]], headers: [String]) {
-        guard let s = String(data: data, encoding: encoding) else {
+        // Attempt robust decoding: try the provided encoding first, then fall back through common encodings
+        var candidateEncodings: [String.Encoding] = [encoding, .utf8, .utf16LittleEndian, .utf16BigEndian, .unicode, .isoLatin1, .windowsCP1252, .ascii]
+        // Deduplicate while preserving order
+        var seen: Set<UInt> = []
+        candidateEncodings = candidateEncodings.filter { enc in
+            let raw = enc.rawValue
+            if seen.contains(raw) { return false }
+            seen.insert(raw)
+            return true
+        }
+
+        let decoded: String? = candidateEncodings.compactMap { String(data: data, encoding: $0) }.first
+        guard var s = decoded else {
             throw ImportError.invalidCSV
         }
-        let rows = parse(csv: s)
+
+        // Strip UTF BOM if present and normalize line endings to \n to avoid CRLF double-terminators
+        s = s.replacingOccurrences(of: "\u{FEFF}", with: "")
+        let normalized = s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let rows = parse(csv: normalized)
 
         // Find the first non-blank row to treat as the header. A blank row is one where all fields are empty/whitespace.
         func isBlankRow(_ row: [String]) -> Bool {

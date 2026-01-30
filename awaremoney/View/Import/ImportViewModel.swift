@@ -21,12 +21,22 @@ final class ImportViewModel: ObservableObject {
     @Published var userInstitutionName: String = ""
     @Published var mappingSession: MappingSession? // non-nil when user needs to map columns
     @Published var infoMessage: String?
-    @Published var isPDFTransactionsImporterPresented: Bool = false
     @Published var isImporting: Bool = false
 
     private let importer = StatementImporter()
 
     private let parsers: [StatementParser]
+
+    static func defaultParsers() -> [StatementParser] {
+        return [
+            PDFSummaryParser(),
+            PDFBankTransactionsParser(),
+            BankCSVParser(),
+            BrokerageCSVParser(),
+            FidelityStatementCSVParser(),
+            GenericHoldingsStatementCSVParser()
+        ]
+    }
 
     init(parsers: [StatementParser]) {
         self.parsers = parsers
@@ -171,95 +181,6 @@ final class ImportViewModel: ObservableObject {
                 await MainActor.run {
                     let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     AMLogging.always("Importer error (user-facing): \(userMessage)", component: "ImportViewModel")
-                    self.errorMessage = userMessage
-                    self.infoMessage = nil
-                    self.staged = nil
-                    self.isImporting = false
-                }
-            }
-        }
-    }
-
-    func handlePickedPDFTransactionsURL(_ url: URL) {
-        AMLogging.log("Picked PDF (transactions): \(url.absoluteString)", component: "ImportViewModel")
-        self.isImporting = true
-
-        Task.detached { [weak self] in
-            guard let self else { return }
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-            do {
-                // Ensure iCloud download if needed
-                if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]), values.isUbiquitousItem == true {
-                    try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                }
-
-                // Coordinator for confidence/warnings in transactions mode (method is @MainActor)
-                var coordinatorResult: StatementImportResult? = nil
-                do {
-                    coordinatorResult = try await MainActor.run {
-                        try self.importer.importStatement(from: url, prefer: .transactions)
-                    }
-                } catch {
-                    // Ignore coordinator errors here; continue with legacy path
-                }
-
-                // Use extractor in transactions mode (heavy)
-                let (rows, headers) = try await MainActor.run {
-                    try PDFStatementExtractor.parse(url: url, mode: .transactions)
-                }
-                await MainActor.run { [coordinatorResult] in
-                    guard !headers.isEmpty else {
-                        self.errorMessage = ImportError.unknownFormat.localizedDescription
-                        self.infoMessage = nil
-                        self.staged = nil
-                        self.isImporting = false
-                        return
-                    }
-                    AMLogging.always("PDF Transactions — rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
-
-                    let parser: StatementParser = PDFBankTransactionsParser()
-                    do {
-                        var stagedImport = try parser.parse(rows: rows, headers: headers)
-                        stagedImport.sourceFileName = url.lastPathComponent
-
-                        // Guess account type (bank/credit card heuristic)
-                        let sampleForGuess = Array(rows.prefix(50))
-                        AMLogging.always("[PDF TX] Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
-                        let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
-                        AMLogging.always("[PDF TX] Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
-                        if let guessedType = guessedType {
-                            stagedImport.suggestedAccountType = guessedType
-                        }
-                        if let suggested = stagedImport.suggestedAccountType {
-                            self.newAccountType = suggested
-                            AMLogging.always("[PDF TX] Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
-                        } else {
-                            AMLogging.always("[PDF TX] No suggested account type", component: "ImportViewModel")
-                        }
-
-                        self.staged = stagedImport
-                        var messages: [String] = ["PDF transactions are experimental. Please review signs before saving."]
-                        if let res = coordinatorResult {
-                            for w in res.warnings { if !messages.contains(w) { messages.append(w) } }
-                            if res.confidence <= .low {
-                                let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
-                                if !messages.contains(warn) { messages.append(warn) }
-                            }
-                        }
-                        self.infoMessage = messages.joined(separator: "\n")
-                    } catch {
-                        self.errorMessage = error.localizedDescription
-                        self.infoMessage = nil
-                        self.staged = nil
-                    }
-
-                    self.isImporting = false
-                }
-            } catch {
-                await MainActor.run {
-                    let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    AMLogging.always("PDF Transactions importer error (user-facing): \(userMessage)", component: "ImportViewModel")
                     self.errorMessage = userMessage
                     self.infoMessage = nil
                     self.staged = nil
@@ -1002,6 +923,279 @@ final class ImportViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Hard delete of import batches
+    static func hardDelete(batch: ImportBatch, context: ModelContext) throws {
+        // Capture candidate accounts referenced by this batch so we can clean them up if they become empty after deletion
+        let candidateAccountIDs: Set<UUID> = {
+            var ids = Set<UUID>()
+            for tx in batch.transactions { if let id = tx.account?.id { ids.insert(id) } }
+            for h in batch.holdings { if let id = h.account?.id { ids.insert(id) } }
+            for b in batch.balances { if let id = b.account?.id { ids.insert(id) } }
+            return ids
+        }()
+
+        // Delete child objects first to avoid dangling relationships
+        for tx in batch.transactions {
+            context.delete(tx)
+        }
+        for h in batch.holdings {
+            context.delete(h)
+        }
+        for b in batch.balances {
+            context.delete(b)
+        }
+        // Delete the batch itself
+        context.delete(batch)
+
+        try context.save()
+
+        // Notify UI layers to refresh
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+
+        // After deleting the batch, remove any now-empty accounts that were associated with it
+        var deletedAccounts = 0
+        for acctID in candidateAccountIDs {
+            let predicate = #Predicate<Account> { $0.id == acctID }
+            var descriptor = FetchDescriptor<Account>(predicate: predicate)
+            descriptor.fetchLimit = 1
+            if let account = try? context.fetch(descriptor).first {
+                let isEmpty = account.transactions.isEmpty && account.holdingSnapshots.isEmpty && account.balanceSnapshots.isEmpty
+                if isEmpty {
+                    AMLogging.always("Deleting empty account after batch deletion — id: \(account.id), name: \(account.name)", component: "ImportViewModel")
+                    context.delete(account)
+                    deletedAccounts += 1
+                }
+            }
+        }
+        if deletedAccounts > 0 {
+            try context.save()
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        }
+    }
+
+    static func hardDeleteAllBatches(context: ModelContext) throws {
+        let batches = try context.fetch(FetchDescriptor<ImportBatch>())
+        for batch in batches {
+            for tx in batch.transactions { context.delete(tx) }
+            for h in batch.holdings { context.delete(h) }
+            for b in batch.balances { context.delete(b) }
+            context.delete(batch)
+        }
+        try context.save()
+
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+    }
+
+    /*
+     What comes next:
+     - Replace Batch: Add a flow to pick a new file, parse to staged import, then match/update existing items in the batch by importHashKey. Non-matching old items will be removed; matching items will be updated unless user-modified.
+     - Edit Screens: Add transaction/balance/holding edit sheets with an exclude toggle and user-modified flag so manual changes are preserved across re-imports.
+     - Batch Tools: Provide per-batch actions (flip signs, reassign account, delete/undo) from a Batch Detail screen.
+    */
+
+    // MARK: - Replace existing batch with staged import (preserving user edits)
+    /// Replaces the content of an existing ImportBatch with a newly parsed staged import.
+    /// Matching is by immutable importHashKey for transactions, by asOfDate for balances,
+    /// and by (symbol, asOfDate) for holdings. Items marked `isUserModified` are left untouched.
+    /// Returns counts of updates/inserts/deletes for summary display.
+    static func replaceBatch(
+        batch: ImportBatch,
+        with staged: StagedImport,
+        context: ModelContext,
+        forceUpdateTxKeys: Set<String> = [],
+        forceUpdateBalanceDates: Set<Date> = [],
+        forceUpdateHoldingKeys: Set<String> = []
+    ) throws -> (
+        updatedTx: Int, insertedTx: Int, deletedTx: Int,
+        updatedBalances: Int, insertedBalances: Int, deletedBalances: Int,
+        updatedHoldings: Int, insertedHoldings: Int, deletedHoldings: Int
+    ) {
+        // TRANSACTIONS
+        var updatedTx = 0, insertedTx = 0, deletedTx = 0
+        let existingTx = batch.transactions
+        let existingTxMap: [String: Transaction] = existingTx.reduce(into: [:]) { acc, tx in
+            let key = tx.importHashKey ?? tx.hashKey
+            acc[key] = tx
+        }
+        let stagedTxMap: [String: StagedTransaction] = staged.transactions.reduce(into: [:]) { acc, t in
+            acc[t.hashKey] = t
+        }
+
+        // Update or insert
+        for (key, st) in stagedTxMap {
+            if let ex = existingTxMap[key] {
+                // Update only if not user-modified or forced update present
+                if !ex.isUserModified || forceUpdateTxKeys.contains(key) {
+                    ex.datePosted = st.datePosted
+                    ex.amount = st.amount
+                    ex.payee = st.payee
+                    ex.memo = st.memo
+                    ex.kind = st.kind
+                    ex.externalId = st.externalId
+                    ex.symbol = st.symbol
+                    ex.quantity = st.quantity
+                    ex.price = st.price
+                    ex.fees = st.fees
+                    // Recompute visible hashKey to match new values; keep importHashKey stable
+                    ex.hashKey = Hashing.hashKey(
+                        date: ex.datePosted,
+                        amount: ex.amount,
+                        payee: ex.payee,
+                        memo: ex.memo,
+                        symbol: ex.symbol,
+                        quantity: ex.quantity
+                    )
+                    if forceUpdateTxKeys.contains(key) {
+                        ex.isUserModified = false
+                        ex.isUserEdited = false
+                    }
+                    updatedTx &+= 1
+                }
+            } else {
+                // Insert: choose an account from existing batch context (prefer first tx account, else any from balances/holdings)
+                let account: Account? = {
+                    if let a = batch.transactions.first?.account { return a }
+                    if let a = batch.balances.first?.account { return a }
+                    if let a = batch.holdings.first?.account { return a }
+                    return nil
+                }()
+                guard let targetAccount = account else { continue }
+                let saveKey = Hashing.hashKey(
+                    date: st.datePosted,
+                    amount: st.amount,
+                    payee: st.payee,
+                    memo: st.memo,
+                    symbol: st.symbol,
+                    quantity: st.quantity
+                )
+                let tx = Transaction(
+                    datePosted: st.datePosted,
+                    amount: st.amount,
+                    payee: st.payee,
+                    memo: st.memo,
+                    kind: st.kind,
+                    externalId: st.externalId,
+                    hashKey: saveKey,
+                    symbol: st.symbol,
+                    quantity: st.quantity,
+                    price: st.price,
+                    fees: st.fees,
+                    account: targetAccount,
+                    importBatch: batch,
+                    isUserCreated: false,
+                    isUserEdited: false,
+                    isExcluded: false,
+                    isUserModified: false,
+                    importHashKey: key
+                )
+                context.insert(tx)
+                batch.transactions.append(tx)
+                insertedTx &+= 1
+            }
+        }
+
+        // Delete existing that are not in staged (and not user-modified)
+        for ex in existingTx {
+            let key = ex.importHashKey ?? ex.hashKey
+            if stagedTxMap[key] == nil && !ex.isUserModified {
+                context.delete(ex)
+                deletedTx &+= 1
+            }
+        }
+
+        // BALANCES — match by asOfDate
+        var updatedBalances = 0, insertedBalances = 0, deletedBalances = 0
+        let existingBalances = batch.balances
+        let existingBalMap: [Date: BalanceSnapshot] = existingBalances.reduce(into: [:]) { acc, b in acc[b.asOfDate] = b }
+        let stagedBalMap: [Date: StagedBalance] = staged.balances.reduce(into: [:]) { acc, b in acc[b.asOfDate] = b }
+
+        for (date, sb) in stagedBalMap {
+            if let ex = existingBalMap[date] {
+                if !ex.isUserModified || forceUpdateBalanceDates.contains(date) {
+                    ex.balance = sb.balance
+                    if forceUpdateBalanceDates.contains(date) {
+                        ex.isUserModified = false
+                    }
+                    updatedBalances &+= 1
+                }
+            } else {
+                let account: Account? = {
+                    if let a = batch.balances.first?.account { return a }
+                    if let a = batch.transactions.first?.account { return a }
+                    if let a = batch.holdings.first?.account { return a }
+                    return nil
+                }()
+                if let acct = account {
+                    let bs = BalanceSnapshot(asOfDate: date, balance: sb.balance, account: acct, importBatch: batch)
+                    context.insert(bs)
+                    batch.balances.append(bs)
+                    insertedBalances &+= 1
+                }
+            }
+        }
+        for ex in existingBalances {
+            if stagedBalMap[ex.asOfDate] == nil && !ex.isUserModified {
+                context.delete(ex)
+                deletedBalances &+= 1
+            }
+        }
+
+        // HOLDINGS — match by (symbol, asOfDate)
+        var updatedHoldings = 0, insertedHoldings = 0, deletedHoldings = 0
+        func holdingKey(_ h: HoldingSnapshot) -> String { "\(h.security?.symbol ?? "")@\(h.asOfDate.timeIntervalSince1970)" }
+        func stagedHoldingKey(_ h: StagedHolding) -> String { "\(h.symbol)@\(h.asOfDate.timeIntervalSince1970)" }
+
+        let existingHoldMap: [String: HoldingSnapshot] = batch.holdings.reduce(into: [:]) { acc, h in acc[holdingKey(h)] = h }
+        let stagedHoldMap: [String: StagedHolding] = staged.holdings.reduce(into: [:]) { acc, h in acc[stagedHoldingKey(h)] = h }
+
+        for (key, sh) in stagedHoldMap {
+            let hKey = key
+            if let ex = existingHoldMap[key] {
+                if !ex.isUserModified || forceUpdateHoldingKeys.contains(hKey) {
+                    ex.quantity = sh.quantity
+                    ex.marketValue = sh.marketValue
+                    if forceUpdateHoldingKeys.contains(hKey) {
+                        ex.isUserModified = false
+                    }
+                    updatedHoldings &+= 1
+                }
+            } else {
+                let account: Account? = {
+                    if let a = batch.holdings.first?.account { return a }
+                    if let a = batch.transactions.first?.account { return a }
+                    if let a = batch.balances.first?.account { return a }
+                    return nil
+                }()
+                if let acct = account {
+                    let sec = Security(symbol: sh.symbol)
+                    context.insert(sec)
+                    let hs = HoldingSnapshot(asOfDate: sh.asOfDate, quantity: sh.quantity, marketValue: sh.marketValue, account: acct, security: sec, importBatch: batch)
+                    context.insert(hs)
+                    batch.holdings.append(hs)
+                    insertedHoldings &+= 1
+                }
+            }
+        }
+        for ex in batch.holdings {
+            if stagedHoldMap[holdingKey(ex)] == nil && !ex.isUserModified {
+                context.delete(ex)
+                deletedHoldings &+= 1
+            }
+        }
+
+        try context.save()
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+
+        return (
+            updatedTx, insertedTx, deletedTx,
+            updatedBalances, insertedBalances, deletedBalances,
+            updatedHoldings, insertedHoldings, deletedHoldings
+        )
     }
 }
 

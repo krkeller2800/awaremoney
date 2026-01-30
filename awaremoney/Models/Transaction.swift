@@ -44,6 +44,8 @@ final class Transaction {
     // Provenance and audit
     var isUserCreated: Bool = false
     var isUserEdited: Bool = false
+    var isExcluded: Bool = false
+    var isUserModified: Bool = false
     // Immutable key used for de-duplication across re-imports
     var importHashKey: String?
     // Optional originals for audit when edits occur
@@ -67,6 +69,8 @@ final class Transaction {
         importBatch: ImportBatch? = nil,
         isUserCreated: Bool = false,
         isUserEdited: Bool = false,
+        isExcluded: Bool = false,
+        isUserModified: Bool = false,
         importHashKey: String? = nil,
         originalAmount: Decimal? = nil,
         originalDate: Date? = nil
@@ -87,6 +91,8 @@ final class Transaction {
         self.importBatch = importBatch
         self.isUserCreated = isUserCreated
         self.isUserEdited = isUserEdited
+        self.isExcluded = isExcluded
+        self.isUserModified = isUserModified
         self.importHashKey = importHashKey
         self.originalAmount = originalAmount
         self.originalDate = originalDate

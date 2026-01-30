@@ -1,158 +1,183 @@
-//
-//  ImportFlowView.swift
-//  awaremoney
-//
-//  Created by Karl Keller on 1/23/26.
-//
-
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import Combine
 
 struct ImportFlowView: View {
     @Environment(\.modelContext) private var modelContext
-    @StateObject private var vm = ImportViewModel(parsers: [
-        PDFSummaryParser(),
-        BankCSVParser(),
-        BrokerageCSVParser(),
-        GenericHoldingsStatementCSVParser()
-    ])
-    @State private var isImporterPresented = false
-    private enum ImportMode { case general, pdfSummary, pdfTransactions }
-    @State private var importMode: ImportMode = .general
-#if DEBUG
-    @State private var isDebugSettingsPresented = false
-#endif
+    @StateObject private var vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
+
+    @State private var batches: [ImportBatch] = []
+    @State private var isFileImporterPresented = false
+    @State private var pickerKind: PickerKind? = nil
+
+    private enum PickerKind { case csv, pdf }
+
+    private func allowedTypesForCurrentPicker() -> [UTType] {
+        switch pickerKind {
+        case .csv:
+            var types: [UTType] = [.commaSeparatedText]
+            if let byExt = UTType(filenameExtension: "csv") { types.append(byExt) }
+            return types
+        case .pdf:
+            return [.pdf]
+        default:
+            // Default to CSV to avoid overly broad file types
+            var types: [UTType] = [.commaSeparatedText]
+            if let byExt = UTType(filenameExtension: "csv") { types.append(byExt) }
+            return types
+        }
+    }
+
+    private var emptyStateView: some View {
+        ContentUnavailableView(
+            "No Imports Yet",
+            systemImage: "tray",
+            description: Text("Import a CSV or PDF statement to get started.")
+        )
+        .listRowInsets(EdgeInsets())
+    }
+
+    private struct BatchRowContent: View {
+        let batch: ImportBatch
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(batch.label)
+                    .font(.body)
+                HStack(spacing: 8) {
+                    if let pid = batch.parserId, !pid.isEmpty {
+                        Text(pid)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(batch.createdAt, style: .date)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(batch.createdAt, style: .time)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func importsSection() -> some View {
+        if batches.isEmpty {
+            emptyStateView
+        } else {
+            ForEach(batches, id: \.id) { batch in
+                NavigationLink(destination: ImportBatchDetailView(batchID: batch.id)) {
+                    BatchRowContent(batch: batch)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sheetContent() -> some View {
+        if let staged = vm.staged {
+            ReviewImportView(staged: staged, vm: vm)
+                .environment(\.modelContext, modelContext)
+        } else if vm.mappingSession != nil {
+            NavigationStack { MappingView(vm: vm) }
+        } else {
+            EmptyView()
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                if let staged = vm.staged {
-                    ReviewImportView(staged: staged, vm: vm)
-                        .environment(\.modelContext, modelContext)
-                } else if vm.mappingSession != nil {
-                    VStack(spacing: 8) {
-                        if let info = vm.infoMessage, !info.isEmpty {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.yellow)
-                                Text(info)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(8)
-                        }
-                        MappingView(vm: vm)
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        ImportsListView()
-                        Text("Hint: Swipe left on an import to delete it.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
-                    }
-                }
-
-                if vm.isImporting {
-                    Color.black.opacity(0.25)
-                        .ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Importing…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(20)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.systemBackground))
-                    )
-                    .shadow(radius: 10)
-                    .zIndex(1)
+            List {
+                Section("Imports") {
+                    importsSection()
                 }
             }
             .navigationTitle("Import")
-            .onAppear {
-                AMLogging.always(String(describing: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!), component: "ImportFlowView")  // DEBUG LOG
+            .task { await loadBatches() }
+            .refreshable { await loadBatches() }
+            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+                Task { await loadBatches() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+                Task { await loadBatches() }
+            }
+            .onChange(of: pickerKind) { kind in
+                AMLogging.always("ImportFlowView: pickerKind changed to \(String(describing: kind))", component: "Import")
+            }
+            .onReceive(vm.$staged) { staged in
+                if let staged {
+                    AMLogging.always("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                } else {
+                    AMLogging.always("ImportFlowView: staged import cleared", component: "Import")
+                }
+            }
+            .onReceive(vm.$mappingSession) { session in
+                if let session {
+                    AMLogging.always("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
+                } else {
+                    AMLogging.always("ImportFlowView: mapping session cleared", component: "Import")
+                }
+            }
+            .fileImporter(
+                isPresented: $isFileImporterPresented,
+                allowedContentTypes: allowedTypesForCurrentPicker(),
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first {
+                        AMLogging.always("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
+                        vm.handlePickedURL(url)
+                    }
+                case .failure:
+                    break
+                }
+            }
+            .sheet(isPresented: .constant(vm.staged != nil || vm.mappingSession != nil)) {
+                sheetContent()
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        Button {
-                            vm.errorMessage = nil
-                            importMode = .pdfSummary
-                            isImporterPresented = true
-                        } label: {
-                            Text("Import PDF (Summary)")
+                    Menu("Import PDF") {
+                        Button("Loan Statement") {
+                            pickerKind = .pdf
+                            AMLogging.always("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                            isFileImporterPresented = true
                         }
-                        Button {
-                            vm.errorMessage = nil
-                            importMode = .pdfTransactions
-                            isImporterPresented = true
-                        } label: {
-                            Text("Import PDF (Transactions)")
+                        Button("Bank Statement") {
+                            pickerKind = .pdf
+                            AMLogging.always("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                            isFileImporterPresented = true
                         }
-#if DEBUG
-                        Divider()
-                        Button {
-                            isDebugSettingsPresented = true
-                        } label: {
-                            Text("Debug Settings")
-                        }
-#endif
-                    } label: {
-                        Text("More")
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        vm.errorMessage = nil
-                        importMode = .general
-                        isImporterPresented = true
+                        pickerKind = .csv
+                        AMLogging.always("ImportFlowView: presenting CSV picker", component: "Import")
+                        isFileImporterPresented = true
                     } label: {
                         Text("Import CSV")
                     }
                 }
             }
         }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: importMode == .pdfTransactions || importMode == .pdfSummary ? [.pdf] : [UTType.commaSeparatedText],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    vm.isImporting = true
-                    switch importMode {
-                    case .general:
-                        DispatchQueue.main.async { vm.handlePickedURL(url) }
-                    case .pdfSummary:
-                        DispatchQueue.main.async { vm.handlePickedURL(url) }
-                    case .pdfTransactions:
-                        DispatchQueue.main.async { vm.handlePickedPDFTransactionsURL(url) }
-                    }
-                }
-            case .failure(let error):
-                vm.errorMessage = error.localizedDescription
-            }
-        }
-        .alert("Import failed", isPresented: Binding(get: {
-            vm.errorMessage != nil
-        }, set: { newValue in
-            if newValue == false { vm.errorMessage = nil }
-        })) {
-            Button("OK", role: .cancel) { vm.errorMessage = nil }
-        } message: {
-            Text(vm.errorMessage ?? "")
-        }
-#if DEBUG
-        .sheet(isPresented: $isDebugSettingsPresented) {
-            DebugSettingsView()
-        }
-#endif
     }
+
+    @Sendable private func loadBatches() async {
+        do {
+            var desc = FetchDescriptor<ImportBatch>()
+            desc.sortBy = [SortDescriptor(\ImportBatch.createdAt, order: .reverse)]
+            let fetched = try modelContext.fetch(desc)
+            await MainActor.run { self.batches = fetched }
+        } catch {
+            await MainActor.run { self.batches = [] }
+        }
+    }
+}
+
+#Preview {
+    ImportFlowView()
 }
 

@@ -1,8 +1,10 @@
 #if DEBUG
 import SwiftUI
+import SwiftData
 
 struct DebugSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @State private var verboseEnabled: Bool = AMLogConfig.verbose
     @State private var categoryStates: [String: Bool] = [:]
     private let categoryKeys: [String] = [
@@ -63,6 +65,30 @@ struct DebugSettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                #if DEBUG
+                Section("Danger Zone") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Hard Delete All Import Batches")
+                            .font(.headline)
+                        Text("Irreversibly deletes all imported batches, transactions, balances, and holdings. You can re-import files afterward.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button(role: .destructive) {
+                            Task { @MainActor in
+                                do {
+                                    try ImportViewModel.hardDeleteAllBatches(context: modelContext)
+                                } catch {
+                                    // Intentionally swallow in debug UI; primary flows will surface errors
+                                    AMLogging.error("Hard delete all batches failed: \(error.localizedDescription)", component: "DebugSettingsView")
+                                }
+                            }
+                        } label: {
+                            Text("Delete All Imported Data")
+                        }
+                    }
+                }
+                #endif
             }
             .navigationTitle("Debug Settings")
             .task {
@@ -81,4 +107,5 @@ struct DebugSettingsView: View {
         }
     }
 }
+// What comes next: Hook this button up to a dedicated Import History screen where users can view batches, delete one, or replace it with a new file. This view will also surface conflicts and user-modified items.
 #endif
