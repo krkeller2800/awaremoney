@@ -111,11 +111,17 @@ final class ImportViewModel: ObservableObject {
 
                             // Guess account type
                             let sampleForGuess = Array(rows.prefix(50))
-                            if let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
+                            AMLogging.always("Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
+                            let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
+                            AMLogging.always("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
+                            if let guessedType = guessedType {
                                 stagedImport.suggestedAccountType = guessedType
                             }
                             if let suggested = stagedImport.suggestedAccountType {
                                 self.newAccountType = suggested
+                                AMLogging.always("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                            } else {
+                                AMLogging.always("No suggested account type from parser/guess", component: "ImportViewModel")
                             }
 
                             self.staged = stagedImport
@@ -219,10 +225,18 @@ final class ImportViewModel: ObservableObject {
 
                         // Guess account type (bank/credit card heuristic)
                         let sampleForGuess = Array(rows.prefix(50))
-                        if let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess) {
+                        AMLogging.always("[PDF TX] Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
+                        let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
+                        AMLogging.always("[PDF TX] Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
+                        if let guessedType = guessedType {
                             stagedImport.suggestedAccountType = guessedType
                         }
-                        if let suggested = stagedImport.suggestedAccountType { self.newAccountType = suggested }
+                        if let suggested = stagedImport.suggestedAccountType {
+                            self.newAccountType = suggested
+                            AMLogging.always("[PDF TX] Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                        } else {
+                            AMLogging.always("[PDF TX] No suggested account type", component: "ImportViewModel")
+                        }
 
                         self.staged = stagedImport
                         var messages: [String] = ["PDF transactions are experimental. Please review signs before saving."]
@@ -276,6 +290,9 @@ final class ImportViewModel: ObservableObject {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
             if s.contains("savings") { return "savings" }
+            if s.contains("brokerage") || s.contains("investment") || s.contains("stock") || s.contains("options") {
+                return "brokerage"
+            }
             return nil
         }
 
@@ -807,6 +824,8 @@ final class ImportViewModel: ObservableObject {
 
     // Best-effort account type inference from filename/headers and sample row content
     private func guessAccountType(from fileName: String, headers: [String], sampleRows: [[String]]) -> Account.AccountType? {
+        AMLogging.always("GuessAccountType: start — file: \(fileName), headers: \(headers)", component: "ImportViewModel")
+
         let normalizedFile = fileName
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
@@ -817,13 +836,15 @@ final class ImportViewModel: ObservableObject {
 
         // 1) Brokerage signals in headers
         let brokerageHeaderSignals = [
-            "symbol", "ticker", "cusip", "qty", "quantity", "shares", "share", "price", "security"
+            "symbol", "ticker", "cusip", "qty", "quantity", "shares", "share", "price", "security",
+            "securities", "stock", "stocks", "equity", "equities", "option", "options", "portfolio", "market value", "cost basis"
         ]
         let hasBrokerageHeader = lowerHeaders.contains { h in
             brokerageHeaderSignals.contains { sig in h == sig || h.contains(sig) }
         }
+        AMLogging.always("GuessAccountType: hasBrokerageHeader=\(hasBrokerageHeader)", component: "ImportViewModel")
         if hasBrokerageHeader {
-            AMLogging.always("GuessAccountType: Brokerage by header signal", component: "ImportViewModel")
+            AMLogging.always("GuessAccountType: returning .brokerage due to header", component: "ImportViewModel")
             return .brokerage
         }
 
@@ -837,6 +858,7 @@ final class ImportViewModel: ObservableObject {
             return nil
         }
         let descIdx = probableDescriptionIndex()
+        AMLogging.always("GuessAccountType: probable description index=\(String(describing: descIdx))", component: "ImportViewModel")
         let brokerageKeywords = [
             "buy", "bought", "sell", "sold", "dividend", "reinvest", "reinvestment", "interest", "cap gain", "capital gain",
             "distribution", "split", "spinoff", "spin-off", "option", "call", "put", "exercise", "assign", "assignment", "expiration",
@@ -852,9 +874,24 @@ final class ImportViewModel: ObservableObject {
                 if brokerageHits >= 2 { break }
             }
         }
+        AMLogging.always("GuessAccountType: brokerage keyword hits=\(brokerageHits)", component: "ImportViewModel")
         if brokerageHits >= 2 || (brokerageHits == 1 && sampleRows.count <= 5) {
-            AMLogging.always("GuessAccountType: Brokerage by row keyword hits = \(brokerageHits)", component: "ImportViewModel")
+            AMLogging.always("GuessAccountType: returning .brokerage due to keyword hits", component: "ImportViewModel")
             return .brokerage
+        }
+
+        // 2b) If the 'account' header is present and any row mentions brokerage/ira-like keywords, treat as brokerage
+        let hasAccountHeader = lowerHeaders.contains { $0.contains("account") }
+        if hasAccountHeader {
+            let accountTypeKeywords = ["brokerage","ira","roth","401k","retirement","custodial","portfolio","investment"]
+            let mentionsAccountType = sampleRows.contains { row in
+                let text = row.joined(separator: " ").lowercased()
+                return accountTypeKeywords.contains { text.contains($0) }
+            }
+            if mentionsAccountType {
+                AMLogging.always("GuessAccountType: returning .brokerage due to account header + account-type keywords in rows", component: "ImportViewModel")
+                return .brokerage
+            }
         }
 
         // 3) Credit card heuristics (applied only if no brokerage signals)
@@ -863,16 +900,22 @@ final class ImportViewModel: ObservableObject {
         let hasDebitCredit = lowerHeaders.contains("debit") || lowerHeaders.contains("credit")
         let hasBalance = lowerHeaders.contains(where: { $0.contains("balance") })
         if hasCategory && hasType && !hasDebitCredit && !hasBalance {
-            AMLogging.always("GuessAccountType: CreditCard by header heuristic", component: "ImportViewModel")
+            AMLogging.always("GuessAccountType: returning .creditCard due to header heuristic (hasCategory=\(hasCategory), hasType=\(hasType), hasDebitCredit=\(hasDebitCredit), hasBalance=\(hasBalance))", component: "ImportViewModel")
             return .creditCard
         }
 
         // 4) Filename-based hints (fallback only)
         if normalizedFile.contains("creditcard") || (normalizedFile.contains("credit") && normalizedFile.contains("card")) || normalizedFile.contains("cc") {
-            AMLogging.always("GuessAccountType: CreditCard by filename", component: "ImportViewModel")
+            AMLogging.always("GuessAccountType: returning .creditCard due to filename heuristic", component: "ImportViewModel")
             return .creditCard
         }
 
+        if normalizedFile.contains("ira") || normalizedFile.contains("roth") || normalizedFile.contains("401k") || normalizedFile.contains("brokerage") || normalizedFile.contains("investment") || normalizedFile.contains("retirement") {
+            AMLogging.always("GuessAccountType: returning .brokerage due to filename heuristic", component: "ImportViewModel")
+            return .brokerage
+        }
+
+        AMLogging.always("GuessAccountType: no match — returning nil", component: "ImportViewModel")
         return nil
     }
 
@@ -885,11 +928,12 @@ final class ImportViewModel: ObservableObject {
             return .checking
         case "savings":
             return .savings
+        case "brokerage":
+            return .brokerage
         default:
             return nil
         }
     }
-
     // Helpers for diagnostics
     private func latestBalance(for account: Account, context: ModelContext) throws -> Decimal? {
         let accountID = account.id

@@ -4,6 +4,9 @@ import SwiftData
 struct AccountsListView: View {
     @Query(sort: \Account.name) private var accounts: [Account]
     @State private var refreshTick: Int = 0
+#if DEBUG
+    @State private var isDebugSettingsPresented: Bool = false
+#endif
 
     var body: some View {
         NavigationStack {
@@ -30,6 +33,20 @@ struct AccountsListView: View {
             .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
                 refreshTick &+= 1
             }
+#if DEBUG
+            .sheet(isPresented: $isDebugSettingsPresented) {
+                DebugSettingsView()
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        isDebugSettingsPresented = true
+                    } label: {
+                        Label("Debug", systemImage: "ladybug")
+                    }
+                }
+            }
+#endif
         }
     }
 }

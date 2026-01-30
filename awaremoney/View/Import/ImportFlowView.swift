@@ -20,6 +20,9 @@ struct ImportFlowView: View {
     @State private var isImporterPresented = false
     private enum ImportMode { case general, pdfSummary, pdfTransactions }
     @State private var importMode: ImportMode = .general
+#if DEBUG
+    @State private var isDebugSettingsPresented = false
+#endif
 
     var body: some View {
         NavigationStack {
@@ -91,6 +94,14 @@ struct ImportFlowView: View {
                         } label: {
                             Text("Import PDF (Transactions)")
                         }
+#if DEBUG
+                        Divider()
+                        Button {
+                            isDebugSettingsPresented = true
+                        } label: {
+                            Text("Debug Settings")
+                        }
+#endif
                     } label: {
                         Text("More")
                     }
@@ -137,6 +148,11 @@ struct ImportFlowView: View {
         } message: {
             Text(vm.errorMessage ?? "")
         }
+#if DEBUG
+        .sheet(isPresented: $isDebugSettingsPresented) {
+            DebugSettingsView()
+        }
+#endif
     }
 }
 

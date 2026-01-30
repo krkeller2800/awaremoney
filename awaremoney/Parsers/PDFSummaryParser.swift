@@ -35,6 +35,10 @@ struct PDFSummaryParser: StatementParser {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
             if s.contains("savings") { return "savings" }
+            // Recognize brokerage/investment-related labels
+            if s.contains("brokerage") || s.contains("investment") || s.contains("ira") || s.contains("roth") || s.contains("401k") || s.contains("stock") || s.contains("options") || s.contains("portfolio") {
+                return "brokerage"
+            }
             return nil
         }
 

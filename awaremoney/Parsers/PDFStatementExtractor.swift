@@ -2,22 +2,53 @@ import Foundation
 import PDFKit
 import CoreGraphics
 import Vision
+import Darwin
 
 enum PDFStatementExtractor {
     enum Mode { case summaryOnly, transactions }
 
+    // Toggle OCR-based layout extraction (renders pages and can emit noisy system logs)
+    static let enableOCR: Bool = false
+
+    // Silences system logs (stderr/stdout) within the provided block to suppress noisy PDFKit/CoreText messages.
+    private static func withSilencedSystemLogs<T>(_ body: () throws -> T) rethrows -> T {
+        let stderrCopy = dup(STDERR_FILENO)
+        let stdoutCopy = dup(STDOUT_FILENO)
+        let nullPath = "/dev/null"
+        let nullOut = open(nullPath, O_WRONLY)
+        if nullOut != -1 {
+            fflush(stderr)
+            fflush(stdout)
+            dup2(nullOut, STDERR_FILENO)
+            dup2(nullOut, STDOUT_FILENO)
+            close(nullOut)
+        }
+        defer {
+            fflush(stderr)
+            fflush(stdout)
+            if stderrCopy != -1 { dup2(stderrCopy, STDERR_FILENO); close(stderrCopy) }
+            if stdoutCopy != -1 { dup2(stdoutCopy, STDOUT_FILENO); close(stdoutCopy) }
+        }
+        return try body()
+    }
+
     static func parse(url: URL, mode: Mode = .summaryOnly) throws -> (rows: [[String]], headers: [String]) {
-        guard let doc = PDFDocument(url: url) else {
-            throw ImportError.parseFailure("Unable to open PDF. If the file is stored in iCloud, make sure it has finished downloading. If the PDF is password-protected, please remove the password and try again.")
+        let doc: PDFDocument = try withSilencedSystemLogs {
+            guard let d = PDFDocument(url: url) else {
+                throw ImportError.parseFailure("Unable to open PDF. If the file is stored in iCloud, make sure it has finished downloading. If the PDF is password-protected, please remove the password and try again.")
+            }
+            return d
         }
         // Extract text across all pages
         var text = ""
         let pageBreakMarker = "<<<PAGE_BREAK>>>"
-        for i in 0..<doc.pageCount {
-            if let page = doc.page(at: i), let s = page.string {
-                text += s + "\n"
-                if i < doc.pageCount - 1 {
-                    text += pageBreakMarker + "\n"
+        withSilencedSystemLogs {
+            for i in 0..<doc.pageCount {
+                if let page = doc.page(at: i), let s = page.string {
+                    text += s + "\n"
+                    if i < doc.pageCount - 1 {
+                        text += pageBreakMarker + "\n"
+                    }
                 }
             }
         }
@@ -480,7 +511,7 @@ enum PDFStatementExtractor {
             return false
         }
 
-        enum AccountKind { case unknown, checking, savings }
+        enum AccountKind { case unknown, checking, savings, investment }
         enum FlowKind { case none, deposit, withdrawal }
 
         var currentAccount: AccountKind = .unknown
@@ -490,6 +521,7 @@ enum PDFStatementExtractor {
             switch currentAccount {
             case .checking: return "checking"
             case .savings: return "savings"
+            case .investment: return "brokerage"
             case .unknown: return "unknown"
             }
         }
@@ -503,6 +535,7 @@ enum PDFStatementExtractor {
                 if pageDefaults[pageIdx] == nil {
                     if isSavingsHeader(l) { pageDefaults[pageIdx] = .savings }
                     else if isCheckingHeader(l) { pageDefaults[pageIdx] = .checking }
+                    else if isInvestmentHeader(l) { pageDefaults[pageIdx] = .investment }
                 }
             }
         }
@@ -513,11 +546,13 @@ enum PDFStatementExtractor {
             switch currentAccount {
             case .checking: return "checking"
             case .savings: return "savings"
+            case .investment: return "brokerage"
             case .unknown:
                 if let def = pageDefaults[currentPageIndex] {
                     switch def {
                     case .checking: return "checking"
                     case .savings: return "savings"
+                    case .investment: return "brokerage"
                     default: break
                     }
                 }
@@ -553,7 +588,19 @@ enum PDFStatementExtractor {
                 return lower.contains("checking") && !lower.contains("savings") && !hasDigits && (!hasLowercase || raw.count <= 24)
             }
         }
-
+        func contextIndicatesInvestment() -> Bool {
+            return recentContext.contains { line in
+                let raw = line
+                let lower = raw.lowercased()
+                if lower.contains("from a checking") || lower.contains("from checking") { return false }
+                if lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("portfolio") || lower.contains("stock") || lower.contains("options") {
+                    let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
+                    let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
+                    return !lower.contains("savings") && !lower.contains("checking") && (!hasDigits || raw.count <= 24) && (!hasLowercase || raw.count <= 28)
+                }
+                return false
+            }
+        }
         func isSavingsHeader(_ s: String) -> Bool {
             let raw = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let lower = raw.lowercased()
@@ -585,6 +632,32 @@ enum PDFStatementExtractor {
             let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
             let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
             if lower.contains("checking") && !lower.contains("savings") && !hasDigits && (!hasLowercase || raw.count <= 24) {
+                return true
+            }
+            return false
+        }
+        func isInvestmentHeader(_ s: String) -> Bool {
+            let raw = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = raw.lowercased()
+            // Ignore incidental mentions
+            if lower.contains("from a checking") || lower.contains("from checking") || lower.contains("transfer") || lower.contains("automatic") { return false }
+            // Strong investment/brokerage signals
+            if lower.contains("brokerage account") { return true }
+            if lower.contains("fidelity investments") { return true }
+            if lower.contains("fidelity") && (lower.contains("brokerage") || lower.contains("investment") || lower.contains("portfolio")) { return true }
+            if lower.contains("ira") { return true } // Roth/Traditional IRA
+            // Treat common section headers like "Stock" and "Options" as investment headers
+            if lower.contains("stock") || lower.contains("options") {
+                let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
+                let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
+                if !lower.contains("savings") && !lower.contains("checking") && (!hasDigits || raw.count <= 24) && (!hasLowercase || raw.count <= 28) {
+                    return true
+                }
+            }
+            // Generic header-like: contains brokerage/investment, no digits, and mostly uppercase or short
+            let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
+            let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
+            if (lower.contains("brokerage") || lower.contains("investment") || lower.contains("stock") || lower.contains("options")) && !lower.contains("savings") && !lower.contains("checking") && !hasDigits && (!hasLowercase || raw.count <= 28) {
                 return true
             }
             return false
@@ -700,18 +773,21 @@ enum PDFStatementExtractor {
             let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
             let desc = cleanDesc(descParts.joined(separator: " "))
             if isSavingsHeader(desc) { currentAccount = .savings }
+            else if isInvestmentHeader(desc) { currentAccount = .investment }
             return ([date, desc, amt, balanceStr ?? ""], max(1, j - start))
         }
 
         var rows: [[String]] = []
         var usedLayout: Bool = false
-        do {
-            let layout = layoutTryExtraction(doc: doc, inferredYear: inferredYear)
-            AMLogging.always("PDF layout-based attempt — rows: \(layout.rows.count), conf: \(String(format: "%.2f", layout.confidence))", component: "PDFStatementExtractor")
-            if layout.rows.count >= 5 && layout.confidence >= 0.6 {
-                rows = layout.rows
-                usedLayout = true
-                AMLogging.always("PDF layout-based extraction accepted (using layout rows)", component: "PDFStatementExtractor")
+        if enableOCR {
+            do {
+                let layout = layoutTryExtraction(doc: doc, inferredYear: inferredYear)
+                AMLogging.always("PDF layout-based attempt — rows: \(layout.rows.count), conf: \(String(format: "%.2f", layout.confidence))", component: "PDFStatementExtractor")
+                if layout.rows.count >= 5 && layout.confidence >= 0.6 {
+                    rows = layout.rows
+                    usedLayout = true
+                    AMLogging.always("PDF layout-based extraction accepted (using layout rows)", component: "PDFStatementExtractor")
+                }
             }
         }
 
@@ -736,11 +812,22 @@ enum PDFStatementExtractor {
                     // Update section/account state on non-date lines
                     if isSavingsHeader(line) { currentAccount = .savings; AMLogging.always("PDF section: SAVINGS detected at line \(i)", component: "PDFStatementExtractor") }
                     else if isCheckingHeader(line) { currentAccount = .checking; AMLogging.always("PDF section: CHECKING detected at line \(i)", component: "PDFStatementExtractor") }
-                    // Account meta lines like "Primary Account: ..." can also indicate checking/savings
+                    else if isInvestmentHeader(line) { currentAccount = .investment; AMLogging.always("PDF section: INVESTMENT detected at line \(i)", component: "PDFStatementExtractor") }
+                    do {
+                        let lowerKW = line.lowercased()
+                        if (lowerKW.contains("stock") || lowerKW.contains("options")) && currentAccount != .investment && !isInvestmentHeader(line) {
+                            AMLogging.always("PDF INVESTMENT keywords present but not recognized as header at line \(i): \(line)", component: "PDFStatementExtractor")
+                        }
+                    }
+                    // Account meta lines like "Primary Account: ..." can also indicate checking/savings/investment
                     if isAccountMetaLine(line) {
                         let lower = line.lowercased()
                         if lower.contains("savings") { currentAccount = .savings; AMLogging.always("PDF account meta => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
                         else if lower.contains("checking") { currentAccount = .checking; AMLogging.always("PDF account meta => CHECKING at line \(i)", component: "PDFStatementExtractor") }
+                        else if lower.contains("brokerage") || lower.contains("investment") || lower.contains("fidelity") || lower.contains("ira") {
+                            currentAccount = .investment
+                            AMLogging.always("PDF account meta => INVESTMENT at line \(i)", component: "PDFStatementExtractor")
+                        }
                     }
                     if isDepositsHeader(line) { currentFlow = .deposit; AMLogging.always("PDF flow: DEPOSITS detected at line \(i)", component: "PDFStatementExtractor") }
                     else if isWithdrawalsHeader(line) { currentFlow = .withdrawal; AMLogging.always("PDF flow: WITHDRAWALS detected at line \(i)", component: "PDFStatementExtractor") }
@@ -758,6 +845,7 @@ enum PDFStatementExtractor {
                 if currentAccount == .unknown {
                     if contextIndicatesSavings() { currentAccount = .savings; AMLogging.always("PDF context => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
                     else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.always("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
+                    else if contextIndicatesInvestment() { currentAccount = .investment; AMLogging.always("PDF context => INVESTMENT at line \(i)", component: "PDFStatementExtractor") }
                 }
 
                 // Try multi-line reconstruction before strict single-line match
@@ -794,8 +882,9 @@ enum PDFStatementExtractor {
                     }()
                     let date = normalizeDateString(dateTokenChoice, inferredYear: inferredYear)
                     let desc = cleanDesc(descRaw)
-                    // If the description itself indicates Savings in a date-start line, treat it as savings
+                    // If the description itself indicates account type, update context
                     if isSavingsHeader(desc) { currentAccount = .savings }
+                    else if isInvestmentHeader(desc) { currentAccount = .investment }
                     let amount = applySectionSign(amount: sanitizeAmount(amtRaw))
                     let balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
                     rows.append([date, desc, amount, balance, accountLabelForRow()])
@@ -857,12 +946,16 @@ enum PDFStatementExtractor {
                     let l = lines[i]
                     if isSavingsHeader(l) { return .savings }
                     if isCheckingHeader(l) { return .checking }
+                    if isInvestmentHeader(l) { return .investment }
                     let lower = l.lowercased()
                     if lower.contains("savings account") || lower.contains("savings summary") || lower.contains("savings") {
                         if !lower.contains("from a checking") && !lower.contains("from checking") { return .savings }
                     }
                     if lower.contains("checking account") || lower.contains("checking summary") || lower.contains("checking") {
                         if !lower.contains("from a checking") && !lower.contains("from checking") { return .checking }
+                    }
+                    if lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("stock") || lower.contains("options") {
+                        if !lower.contains("savings") && !lower.contains("checking") { return .investment }
                     }
                     if isPageBreak(l) { break }
                     i -= 1
@@ -951,7 +1044,7 @@ enum PDFStatementExtractor {
 
             // Debug helpers for logging
             func kindName(_ k: AccountKind) -> String {
-                switch k { case .checking: return "checking"; case .savings: return "savings"; default: return "unknown" }
+                switch k { case .checking: return "checking"; case .savings: return "savings"; case .investment: return "brokerage"; default: return "unknown" }
             }
             func debugBalances(_ dict: [AccountKind: (begin: String?, end: String?)]) -> String {
                 return dict.map { (k, v) in
@@ -961,26 +1054,32 @@ enum PDFStatementExtractor {
 
             // Attempt to extract a 4-digit account suffix (e.g., 0411) near headers for a given account kind
             func detectAccountSuffix(for kind: AccountKind, in lines: [String]) -> String? {
-                let keyword: String = {
-                    switch kind { case .savings: return "savings"; case .checking: return "checking"; default: return "" }
-                }()
-                if keyword.isEmpty { return nil }
+                let keywords: [String]
+                switch kind {
+                case .savings:
+                    keywords = ["savings"]
+                case .checking:
+                    keywords = ["checking"]
+                case .investment:
+                    keywords = ["brokerage", "investment", "fidelity", "ira", "rollover ira", "stock", "options"]
+                case .unknown:
+                    keywords = []
+                }
+                if keywords.isEmpty { return nil }
                 let suffixRegex = try! NSRegularExpression(pattern: #"(?:^|[^0-9])(\d{4})(?:[^0-9]|$)"#)
                 for line in lines {
                     let lower = line.lowercased()
-                    if lower.contains(keyword) {
-                        // Prefer lines that also mention 'account' or look like a header with a dash
+                    if keywords.contains(where: { lower.contains($0) }) {
                         if lower.contains("account") || lower.contains("acct") || line.contains(" - ") || line.contains("—") || line.contains("–") {
                             let ns = line as NSString
                             let range = NSRange(location: 0, length: ns.length)
-                            if let m = suffixRegex.matches(in: line, options: [], range: range).last {
-                                if m.numberOfRanges >= 2 {
-                                    let r = m.range(at: 1)
-                                    if r.location != NSNotFound {
-                                        let last4 = ns.substring(with: r)
-                                        AMLogging.always("PDF summary: detected suffix \(last4) for \(keyword) in line: \(line)", component: "PDFStatementExtractor")
-                                        return last4
-                                    }
+                            let matches = suffixRegex.matches(in: line, options: [], range: range)
+                            if let m = matches.last, m.numberOfRanges >= 2 {
+                                let r = m.range(at: 1)
+                                if r.location != NSNotFound {
+                                    let last4 = ns.substring(with: r)
+                                    AMLogging.always("PDF summary: detected suffix \(last4) for \(keywords.first ?? "") in line: \(line)", component: "PDFStatementExtractor")
+                                    return last4
                                 }
                             }
                         }
@@ -991,7 +1090,7 @@ enum PDFStatementExtractor {
 
             func accountDisplayLabel(for kind: AccountKind, using lines: [String]) -> String {
                 let base: String = {
-                    switch kind { case .savings: return "Savings"; case .checking: return "Checking"; default: return "unknown" }
+                    switch kind { case .savings: return "Savings"; case .checking: return "Checking"; case .investment: return "Brokerage"; default: return "unknown" }
                 }()
                 if base == "unknown" { return base }
                 if let last4 = detectAccountSuffix(for: kind, in: lines) {
@@ -1004,6 +1103,7 @@ enum PDFStatementExtractor {
                 switch kind {
                 case .savings: return "savings"
                 case .checking: return "checking"
+                case .investment: return "brokerage"
                 default: return "unknown"
                 }
             }
@@ -1060,7 +1160,7 @@ enum PDFStatementExtractor {
 
             // If none found, try OCR lines for summary amounts and period
             let hasAnyTextBalances = balancesByAccount.values.contains { $0.begin != nil || $0.end != nil }
-            if !hasAnyTextBalances {
+            if !hasAnyTextBalances && enableOCR {
                 let ocrLines = ocrExtractLines(from: doc, scale: 2.0)
                 let ocrBalances = findBalancesPerAccount(in: ocrLines)
                 let hasAnyOCR = ocrBalances.values.contains { $0.begin != nil || $0.end != nil }
@@ -1080,7 +1180,12 @@ enum PDFStatementExtractor {
                 let sourceLinesAll = balancesFromOCR ? ocrLinesLocal : lines
                 let docHasSavings = sourceLinesAll.contains { $0.lowercased().contains("savings") }
                 let docHasChecking = sourceLinesAll.contains { $0.lowercased().contains("checking") }
-                if balancesByAccount[.savings] == nil && docHasSavings && !docHasChecking {
+                let docHasInvestment = sourceLinesAll.contains { let l = $0.lowercased(); return l.contains("brokerage") || l.contains("investment") || l.contains("fidelity") || l.contains("stock") || l.contains("options") }
+                if balancesByAccount[.investment] == nil && docHasInvestment {
+                    balancesByAccount[.investment] = unknownPair
+                    balancesByAccount.removeValue(forKey: .unknown)
+                    AMLogging.always("PDF summary: mapped unknown balances to investment based on document hints", component: "PDFStatementExtractor")
+                } else if balancesByAccount[.savings] == nil && docHasSavings && !docHasChecking {
                     balancesByAccount[.savings] = unknownPair
                     balancesByAccount.removeValue(forKey: .unknown)
                     AMLogging.always("PDF summary: mapped unknown balances to savings based on document hints", component: "PDFStatementExtractor")
@@ -1138,11 +1243,17 @@ enum PDFStatementExtractor {
             // In summary-only mode, clear balances for non-summary rows
             if mode == .summaryOnly {
                 for idx in 0..<rows.count {
-                    if rows[idx].count >= 4 && !rows[idx][3].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let descLower = rows[idx][1].lowercased()
-                        if !descLower.contains("statement beginning balance") && !descLower.contains("statement ending balance") {
-                            rows[idx][3] = ""
+                    if rows[idx].count >= 5 {
+                        var key = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if key.isEmpty || key == "unknown" || key.contains("•") || key.contains("account") {
+                            let descLower = rows[idx][1].lowercased()
+                            if descLower.contains("savings") { key = "savings" }
+                            else if descLower.contains("checking") { key = "checking" }
+                            else if descLower.contains("investment") || descLower.contains("brokerage") || descLower.contains("fidelity") { key = "brokerage" }
+                            // INSERT THIS LINE:
+                            else if descLower.contains("stock") || descLower.contains("options") { key = "brokerage" }
                         }
+                        rows[idx][4] = key.isEmpty ? "unknown" : key
                     }
                 }
             }
@@ -1157,6 +1268,9 @@ enum PDFStatementExtractor {
                         let descLower = rows[idx][1].lowercased()
                         if descLower.contains("savings") { key = "savings" }
                         else if descLower.contains("checking") { key = "checking" }
+                        else if descLower.contains("investment") || descLower.contains("brokerage") || descLower.contains("fidelity") { key = "brokerage" }
+                        // INSERT THIS LINE:
+                        else if descLower.contains("stock") || descLower.contains("options") { key = "brokerage" }
                     }
                     rows[idx][4] = key.isEmpty ? "unknown" : key
                 }
