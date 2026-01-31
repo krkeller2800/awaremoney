@@ -3,14 +3,29 @@ import SwiftData
 import Charts
 
 struct NetWorthChartView: View {
+    private enum ChartMode: String, CaseIterable, Identifiable {
+        case assets = "Assets"
+        case liabilities = "Liabilities"
+        var id: String { rawValue }
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
     @State private var slices: [AccountSlice] = []
+    @State private var mode: ChartMode = .assets
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading) {
+                Picker("View", selection: $mode) {
+                    ForEach(ChartMode.allCases) { m in
+                        Text(m.rawValue).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
                 if slices.isEmpty {
                     emptyState
                 } else {
@@ -27,6 +42,7 @@ struct NetWorthChartView: View {
             .task { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in Task { await load() } }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in Task { await load() } }
+            .onChange(of: mode) { _ in Task { await load() } }
         }
     }
     
@@ -80,6 +96,7 @@ struct NetWorthChartView: View {
         case .checking: return "checking"
         case .savings: return "savings"
         case .creditCard: return "credit card"
+        case .loan: return "loan"
         case .cash: return "cash"
         case .brokerage: return "brokerage"
         case .other: return "other"
@@ -108,14 +125,23 @@ struct NetWorthChartView: View {
                     }
                 }()
 
-                // For a pie chart, only include positive balances (assets). Negative values (liabilities) are omitted.
-                if value > 0 {
+                let include: Bool
+                let magnitude: Decimal
+                switch mode {
+                case .assets:
+                    include = value > 0
+                    magnitude = value
+                case .liabilities:
+                    include = value < 0
+                    magnitude = value < 0 ? -value : value
+                }
+                if include {
                     let baseName: String = {
                         let inst = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                         return inst.isEmpty ? acct.name : inst
                     }()
                     let displayName = "\(baseName) \(typeDisplayName(acct.type))"
-                    out.append(AccountSlice(id: acct.id.uuidString, name: displayName, value: value, currencyCode: acct.currencyCode, type: acct.type))
+                    out.append(AccountSlice(id: acct.id.uuidString, name: displayName, value: magnitude, currencyCode: acct.currencyCode, type: acct.type))
                 }
             }
 

@@ -45,7 +45,9 @@ struct PDFSummaryParser: StatementParser {
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
             let desc = value(row, map, key: "description")?.lowercased() ?? ""
-            guard desc.contains("statement beginning balance") || desc.contains("statement ending balance") else { continue }
+            let isStatementSummary = desc.contains("statement beginning balance") || desc.contains("statement ending balance")
+            let isLoanSummary = desc.contains("beginning balance") || desc.contains("ending balance") || desc.contains("current amount due") || desc.contains("amount due") || desc.contains("payment due") || desc.contains("principal balance") || desc.contains("outstanding principal")
+            guard isStatementSummary || isLoanSummary else { continue }
             guard let dateStr = value(row, map, key: "date"), let date = parseDate(dateStr) else { continue }
 
             // Prefer the explicit balance column if present; otherwise fall back to amount (should be 0)
@@ -56,7 +58,15 @@ struct PDFSummaryParser: StatementParser {
 
             var sb = StagedBalance(asOfDate: date, balance: dec)
             // Prefer explicit Account column, fallback to description text
-            let accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
+            var accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
+            // Bias to loan when loan phrases are present
+            let loanPhrases = ["loan", "mortgage", "principal balance", "outstanding principal", "amount due", "payment due"]
+            if accountKey == nil {
+                let lower = desc
+                if loanPhrases.contains(where: { lower.contains($0) }) {
+                    accountKey = "loan"
+                }
+            }
             sb.sourceAccountLabel = accountKey
             balances.append(sb)
         }

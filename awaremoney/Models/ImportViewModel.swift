@@ -22,6 +22,7 @@ final class ImportViewModel: ObservableObject {
     @Published var mappingSession: MappingSession? // non-nil when user needs to map columns
     @Published var infoMessage: String?
     @Published var isImporting: Bool = false
+    @Published var userSelectedDocHint: Account.AccountType? = nil
 
     private let importer = StatementImporter()
 
@@ -86,8 +87,18 @@ final class ImportViewModel: ObservableObject {
                 let ext = url.pathExtension.lowercased()
                 let rowsAndHeaders: ([[String]], [String])
                 if ext == "pdf" {
-                    rowsAndHeaders = try await MainActor.run {
-                        try PDFStatementExtractor.parse(url: url)
+                    // Try summary-only first; if it fails, retry transactions mode to salvage activity/summary
+                    do {
+                        let primary = try await MainActor.run {
+                            try PDFStatementExtractor.parse(url: url, mode: .summaryOnly)
+                        }
+                        rowsAndHeaders = primary
+                    } catch {
+                        AMLogging.always("ImportViewModel: PDF summary-only failed (\(error.localizedDescription)); retrying transactions mode", component: "ImportViewModel")
+                        let fallback = try await MainActor.run {
+                            try PDFStatementExtractor.parse(url: url, mode: .transactions)
+                        }
+                        rowsAndHeaders = fallback
                     }
                 } else {
                     let data = try Data(contentsOf: url)
@@ -175,6 +186,7 @@ final class ImportViewModel: ObservableObject {
                         }
                     }
 
+                    self.userSelectedDocHint = nil
                     self.isImporting = false
                 }
             } catch {
@@ -184,6 +196,7 @@ final class ImportViewModel: ObservableObject {
                     self.errorMessage = userMessage
                     self.infoMessage = nil
                     self.staged = nil
+                    self.userSelectedDocHint = nil
                     self.isImporting = false
                 }
             }
@@ -206,11 +219,18 @@ final class ImportViewModel: ObservableObject {
         let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
         AMLogging.always("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
 
-        // Helper to normalize PDF labels to canonical strings
+        // Helper to normalize PDF/CSV labels to canonical strings
         func normalizedLabel(_ raw: String?) -> String? {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
             if s.contains("savings") { return "savings" }
+            // Recognize credit card labels/issuers
+            if s.contains("credit card") || s.contains("visa") || s.contains("mastercard") || s.contains("amex") || s.contains("american express") || s.contains("discover") {
+                return "creditCard"
+            }
+            // Recognize loan/mortgage labels
+            if s.contains("loan") || s.contains("mortgage") { return "loan" }
+            // Recognize brokerage/investment-related labels
             if s.contains("brokerage") || s.contains("investment") || s.contains("stock") || s.contains("options") {
                 return "brokerage"
             }
@@ -501,16 +521,27 @@ final class ImportViewModel: ObservableObject {
             let key = normalizedLabel(b.sourceAccountLabel) ?? "default"
             let targetAccount = accountsByLabel[key] ?? accountsByLabel.values.first
             guard let account = targetAccount else { continue }
+            let rawBalance = b.balance
+            let coercedBalance: Decimal = {
+                if account.type == .loan || account.type == .creditCard {
+                    return rawBalance <= 0 ? rawBalance : -rawBalance
+                } else {
+                    return rawBalance
+                }
+            }()
+            if coercedBalance != rawBalance {
+                AMLogging.always("Coerced liability balance to negative — original: \(rawBalance), coerced: \(coercedBalance), accountType: \(account.type.rawValue)", component: "ImportViewModel")
+            }
             let bs = BalanceSnapshot(
                 asOfDate: b.asOfDate,
-                balance: b.balance,
+                balance: coercedBalance,
                 account: account,
                 importBatch: batch
             )
             context.insert(bs)
             batch.balances.append(bs)
             insertedBalancesCount += 1
-            AMLogging.always("Inserted balance — asOf: \(b.asOfDate), balance: \(b.balance), label: \(key), account: \(account.name)", component: "ImportViewModel")
+            AMLogging.always("Inserted balance — asOf: \(b.asOfDate), balance: \(coercedBalance), label: \(key), account: \(account.name)", component: "ImportViewModel")
         }
 
         AMLogging.log("Insert summary — tx: \(insertedTxCount), holdings: \(insertedHoldingsCount), balances: \(insertedBalancesCount)", component: "ImportViewModel")  // DEBUG LOG
@@ -801,28 +832,52 @@ final class ImportViewModel: ObservableObject {
             return .brokerage
         }
 
-        // 2b) If the 'account' header is present and any row mentions brokerage/ira-like keywords, treat as brokerage
-        let hasAccountHeader = lowerHeaders.contains { $0.contains("account") }
-        if hasAccountHeader {
-            let accountTypeKeywords = ["brokerage","ira","roth","401k","retirement","custodial","portfolio","investment"]
-            let mentionsAccountType = sampleRows.contains { row in
-                let text = row.joined(separator: " ").lowercased()
-                return accountTypeKeywords.contains { text.contains($0) }
-            }
-            if mentionsAccountType {
-                AMLogging.always("GuessAccountType: returning .brokerage due to account header + account-type keywords in rows", component: "ImportViewModel")
-                return .brokerage
+        // 2c) User hint bias — if the user picked a specific statement type, prefer it unless brokerage signals are strong
+        if let hint = self.userSelectedDocHint {
+            switch hint {
+            case .creditCard:
+                // Only apply the hint if brokerage signals didn’t fire
+                if !hasBrokerageHeader && brokerageHits == 0 {
+                    AMLogging.always("GuessAccountType: biasing to .creditCard due to user hint", component: "ImportViewModel")
+                    return .creditCard
+                }
+            case .loan:
+                if !hasBrokerageHeader && brokerageHits == 0 {
+                    AMLogging.always("GuessAccountType: biasing to .loan due to user hint", component: "ImportViewModel")
+                    return .loan
+                }
+            default:
+                break
             }
         }
 
         // 3) Credit card heuristics (applied only if no brokerage signals)
-        let hasCategory = lowerHeaders.contains(where: { $0.contains("category") })
-        let hasType = lowerHeaders.contains(where: { $0 == "type" || $0.contains("transaction type") || $0.contains("type") })
-        let hasDebitCredit = lowerHeaders.contains("debit") || lowerHeaders.contains("credit")
-        let hasBalance = lowerHeaders.contains(where: { $0.contains("balance") })
-        if hasCategory && hasType && !hasDebitCredit && !hasBalance {
-            AMLogging.always("GuessAccountType: returning .creditCard due to header heuristic (hasCategory=\(hasCategory), hasType=\(hasType), hasDebitCredit=\(hasDebitCredit), hasBalance=\(hasBalance))", component: "ImportViewModel")
-            return .creditCard
+        // 3b) Loan heuristics (detect loan/mortgage statements that contain 'amount due' or 'past due' style phrases)
+        let loanHeaderSignals = [
+            "loan", "mortgage", "auto loan", "student loan", "home equity", "heloc", "installment"
+        ]
+        let hasLoanHeader = lowerHeaders.contains { h in
+            loanHeaderSignals.contains { sig in h == sig || h.contains(sig) }
+        }
+
+        // Scan sample rows for phrases indicating amount due or past due (common on loan statements)
+        let loanRowSignals = [
+            "current amount due", "amount due", "minimum amount due", "total amount due",
+            "past due amount", "past-due amount", "payment due", "due date",
+            "principal balance", "outstanding principal", "original balance", "escrow", "late fee"
+        ]
+        var loanHits = 0
+        for row in sampleRows {
+            let text = row.joined(separator: " ").lowercased()
+            if loanRowSignals.contains(where: { text.contains($0) }) {
+                loanHits += 1
+                if loanHits >= 2 { break }
+            }
+        }
+
+        if hasLoanHeader || loanHits >= 2 {
+            AMLogging.always("GuessAccountType: returning .loan due to loan signals (headers=\(hasLoanHeader), hits=\(loanHits))", component: "ImportViewModel")
+            return .loan
         }
 
         // 4) Filename-based hints (fallback only)
@@ -851,6 +906,10 @@ final class ImportViewModel: ObservableObject {
             return .savings
         case "brokerage":
             return .brokerage
+        case "loan", "mortgage":
+            return .loan
+        case "creditcard", "credit card":
+            return .creditCard
         default:
             return nil
         }
@@ -951,9 +1010,7 @@ final class ImportViewModel: ObservableObject {
 
         try context.save()
 
-        // Notify UI layers to refresh
-        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
-        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        // Removed notification calls here as per instructions
 
         // After deleting the batch, remove any now-empty accounts that were associated with it
         var deletedAccounts = 0
@@ -972,8 +1029,11 @@ final class ImportViewModel: ObservableObject {
         }
         if deletedAccounts > 0 {
             try context.save()
-            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
         }
+
+        // Notify UI layers once, after all deletions are finalized
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
     }
 
     static func hardDeleteAllBatches(context: ModelContext) throws {

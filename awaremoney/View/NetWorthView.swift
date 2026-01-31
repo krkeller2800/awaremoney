@@ -130,6 +130,15 @@ struct NetWorthView: View {
     }
 
     private func anchoredValue(for account: Account) throws -> Decimal {
+        func adjustForLiability(_ value: Decimal, for account: Account) -> Decimal {
+            switch account.type {
+            case .loan, .creditCard:
+                return value > 0 ? -value : value
+            default:
+                return value
+            }
+        }
+
         // Find latest snapshot date if any
         let latestSnapDate: Date? = try {
             let id = account.id
@@ -152,10 +161,11 @@ struct NetWorthView: View {
             // Sum transactions strictly after snapshot date
             let txAfter = account.transactions.filter { $0.datePosted > snapDate }
             let delta = txAfter.reduce(Decimal.zero) { $0 + $1.amount }
-            return base + delta
+            return adjustForLiability(base + delta, for: account)
         } else {
             // No snapshots: sum all transactions
-            return account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+            let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+            return adjustForLiability(sum, for: account)
         }
     }
 
@@ -168,13 +178,14 @@ struct NetWorthView: View {
 
     // Preferred order of account types in the UI
     private var accountTypeOrder: [Account.AccountType] {
-        [.checking, .savings, .creditCard, .brokerage, .cash, .other]
+        [.checking, .savings, .creditCard, .loan, .brokerage, .cash, .other]
     }
     private func typeDisplayName(_ type: Account.AccountType) -> String {
         switch type {
         case .checking: return "Checking"
         case .savings: return "Savings"
         case .creditCard: return "Credit Cards"
+        case .loan: return "Loans"
         case .brokerage: return "Stocks"
         case .cash: return "Cash"
         case .other: return "Other"

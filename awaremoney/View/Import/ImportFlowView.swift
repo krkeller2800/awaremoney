@@ -102,8 +102,8 @@ struct ImportFlowView: View {
             .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
                 Task { await loadBatches() }
             }
-            .onChange(of: pickerKind) { kind in
-                AMLogging.always("ImportFlowView: pickerKind changed to \(String(describing: kind))", component: "Import")
+            .onChange(of: pickerKind) {
+                AMLogging.always("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
             }
             .onReceive(vm.$staged) { staged in
                 if let staged {
@@ -142,23 +142,56 @@ struct ImportFlowView: View {
                     Menu("Import PDF") {
                         Button("Loan Statement") {
                             pickerKind = .pdf
+                            vm.userSelectedDocHint = .loan
                             AMLogging.always("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Bank Statement") {
                             pickerKind = .pdf
+                            vm.userSelectedDocHint = .checking
                             AMLogging.always("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                            isFileImporterPresented = true
+                        }
+                        Button("Brokerage Statement") {
+                            pickerKind = .pdf
+                            vm.userSelectedDocHint = .brokerage
+                            AMLogging.always("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                            isFileImporterPresented = true
+                        }
+                        Button("Credit Card Statement") {
+                            pickerKind = .pdf
+                            vm.userSelectedDocHint = .creditCard
+                            AMLogging.always("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        pickerKind = .csv
-                        AMLogging.always("ImportFlowView: presenting CSV picker", component: "Import")
-                        isFileImporterPresented = true
-                    } label: {
-                        Text("Import CSV")
+                    Menu("Import CSV") {
+                        Button("Loan CSV") {
+                            pickerKind = .csv
+                            vm.userSelectedDocHint = .loan
+                            AMLogging.always("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                            isFileImporterPresented = true
+                        }
+                        Button("Bank CSV") {
+                            pickerKind = .csv
+                            vm.userSelectedDocHint = .checking
+                            AMLogging.always("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                            isFileImporterPresented = true
+                        }
+                        Button("Brokerage CSV") {
+                            pickerKind = .csv
+                            vm.userSelectedDocHint = .brokerage
+                            AMLogging.always("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                            isFileImporterPresented = true
+                        }
+                        Button("Credit Card CSV") {
+                            pickerKind = .csv
+                            vm.userSelectedDocHint = .creditCard
+                            AMLogging.always("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                            isFileImporterPresented = true
+                        }
                     }
                 }
             }

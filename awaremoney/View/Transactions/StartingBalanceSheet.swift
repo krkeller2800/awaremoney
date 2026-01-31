@@ -47,7 +47,7 @@ struct StartingBalanceSheet: View {
                                 }()
 
                                 let prefill: Decimal
-                                if account.type == .creditCard {
+                                if account.type == .creditCard || account.type == .loan {
                                     prefill = (current < 0) ? (current * -1) : current
                                 } else {
                                     prefill = current
@@ -58,8 +58,8 @@ struct StartingBalanceSheet: View {
                     TextField("0.00", text: $amountInput)
                         .keyboardType(.decimalPad)
 
-                    if account.type == .creditCard {
-                        Text("Enter the amount you owe; (we’ll make it negative for credit cards).")
+                    if account.type == .creditCard || account.type == .loan {
+                        Text("Enter the amount you owe; we’ll store it as a negative balance for liabilities.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -112,7 +112,7 @@ struct StartingBalanceSheet: View {
     private func save() {
         guard let input = Decimal(string: sanitizedAmount()) else { return }
         var desired = input
-        if account.type == .creditCard && desired > 0 {
+        if (account.type == .creditCard || account.type == .loan) && desired > 0 {
             desired = -desired
         }
 

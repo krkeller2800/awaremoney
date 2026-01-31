@@ -244,6 +244,12 @@ struct ImportBatchDetailView: View {
     private func deleteBatch() {
         guard let batch else { return }
         do {
+            // Clear lists immediately to prevent the UI from touching deleted objects
+            self.transactions = []
+            self.balances = []
+            self.holdings = []
+            self.batch = nil
+
             try ImportViewModel.hardDelete(batch: batch, context: modelContext)
             dismiss()
         } catch {

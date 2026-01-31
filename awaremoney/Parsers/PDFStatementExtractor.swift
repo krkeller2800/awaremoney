@@ -623,7 +623,8 @@ enum PDFStatementExtractor {
                 let raw = line
                 let lower = raw.lowercased()
                 if lower.contains("from a checking") || lower.contains("from checking") { return false }
-                if lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("portfolio") || lower.contains("stock") || lower.contains("options") {
+                // Strong investment signals only; avoid generic "options" (e.g., repayment options)
+                if lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("portfolio") || lower.contains("stock") || lower.contains("securities") {
                     let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
                     let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
                     return !lower.contains("savings") && !lower.contains("checking") && (!hasDigits || raw.count <= 24) && (!hasLowercase || raw.count <= 28)
@@ -1026,6 +1027,37 @@ enum PDFStatementExtractor {
         do {
             var periodForSummary: StatementPeriod? = statementPeriod
 
+            // Detect a single statement end date (e.g., "Statement Date", "Billing Date", "Closing Date", or lines like "... as of Jan 31, 2026")
+            func detectSingleStatementEndDate(in src: [String]) -> (month: Int, day: Int?, year: Int?)? {
+                for line in src {
+                    let lower = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    // Require a relevant keyword to avoid false positives
+                    let looksLikeSingleDateHeader = lower.contains("statement date") || lower.contains("billing date") || lower.contains("closing date") || (lower.contains("period ending")) || (lower.contains("as of") && (lower.contains("balance") || lower.contains("principal") || lower.contains("loan")))
+                    if !looksLikeSingleDateHeader { continue }
+                    // Find first date token on this line
+                    if let m = anyDateRegex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
+                        let r = m.range(at: 0)
+                        if let rr = Range(r, in: line) {
+                            let token = String(line[rr])
+                            let comp = extractMonthYear(from: token)
+                            if let mm = comp.month {
+                                return (month: mm, day: comp.day, year: comp.year)
+                            }
+                        }
+                    }
+                }
+                return nil
+            }
+
+            if periodForSummary == nil {
+                if let single = detectSingleStatementEndDate(in: lines) {
+                    let y = single.year ?? inferredYear ?? Calendar.current.component(.year, from: Date())
+                    let sp = StatementPeriod(startMonth: single.month, startYear: y, startDay: 1, endMonth: single.month, endYear: y, endDay: single.day)
+                    periodForSummary = sp
+                    AMLogging.always("PDF detected single-date period => month=\(single.month) day=\(single.day ?? -1) year=\(y)", component: "PDFStatementExtractor")
+                }
+            }
+
             // Date formatter for summary dates
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
@@ -1077,16 +1109,13 @@ enum PDFStatementExtractor {
                     let l = lines[i]
                     if isSavingsHeader(l) { return .savings }
                     if isCheckingHeader(l) { return .checking }
-                    if isInvestmentHeader(l) { return .investment }
+                    if lowerContainsInvestmentStrongSignals(l) { return .investment }
                     let lower = l.lowercased()
                     if lower.contains("savings account") || lower.contains("savings summary") || lower.contains("savings") {
                         if !lower.contains("from a checking") && !lower.contains("from checking") { return .savings }
                     }
                     if lower.contains("checking account") || lower.contains("checking summary") || lower.contains("checking") {
                         if !lower.contains("from a checking") && !lower.contains("from checking") { return .checking }
-                    }
-                    if lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("stock") || lower.contains("options") {
-                        if !lower.contains("savings") && !lower.contains("checking") { return .investment }
                     }
                     if isPageBreak(l) { break }
                     i -= 1
@@ -1109,6 +1138,10 @@ enum PDFStatementExtractor {
                     i += 1
                 }
                 return .unknown
+            }
+            func lowerContainsInvestmentStrongSignals(_ s: String) -> Bool {
+                let lower = s.lowercased()
+                return lower.contains("brokerage") || lower.contains("investment account") || lower.contains("fidelity investments") || lower.contains("ira") || lower.contains("stock") || lower.contains("securities") || lower.contains("portfolio")
             }
             func isPeriodHeaderLine(_ s: String) -> Bool {
                 let lower = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1133,16 +1166,23 @@ enum PDFStatementExtractor {
             }
 
             func findBalancesPerAccount(in src: [String], useSectionFilter: Bool) -> [AccountKind: (begin: String?, end: String?)] {
-                let beginLabels = [
+                var beginLabels = [
                     "beginning balance", "opening balance",
                     "beginning account value", "beginning value", "beginning account balance",
                     "previous balance", "prior balance", "starting balance",
                     "balance at beginning", "starting account value"
                 ]
                 let endLabels = [
+                    // Generic ending balance phrases
                     "ending balance", "current balance", "closing balance",
                     "ending account value", "ending value", "ending account balance",
-                    "new balance", "closing value", "balance at end"
+                    "new balance", "closing value", "balance at end", "balance as of",
+                    // Loan/principal-specific phrases
+                    "principal balance", "outstanding principal", "current principal balance", "principal outstanding",
+                    "unpaid principal balance", "remaining principal", "principal remaining",
+                    "loan balance", "current loan balance",
+                    "balance remaining", "remaining balance",
+                    "upb"
                 ]
 
                 var result: [AccountKind: (begin: String?, end: String?)] = [:]
@@ -1218,6 +1258,16 @@ enum PDFStatementExtractor {
                 }.sorted().joined(separator: "; ")
             }
 
+            // Ensure balances are negative for liabilities like loans/mortgages
+            func forceNegative(_ amount: String) -> String {
+                var a = amount.trimmingCharacters(in: .whitespacesAndNewlines)
+                if a.isEmpty { return a }
+                if a.hasPrefix("-") { return a }
+                if a.hasPrefix("+") { a.removeFirst() }
+                if let v = Double(a), v == 0 { return "0" }
+                return "-" + a
+            }
+
             // Compute earliest/latest dates from any already-extracted rows
             var earliestDate: Date? = nil
             var latestDate: Date? = nil
@@ -1268,7 +1318,7 @@ enum PDFStatementExtractor {
                 let sourceLinesAll = balancesFromOCR ? ocrLinesLocal : lines
                 let docHasSavings = sourceLinesAll.contains { $0.lowercased().contains("savings") }
                 let docHasChecking = sourceLinesAll.contains { $0.lowercased().contains("checking") }
-                let docHasInvestment = sourceLinesAll.contains { let l = $0.lowercased(); return l.contains("brokerage") || l.contains("investment") || l.contains("fidelity") || l.contains("stock") || l.contains("options") }
+                let docHasInvestment = sourceLinesAll.contains { let l = $0.lowercased(); return l.contains("brokerage") || l.contains("investment account") || l.contains("fidelity") || l.contains("ira") || l.contains("stock") || l.contains("securities") || l.contains("portfolio") }
                 if balancesByAccount[.investment] == nil && docHasInvestment {
                     balancesByAccount[.investment] = unknownPair
                     balancesByAccount.removeValue(forKey: .unknown)
@@ -1281,6 +1331,79 @@ enum PDFStatementExtractor {
                     balancesByAccount[.checking] = unknownPair
                     balancesByAccount.removeValue(forKey: .unknown)
                     AMLogging.always("PDF summary: mapped unknown balances to checking based on document hints", component: "PDFStatementExtractor")
+                }
+            }
+
+            // Loan-specific fallback scan: detect amounts near loan phrases when generic summary scan found nothing
+            func scanLoanBalances(in src: [String]) -> (begin: String?, end: String?) {
+                let endLabels = [
+                    // Prefer explicit balance terms for loans
+                    "current balance", "ending balance", "closing balance", "balance as of",
+                    "principal balance", "outstanding principal", "current principal balance", "principal outstanding",
+                    "unpaid principal balance", "remaining principal", "principal remaining",
+                    "loan balance", "current loan balance",
+                    "balance remaining", "remaining balance",
+                    "upb"
+                ]
+                let beginLabels = ["beginning balance", "opening balance", "original balance"]
+
+                func extractAmountNear(lineIndex: Int, labels: [String]) -> String? {
+                    guard lineIndex >= 0 && lineIndex < src.count else { return nil }
+                    let current = src[lineIndex]
+                    let lower = current.lowercased()
+                    func rangeOfAnyLabel(_ labels: [String], in lower: String) -> Range<String.Index>? {
+                        for lbl in labels { if let r = lower.range(of: lbl) { return r } }
+                        return nil
+                    }
+                    if let range = rangeOfAnyLabel(labels, in: lower) {
+                        let suffixStart = range.upperBound
+                        let suffix = String(current[suffixStart...])
+                        let matches = amountAnywhereRegex.matches(in: suffix, options: [], range: NSRange(location: 0, length: suffix.utf16.count))
+                        if let chosen = matches.last, let r = Range(chosen.range, in: suffix) {
+                            return sanitizeAmount(String(suffix[r]))
+                        }
+                    }
+                    let sameMatches = amountAnywhereRegex.matches(in: current, options: [], range: NSRange(location: 0, length: current.utf16.count))
+                    if let chosen = sameMatches.last, let r = Range(chosen.range, in: current) {
+                        return sanitizeAmount(String(current[r]))
+                    }
+                    if lineIndex + 1 < src.count {
+                        let next = src[lineIndex + 1]
+                        if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count)) != nil {
+                            return sanitizeAmount(next)
+                        }
+                        let nextMatches = amountAnywhereRegex.matches(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count))
+                        if let chosen = nextMatches.last, let r = Range(chosen.range, in: next) {
+                            return sanitizeAmount(String(next[r]))
+                        }
+                    }
+                    return nil
+                }
+
+                var begin: String? = nil
+                var end: String? = nil
+                for (idx, line) in src.enumerated() {
+                    let lower = line.lowercased()
+                    if begin == nil && beginLabels.contains(where: { lower.contains($0) }) {
+                        begin = extractAmountNear(lineIndex: idx, labels: beginLabels)
+                    }
+                    if end == nil && endLabels.contains(where: { lower.contains($0) }) {
+                        end = extractAmountNear(lineIndex: idx, labels: endLabels)
+                    }
+                    if begin != nil && end != nil { break }
+                }
+                return (begin, end)
+            }
+
+            let hasAnyBalances2 = balancesByAccount.values.contains { $0.begin != nil || $0.end != nil }
+            if !hasAnyBalances2 {
+                let source = balancesFromOCR ? ocrLinesLocal : lines
+                let loan = scanLoanBalances(in: source)
+                if loan.begin != nil || loan.end != nil {
+                    balancesByAccount[.unknown] = (begin: loan.begin, end: loan.end)
+                    let beginStr = loan.begin ?? "nil"
+                    let endStr = loan.end ?? "nil"
+                    AMLogging.always("PDF summary: loan-specific scan found begin=\(beginStr), end=\(endStr)", component: "PDFStatementExtractor")
                 }
             }
 
@@ -1305,15 +1428,25 @@ enum PDFStatementExtractor {
                 let accountLabelDisplay = Self.accountDisplayLabel(for: acct, using: sourceLines)
                 let accountKey = Self.accountTypeKey(for: acct)
                 AMLogging.always("PDF summary: account label resolved for \(kindName(acct)) => \(accountLabelDisplay)", component: "PDFStatementExtractor")
+                let lowerLabel = accountLabelDisplay.lowercased()
+                let isLoanContext = lowerLabel.contains("loan") || lowerLabel.contains("mortgage")
+                let isCreditCardContext = lowerLabel.contains("credit card") || lowerLabel.contains("visa") || lowerLabel.contains("mastercard") || lowerLabel.contains("amex") || lowerLabel.contains("american express") || lowerLabel.contains("discover")
+                let accountKeyOut: String = {
+                    if isLoanContext { return "loan" }
+                    if isCreditCardContext { return "creditCard" }
+                    return accountKey
+                }()
                 if let bAmt = pair.begin, let bDate = beginDateStr {
-                    rows.append([bDate, "Statement Beginning Balance (\(accountLabelDisplay))", "0", bAmt, accountKey])
-                    AMLogging.always("PDF summary: appended beginning row accountKey=\(accountKey)", component: "PDFStatementExtractor")
+                    let beginBalanceForAccount = (isLoanContext || isCreditCardContext) ? forceNegative(bAmt) : bAmt
+                    rows.append([bDate, "Statement Beginning Balance (\(accountLabelDisplay))", "0", beginBalanceForAccount, accountKeyOut])
+                    AMLogging.always("PDF summary: appended beginning row accountKey=\(accountKeyOut)", component: "PDFStatementExtractor")
                     didAppendSummary = true
                     AMLogging.always("PDF summary (decoupled): beginning balance detected = \(bAmt) @ \(bDate) [\(accountLabelDisplay)]", component: "PDFStatementExtractor")
                 }
                 if let eAmt = pair.end, let eDate = endDateStr {
-                    rows.append([eDate, "Statement Ending Balance (\(accountLabelDisplay))", "0", eAmt, accountKey])
-                    AMLogging.always("PDF summary: appended ending row accountKey=\(accountKey)", component: "PDFStatementExtractor")
+                    let endBalanceForAccount = (isLoanContext || isCreditCardContext) ? forceNegative(eAmt) : eAmt
+                    rows.append([eDate, "Statement Ending Balance (\(accountLabelDisplay))", "0", endBalanceForAccount, accountKeyOut])
+                    AMLogging.always("PDF summary: appended ending row accountKey=\(accountKeyOut)", component: "PDFStatementExtractor")
                     didAppendSummary = true
                     AMLogging.always("PDF summary (decoupled): ending balance detected = \(eAmt) @ \(eDate) [\(accountLabelDisplay)]", component: "PDFStatementExtractor")
                 }
@@ -1337,6 +1470,7 @@ enum PDFStatementExtractor {
                             let descLower = rows[idx][1].lowercased()
                             if descLower.contains("savings") { key = "savings" }
                             else if descLower.contains("checking") { key = "checking" }
+                            else if descLower.contains("loan") || descLower.contains("mortgage") { key = "loan" }
                             else if descLower.contains("investment") || descLower.contains("brokerage") || descLower.contains("fidelity") { key = "brokerage" }
                             else if descLower.contains("stock") || descLower.contains("options") { key = "brokerage" }
                         }
@@ -1355,10 +1489,36 @@ enum PDFStatementExtractor {
                         let descLower = rows[idx][1].lowercased()
                         if descLower.contains("savings") { key = "savings" }
                         else if descLower.contains("checking") { key = "checking" }
+                        else if descLower.contains("loan") || descLower.contains("mortgage") { key = "loan" }
                         else if descLower.contains("investment") || descLower.contains("brokerage") || descLower.contains("fidelity") { key = "brokerage" }
                         else if descLower.contains("stock") || descLower.contains("options") { key = "brokerage" }
                     }
                     rows[idx][4] = key.isEmpty ? "unknown" : key
+                }
+            }
+        }
+
+        // Post-processing: ensure loan/mortgage summary balances are negative and keyed as 'loan'
+        func forceNegativeIfNeeded(_ amount: String) -> String {
+            var a = amount.trimmingCharacters(in: .whitespacesAndNewlines)
+            if a.isEmpty { return a }
+            if a.hasPrefix("-") { return a }
+            if a.hasPrefix("+") { a.removeFirst() }
+            if let v = Double(a), v == 0 { return "0" }
+            return "-" + a
+        }
+        for idx in 0..<rows.count {
+            guard rows[idx].count >= 5 else { continue }
+            let descLower = rows[idx][1].lowercased()
+            let isSummaryRow = descLower.contains("statement beginning balance") || descLower.contains("statement ending balance")
+            if !isSummaryRow { continue }
+            let keyLower = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let looksLoan = keyLower == "loan" || descLower.contains("loan") || descLower.contains("mortgage")
+            let looksCC = keyLower == "creditcard" || keyLower == "credit_card" || keyLower == "credit card" || descLower.contains("credit card") || descLower.contains("visa") || descLower.contains("mastercard") || descLower.contains("amex") || descLower.contains("american express") || descLower.contains("discover")
+            if looksLoan || looksCC {
+                rows[idx][3] = forceNegativeIfNeeded(rows[idx][3])
+                if keyLower.isEmpty || keyLower == "unknown" {
+                    rows[idx][4] = looksLoan ? "loan" : "creditCard"
                 }
             }
         }
@@ -1403,6 +1563,7 @@ enum PDFStatementExtractor {
         case .unknown:
             // If unknown, try to infer a friendlier label from the document-wide hints
             let lowercased = lines.map { $0.lowercased() }
+            if lowercased.contains(where: { $0.contains("loan") || $0.contains("mortgage") }) { return "Loan" }
             if lowercased.contains(where: { $0.contains("checking") }) { return "Checking" }
             if lowercased.contains(where: { $0.contains("savings") }) { return "Savings" }
             if lowercased.contains(where: { $0.contains("brokerage") || $0.contains("investment") || $0.contains("fidelity") }) {

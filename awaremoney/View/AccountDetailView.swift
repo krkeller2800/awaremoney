@@ -224,6 +224,9 @@ struct AccountDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
             Task { await load() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            Task { await load() }
+        }
     }
 
     @Sendable private func load() async {

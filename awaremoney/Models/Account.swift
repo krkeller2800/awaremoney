@@ -11,7 +11,7 @@ import SwiftData
 @Model
 final class Account {
     enum AccountType: String, Codable, CaseIterable {
-        case checking, savings, creditCard, cash, brokerage, other
+        case checking, savings, creditCard, loan, cash, brokerage, other
     }
 
     @Attribute(.unique) var id: UUID
