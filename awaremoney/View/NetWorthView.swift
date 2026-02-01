@@ -9,9 +9,12 @@ import SwiftUI
 import SwiftData
 
 private struct AccountValue: Identifiable {
-    let account: Account
+    let accountID: UUID
+    let displayName: String
+    let type: Account.AccountType
+    let institutionName: String?
     let value: Decimal
-    var id: AnyHashable { AnyHashable(account.id) }
+    var id: AnyHashable { AnyHashable(accountID) }
 }
 
 struct NetWorthView: View {
@@ -92,6 +95,9 @@ struct NetWorthView: View {
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
                 Task { await load() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+                Task { await load() }
+            }
             .sheet(isPresented: $showNetWorthChart) {
                 NetWorthChartView()
             }
@@ -116,12 +122,12 @@ struct NetWorthView: View {
             for account in accounts {
                 let value: Decimal = try anchoredValue(for: account)
                 AMLogging.always("Account \(account.name) — type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)"), value: \(value), tx: \(account.transactions.count)", component: "NetWorthView")
-                perAccount.append(AccountValue(account: account, value: value))
+                perAccount.append(AccountValue(accountID: account.id, displayName: account.name, type: account.type, institutionName: account.institutionName, value: value))
                 total += value
             }
 
             await MainActor.run {
-                self.byAccount = perAccount.sorted { $0.account.name < $1.account.name }
+                self.byAccount = perAccount.sorted { $0.displayName < $1.displayName }
                 self.totalNetWorth = total
             }
         } catch {
@@ -195,11 +201,11 @@ struct NetWorthView: View {
     // Return institution-grouped totals for a specific account type
     private func groupsFor(type: Account.AccountType) -> [(institution: String, value: Decimal)] {
         // Filter by type
-        let rows = byAccount.filter { $0.account.type == type }
+        let rows = byAccount.filter { $0.type == type }
         // Group by institution (fallback to Unknown)
         var buckets: [String: Decimal] = [:]
         for row in rows {
-            let inst = (row.account.institutionName?.isEmpty == false) ? row.account.institutionName! : "Unknown"
+            let inst = (row.institutionName?.isEmpty == false) ? row.institutionName! : "Unknown"
             buckets[inst, default: .zero] += row.value
         }
         // Sort alphabetically by institution name

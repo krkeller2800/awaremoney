@@ -4,14 +4,26 @@ import SwiftData
 struct AccountDetailView: View {
     let accountID: UUID
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
 
-    @State private var account: Account?
+    // Query the account live by ID so we never hold a detached instance
+    @Query private var fetchedAccounts: [Account]
+
     @State private var showStartingBalanceSheet = false
     @State private var showRecordedBalanceInfo = false
     @State private var showInstitutionEditSheet = false
     @State private var tempInstitutionName: String = ""
     @State private var showMergeSheet = false
     @State private var mergeTargetID: UUID?
+    @State private var cachedDerivedBalance: Decimal? = nil
+    @State private var cachedEarliestTransactionDate: Date? = nil
+
+    init(accountID: UUID) {
+        self.accountID = accountID
+        _fetchedAccounts = Query(filter: #Predicate<Account> { $0.id == accountID }, sort: [])
+    }
+
+    private var account: Account? { fetchedAccounts.first }
 
     var body: some View {
         Group {
@@ -65,7 +77,7 @@ struct AccountDetailView: View {
                             HStack {
                                 Text("Transactional Balance")
                                 Spacer()
-                                if let derived = derivedBalance(for: account) {
+                                if let derived = cachedDerivedBalance {
                                     Text(format(amount: derived))
                                 } else {
                                     Text("Unavailable")
@@ -98,6 +110,11 @@ struct AccountDetailView: View {
                                         Text(last.asOfDate, style: .date)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                        if let apr = last.interestRateAPR {
+                                            Text("APR: \(formatAPR(apr, scale: last.interestRateScale))")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                 } else {
                                     Text("None")
@@ -111,7 +128,8 @@ struct AccountDetailView: View {
                             }
                             Text("Latest recorded balance from a statement or import.")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)                        }
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Section("Balances") {
@@ -119,7 +137,14 @@ struct AccountDetailView: View {
                             HStack {
                                 Text(snap.asOfDate, style: .date)
                                 Spacer()
-                                Text(format(amount: snap.balance))
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(format(amount: snap.balance))
+                                    if let apr = snap.interestRateAPR {
+                                        Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
 
@@ -193,7 +218,6 @@ struct AccountDetailView: View {
                                     if account.name != trimmed { account.name = trimmed }
                                     do { try modelContext.save() } catch {}
                                     NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-                                    Task { await load() }
                                     showInstitutionEditSheet = false
                                 }
                                 .disabled(isInvalidInstitutionName(tempInstitutionName))
@@ -210,43 +234,44 @@ struct AccountDetailView: View {
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         NavigationLink {
-                            AccountTransactionsListView(account: account)
+                            AccountTransactionsListView(accountID: account.id)
                         } label: {
                             Label("Transactions", systemImage: "list.bullet")
                         }
+                        .simultaneousGesture(TapGesture().onEnded {
+                            AMLogging.always("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
+                        })
                     }
                 }
             } else {
-                ProgressView().task { await load() }
+                ContentUnavailableView("Account no longer exists", systemImage: "exclamationmark.triangle")
+                    .task { dismiss() }
             }
         }
-        .task { await load() }
+        // If the account disappears (e.g., after batch deletion), dismiss this screen
+        .onChange(of: fetchedAccounts.count) { _, newCount in
+            AMLogging.always("AccountDetailView fetchedAccounts count changed to \(newCount) for accountID=\(accountID)", component: "AccountDetailView")
+            if newCount == 0 { dismiss() }
+        }
+        .task(id: account?.id) {
+            AMLogging.always("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
+            if let account = account { await recomputeAccountDerivedData(for: account) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            Task { await load() }
+            AMLogging.always("AccountDetailView received transactionsDidChange for accountID=\(accountID)", component: "AccountDetailView")
+            Task { if let account = account { await recomputeAccountDerivedData(for: account) } }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
-            Task { await load() }
-        }
-    }
-
-    @Sendable private func load() async {
-        do {
-            let predicate = #Predicate<Account> { $0.id == accountID }
-            var descriptor = FetchDescriptor<Account>(predicate: predicate)
-            descriptor.fetchLimit = 1
-            let fetched = try modelContext.fetch(descriptor).first
-            await MainActor.run { self.account = fetched }
-        } catch {
-            // Ignore errors for now
+        .onAppear {
+            AMLogging.always("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
         }
     }
 
     private func earliestTransactionDate(for account: Account) -> Date? {
-        account.transactions.map(\.datePosted).min()
+        return cachedEarliestTransactionDate
     }
 
     private func defaultStartingBalanceDate(for account: Account) -> Date? {
-        guard let earliest = earliestTransactionDate(for: account) else { return nil }
+        guard let earliest = cachedEarliestTransactionDate else { return nil }
         if isMissingStartingBalance(for: account) {
             return Calendar.current.date(byAdding: .day, value: -1, to: earliest)
         } else {
@@ -255,7 +280,7 @@ struct AccountDetailView: View {
     }
 
     private func isMissingStartingBalance(for account: Account) -> Bool {
-        guard let earliest = earliestTransactionDate(for: account) else { return false }
+        guard let earliest = cachedEarliestTransactionDate else { return false }
         let hasSnapshot = account.balanceSnapshots.contains { $0.asOfDate <= earliest }
         let hasAdjustment = account.transactions.contains { $0.kind == .adjustment && $0.datePosted <= earliest }
         return !(hasSnapshot || hasAdjustment)
@@ -273,17 +298,72 @@ struct AccountDetailView: View {
         sortedSnapshots(for: account).first
     }
 
-    private func derivedBalance(for account: Account) -> Decimal? {
-        if let last = lastBalanceSnapshot(for: account) {
-            let base = last.balance
-            let delta = account.transactions
-                .filter { $0.datePosted > last.asOfDate }
-                .reduce(Decimal.zero) { $0 + $1.amount }
-            return base + delta
-        } else {
-            let total = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
-            return total == 0 ? nil : total
+    private func recomputeAccountDerivedData(for account: Account) async {
+        let t0 = Date()
+        let container = modelContext.container
+        let bg = ModelContext(container)
+        bg.autosaveEnabled = false
+
+        // Capture ID and last snapshot data on the main actor
+        let id = await MainActor.run { account.id }
+        AMLogging.always("recompute start id=\(id)", component: "AccountDetailView")
+        let snapshotData: (Decimal?, Date?) = await MainActor.run { () -> (Decimal?, Date?) in
+            let last = self.lastBalanceSnapshot(for: account)
+            return (last?.balance, last?.asOfDate)
         }
+        let baseBalance = snapshotData.0
+        let sinceDate = snapshotData.1
+
+        do {
+            // Earliest transaction date using an ascending sort and fetch limit 1
+            let earliest = try await fetchEarliestTransactionDate(in: bg, accountID: id)
+            AMLogging.always("recompute earliest=\(String(describing: earliest)) id=\(id)", component: "AccountDetailView")
+            await MainActor.run {
+                self.cachedEarliestTransactionDate = earliest
+            }
+
+            // Derived balance: if we have a base snapshot, sum deltas since; otherwise sum all
+            let delta = try await sumTransactions(in: bg, accountID: id, since: sinceDate)
+            AMLogging.always("recompute delta=\(delta) base=\(String(describing: baseBalance)) id=\(id)", component: "AccountDetailView")
+            await MainActor.run {
+                if let base = baseBalance {
+                    self.cachedDerivedBalance = base + delta
+                } else {
+                    self.cachedDerivedBalance = (delta == 0 ? nil : delta)
+                }
+            }
+
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            AMLogging.always("recompute done id=\(id) in \(ms)ms", component: "AccountDetailView")
+        } catch {
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            AMLogging.error("recompute failed id=\(id) after \(ms)ms: \(error.localizedDescription)", component: "AccountDetailView")
+            await MainActor.run {
+                self.cachedDerivedBalance = nil
+            }
+            // Leave earliest as-is to avoid UI flicker
+        }
+    }
+
+    private func fetchEarliestTransactionDate(in context: ModelContext, accountID: UUID) async throws -> Date? {
+        let predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID }
+        var descriptor = FetchDescriptor<Transaction>(predicate: predicate)
+        descriptor.sortBy = [SortDescriptor(\Transaction.datePosted, order: .forward)]
+        descriptor.fetchLimit = 1
+        let results = try context.fetch(descriptor)
+        return results.first?.datePosted
+    }
+
+    private func sumTransactions(in context: ModelContext, accountID: UUID, since: Date?) async throws -> Decimal {
+        let predicate: Predicate<Transaction>
+        if let sinceDate = since {
+            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID && tx.datePosted > sinceDate }
+        } else {
+            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID }
+        }
+        let descriptor = FetchDescriptor<Transaction>(predicate: predicate)
+        let results = try context.fetch(descriptor)
+        return results.reduce(Decimal.zero) { $0 + $1.amount }
     }
 
     private func format(amount: Decimal) -> String {
@@ -292,7 +372,7 @@ struct AccountDetailView: View {
         nf.currencyCode = "USD"
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
-    
+
     private func isInvalidInstitutionName(_ name: String?) -> Bool {
         guard let raw = name?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return true }
         let lower = raw.lowercased()
@@ -302,29 +382,40 @@ struct AccountDetailView: View {
         ]
         return banned.contains(lower)
     }
+
+    private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .percent
+        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
 }
 
 #Preview {
     Text("Preview requires model data")
 }
+
 struct MergeAccountSheet: View {
     let currentAccountID: UUID
     @Binding var selectedTargetID: UUID?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    @State private var accounts: [Account] = []
+    // Live query of accounts to avoid stashing detached instances
+    @Query private var accounts: [Account]
+
+    init(currentAccountID: UUID, selectedTargetID: Binding<UUID?>) {
+        self.currentAccountID = currentAccountID
+        self._selectedTargetID = selectedTargetID
+        _accounts = Query(sort: [SortDescriptor(\Account.name, order: .forward)])
+    }
 
     var body: some View {
         Form {
             Section("Merge into") {
-                Picker("Target Account", selection: Binding(get: {
-                    selectedTargetID ?? UUID()
-                }, set: { newValue in
-                    selectedTargetID = newValue
-                })) {
+                Picker("Target Account", selection: $selectedTargetID) {
                     ForEach(accounts.filter { $0.id != currentAccountID }, id: \.id) { acct in
-                        Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(acct.id)
+                        Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(Optional(acct.id))
                     }
                 }
             }
@@ -348,21 +439,11 @@ struct MergeAccountSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         }
-        .task { await loadAccounts() }
     }
 
     private var mergeDisabled: Bool {
         guard let id = selectedTargetID else { return true }
         return id == currentAccountID
-    }
-
-    private func loadAccounts() async {
-        do {
-            let fetched = try modelContext.fetch(FetchDescriptor<Account>())
-            await MainActor.run { self.accounts = fetched }
-        } catch {
-            await MainActor.run { self.accounts = [] }
-        }
     }
 
     private func mergeAccounts(source: Account, target: Account) throws {

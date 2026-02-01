@@ -14,6 +14,7 @@ struct ReviewImportView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Account.createdAt) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
+    @State private var showPDFSheet = false
 
     var body: some View {
         ZStack {
@@ -34,6 +35,17 @@ struct ReviewImportView: View {
                 Section("Details") {
                     Text("File: \(staged.sourceFileName)")
                         .font(.subheadline)
+                    if staged.sourceFileName.lowercased().hasSuffix(".pdf") {
+                        Button {
+                            showPDFSheet = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                Text("View PDF")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
 
                 // Account selection / creation
@@ -77,6 +89,21 @@ struct ReviewImportView: View {
                         Picker("Type", selection: $vm.newAccountType) {
                             ForEach(Account.AccountType.allCases, id: \.self) {
                                 Text($0.rawValue)
+                            }
+                        }
+                    }
+                    
+                    // Flip-sign override for credit card imports
+                    if vm.newAccountType == .creditCard {
+                        Toggle(isOn: Binding(
+                            get: { vm.creditCardFlipOverride ?? false },
+                            set: { vm.creditCardFlipOverride = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Treat purchases as negative and payments as positive")
+                                Text("If amounts look inverted, toggle this.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -188,6 +215,11 @@ struct ReviewImportView: View {
                                             .background(Color.secondary.opacity(0.12))
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
+                                    if let apr = b.interestRateAPR {
+                                        Text("APR: \(formatAPR(apr, scale: b.interestRateScale))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -247,6 +279,33 @@ struct ReviewImportView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
         }
+        .sheet(isPresented: $showPDFSheet) {
+            NavigationStack {
+                Group {
+                    if let url = vm.lastPickedLocalURL {
+                        PDFKitView(url: url)
+                            .ignoresSafeArea()
+                    } else {
+                        VStack {
+                            Text("File: \(staged.sourceFileName)")
+                                .font(.subheadline)
+                            ContentUnavailableView(
+                                "PDF Viewer",
+                                systemImage: "doc.richtext",
+                                description: Text("Original PDF preview isn't available yet.")
+                            )
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .navigationTitle("View PDF")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showPDFSheet = false }
+                }
+            }
+        }
     }
 
     private static let currencyFormatter: NumberFormatter = {
@@ -255,5 +314,12 @@ struct ReviewImportView: View {
         nf.currencyCode = "USD"
         return nf
     }()
+    
+    private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .percent
+        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
 }
 

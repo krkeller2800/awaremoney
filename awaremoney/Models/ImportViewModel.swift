@@ -10,6 +10,7 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import Combine
+import PDFKit
 
 @MainActor
 final class ImportViewModel: ObservableObject {
@@ -23,6 +24,8 @@ final class ImportViewModel: ObservableObject {
     @Published var infoMessage: String?
     @Published var isImporting: Bool = false
     @Published var userSelectedDocHint: Account.AccountType? = nil
+    @Published var creditCardFlipOverride: Bool? = nil
+    @Published var lastPickedLocalURL: URL? = nil
 
     private let importer = StatementImporter()
 
@@ -37,6 +40,37 @@ final class ImportViewModel: ObservableObject {
             FidelityStatementCSVParser(),
             GenericHoldingsStatementCSVParser()
         ]
+    }
+
+    private static func extractAPRFromPDF(at url: URL) -> (Decimal, Int)? {
+        AMLogging.always("ImportViewModel: extractAPRFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        guard let doc = PDFDocument(url: url) else { return nil }
+        let pattern = #"(?:(?:interest\s*rate)|apr)[^0-9%]{0,32}([0-9]{1,2}(?:\.[0-9]{1,4})?)\s*%?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let pageCount = doc.pageCount
+        AMLogging.always("ImportViewModel: PDF pageCount=\(pageCount)", component: "ImportViewModel")
+        for i in 0..<pageCount {
+            guard let page = doc.page(at: i), let raw = page.string else { continue }
+            let lower = raw.lowercased()
+            let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+            if let match = regex.firstMatch(in: lower, options: [], range: range), match.numberOfRanges >= 2,
+               let r = Range(match.range(at: 1), in: lower) {
+                let token = String(lower[r])
+                if var val = Decimal(string: token) {
+                    let scale: Int = {
+                        if let dot = token.firstIndex(of: ".") {
+                            return token.distance(from: token.index(after: dot), to: token.endIndex)
+                        }
+                        return 0
+                    }()
+                    AMLogging.always("ImportViewModel: APR match on page \(i+1): token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
+                    if val > 1 { val /= 100 } // convert percent to fraction
+                    return (val, scale)
+                }
+            }
+        }
+        AMLogging.always("ImportViewModel: extractAPRFromPDF no APR found", component: "ImportViewModel")
+        return nil
     }
 
     init(parsers: [StatementParser]) {
@@ -67,6 +101,17 @@ final class ImportViewModel: ObservableObject {
             }
 
             do {
+                // Persist a local copy so we can preview PDFs reliably
+                let fm = FileManager.default
+                let caches = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let dest = caches.appendingPathComponent(url.lastPathComponent)
+                // Overwrite if exists
+                try? fm.removeItem(at: dest)
+                if fm.fileExists(atPath: url.path) {
+                    try? fm.copyItem(at: url, to: dest)
+                }
+                await MainActor.run { self.lastPickedLocalURL = dest }
+
                 // If the file is in iCloud, trigger a download if needed
                 if let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey]),
                    values.isUbiquitousItem == true {
@@ -125,6 +170,31 @@ final class ImportViewModel: ObservableObject {
                         do {
                             var stagedImport = try parser.parse(rows: rows, headers: headers)
                             stagedImport.sourceFileName = url.lastPathComponent
+                            AMLogging.always("ImportViewModel: staged balances count=\(stagedImport.balances.count) ext=\(ext)", component: "ImportViewModel")
+
+                            if ext == "pdf" {
+                                let allMissingAPR = stagedImport.balances.allSatisfy { $0.interestRateAPR == nil }
+                                AMLogging.always("ImportViewModel: allMissingAPR=\(allMissingAPR)", component: "ImportViewModel")
+                                if allMissingAPR {
+                                    if let localURL = self.lastPickedLocalURL, let (apr, scale) = Self.extractAPRFromPDF(at: localURL) {
+                                        for idx in stagedImport.balances.indices {
+                                            if stagedImport.balances[idx].interestRateAPR == nil {
+                                                stagedImport.balances[idx].interestRateAPR = apr
+                                                stagedImport.balances[idx].interestRateScale = scale
+                                            }
+                                        }
+                                        AMLogging.always("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots", component: "ImportViewModel")
+                                    } else if let (apr, scale) = Self.extractAPRFromPDF(at: url) {
+                                        for idx in stagedImport.balances.indices {
+                                            if stagedImport.balances[idx].interestRateAPR == nil {
+                                                stagedImport.balances[idx].interestRateAPR = apr
+                                                stagedImport.balances[idx].interestRateScale = scale
+                                            }
+                                        }
+                                        AMLogging.always("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots", component: "ImportViewModel")
+                                    }
+                                }
+                            }
                             AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
                             if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
                                 AMLogging.always("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
@@ -214,6 +284,10 @@ final class ImportViewModel: ObservableObject {
             parserId: staged.parserId
         )
         context.insert(batch)
+        
+        if let localURL = lastPickedLocalURL {
+            batch.sourceFileLocalPath = localURL.path
+        }
         
         let providedInst = userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
@@ -386,6 +460,9 @@ final class ImportViewModel: ObservableObject {
         // Helper for credit card sign decision per account
         func shouldFlipCreditCardAmounts(for account: Account, transactions: [StagedTransaction]) -> Bool {
             guard account.type == .creditCard else { return false }
+            if let override = self.creditCardFlipOverride {
+                return override
+            }
             let includedTransactions = transactions
             func isPaymentLike(_ payee: String?, _ memo: String?) -> Bool {
                 let text = ((payee ?? "") + " " + (memo ?? "")).lowercased()
@@ -515,6 +592,35 @@ final class ImportViewModel: ObservableObject {
             AMLogging.log("Inserted holding — symbol: \(h.symbol), qty: \(h.quantity), mv: \(String(describing: h.marketValue))", component: "ImportViewModel")  // DEBUG LOG
         }
 
+        // Inject brokerage equity snapshots as BalanceSnapshot if not present
+        if let firstAccountForAssets, firstAccountForAssets.type == .brokerage {
+            let groupedByDate = Dictionary(grouping: staged.holdings.filter { $0.include && $0.marketValue != nil }) { $0.asOfDate }
+            for (date, items) in groupedByDate {
+                let equity = items.reduce(Decimal.zero) { $0 + ($1.marketValue ?? 0) }
+                // Skip zero-equity snapshots
+                if equity == .zero { continue }
+                // Check if a snapshot already exists for this account/date
+                let acctID = firstAccountForAssets.id
+                let pred = #Predicate<BalanceSnapshot> { snap in
+                    snap.account?.id == acctID && snap.asOfDate == date
+                }
+                var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
+                desc.fetchLimit = 1
+                let existing = try? context.fetch(desc).first
+                if existing == nil {
+                    let bs = BalanceSnapshot(
+                        asOfDate: date,
+                        balance: equity,
+                        account: firstAccountForAssets,
+                        importBatch: batch
+                    )
+                    context.insert(bs)
+                    batch.balances.append(bs)
+                    AMLogging.always("Inserted brokerage equity snapshot — asOf: \(date), value: \(equity), account: \(firstAccountForAssets.name)", component: "ImportViewModel")
+                }
+            }
+        }
+
         // Save balances — attach to the resolved account per label if available
         var insertedBalancesCount = 0
         for b in staged.balances where (b.include) {
@@ -535,9 +641,18 @@ final class ImportViewModel: ObservableObject {
             let bs = BalanceSnapshot(
                 asOfDate: b.asOfDate,
                 balance: coercedBalance,
+                interestRateAPR: b.interestRateAPR,
+                interestRateScale: b.interestRateScale,
                 account: account,
                 importBatch: batch
             )
+            // If this is a liability account and we have APR info, promote it to account.loanTerms
+            if (account.type == .loan || account.type == .creditCard),
+               let apr = b.interestRateAPR {
+                if account.loanTerms == nil { account.loanTerms = LoanTerms() }
+                account.loanTerms?.apr = apr
+                account.loanTerms?.aprScale = b.interestRateScale
+            }
             context.insert(bs)
             batch.balances.append(bs)
             insertedBalancesCount += 1
@@ -603,6 +718,7 @@ final class ImportViewModel: ObservableObject {
             // Notify UI that transactions changed (helps tabs refresh if needed)
             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
             NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+            self.creditCardFlipOverride = nil
 
             self.staged = nil
             self.userInstitutionName = ""
@@ -1177,6 +1293,16 @@ final class ImportViewModel: ObservableObject {
             if let ex = existingBalMap[date] {
                 if !ex.isUserModified || forceUpdateBalanceDates.contains(date) {
                     ex.balance = sb.balance
+                    ex.interestRateAPR = sb.interestRateAPR
+                    ex.interestRateScale = sb.interestRateScale
+                    // Promote APR to account.loanTerms when updating an existing snapshot for liabilities
+                    if let acct = ex.account,
+                       (acct.type == .loan || acct.type == .creditCard),
+                       let apr = sb.interestRateAPR {
+                        if acct.loanTerms == nil { acct.loanTerms = LoanTerms() }
+                        acct.loanTerms?.apr = apr
+                        acct.loanTerms?.aprScale = sb.interestRateScale
+                    }
                     if forceUpdateBalanceDates.contains(date) {
                         ex.isUserModified = false
                     }
@@ -1190,7 +1316,21 @@ final class ImportViewModel: ObservableObject {
                     return nil
                 }()
                 if let acct = account {
-                    let bs = BalanceSnapshot(asOfDate: date, balance: sb.balance, account: acct, importBatch: batch)
+                    let bs = BalanceSnapshot(
+                        asOfDate: date,
+                        balance: sb.balance,
+                        interestRateAPR: sb.interestRateAPR,
+                        interestRateScale: sb.interestRateScale,
+                        account: acct,
+                        importBatch: batch
+                    )
+                    // Promote APR to account.loanTerms when inserting a new snapshot for liabilities
+                    if (acct.type == .loan || acct.type == .creditCard),
+                       let apr = sb.interestRateAPR {
+                        if acct.loanTerms == nil { acct.loanTerms = LoanTerms() }
+                        acct.loanTerms?.apr = apr
+                        acct.loanTerms?.aprScale = sb.interestRateScale
+                    }
                     context.insert(bs)
                     batch.balances.append(bs)
                     insertedBalances &+= 1

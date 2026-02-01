@@ -32,14 +32,9 @@ struct awaremoneyApp: App {
         }
         let storeURL = appSupport.appendingPathComponent("awaremoney.store")
 
-        do {
-            let configuration = ModelConfiguration(url: storeURL)
-            container = try ModelContainer(for: schema, configurations: configuration)
-            AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")  // DEBUG LOG
-            runInstitutionMigrationIfNeeded()
-        } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
-        }
+        container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
+        AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")  // DEBUG LOG
+        runInstitutionMigrationIfNeeded()
     }
 
     var body: some Scene {
@@ -47,6 +42,41 @@ struct awaremoneyApp: App {
             RootView()
         }
         .modelContainer(container)
+    }
+
+    // Build the SwiftData container with a retry after deleting an incompatible store
+    private static func buildModelContainer(schema: Schema, storeURL: URL) -> ModelContainer {
+        do {
+            let configuration = ModelConfiguration(url: storeURL)
+            return try ModelContainer(for: schema, configurations: configuration)
+        } catch {
+            AMLogging.always("Initial ModelContainer creation failed: \(error). Removing store and retrying.", component: "App")
+            Self.removeStoreFiles(at: storeURL)
+            do {
+                let configuration = ModelConfiguration(url: storeURL)
+                return try ModelContainer(for: schema, configurations: configuration)
+            } catch {
+                fatalError("Failed to create ModelContainer after deleting store: \(error)")
+            }
+        }
+    }
+
+    // Remove the SQLite store and its sidecar files if present
+    private static func removeStoreFiles(at url: URL) {
+        let fm = FileManager.default
+        let base = url
+        let wal = URL(fileURLWithPath: base.path + "-wal")
+        let shm = URL(fileURLWithPath: base.path + "-shm")
+        for candidate in [base, wal, shm] {
+            if fm.fileExists(atPath: candidate.path) {
+                do {
+                    try fm.removeItem(at: candidate)
+                    AMLogging.always("Removed store file: \(candidate.path)", component: "App")
+                } catch {
+                    AMLogging.always("Failed to remove store file: \(candidate.path) — \(error)", component: "App")
+                }
+            }
+        }
     }
 
     // One-time migration to populate missing institutionName values from the most recent import file name

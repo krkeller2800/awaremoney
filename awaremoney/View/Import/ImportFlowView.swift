@@ -33,7 +33,7 @@ struct ImportFlowView: View {
         ContentUnavailableView(
             "No Imports Yet",
             systemImage: "tray",
-            description: Text("Import a CSV or PDF statement to get started.")
+            description: Text("Import CSV account activity or a PDF statement to get started.")
         )
         .listRowInsets(EdgeInsets())
     }
@@ -88,10 +88,29 @@ struct ImportFlowView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Imports") {
-                    importsSection()
+            VStack(spacing: 0) {
+                List {
+                    Section {
+                        importsSection()
+                    } header: {
+                        Text("Imports")
+                    }
                 }
+
+                // Fixed hint bar that does not scroll with the list
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "lightbulb")
+                        .imageScale(.medium)
+                        .foregroundStyle(.secondary)
+                    Text("Tip: For best results, import PDFs of current statements and add CSV activity for mid-month updates.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(Color(.systemGroupedBackground))
             }
             .navigationTitle("Import")
             .task { await loadBatches() }

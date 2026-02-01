@@ -5,7 +5,6 @@
 //  Created by Karl Keller on 1/23/26.
 //
 
-
 import Foundation
 
 struct StagedTransaction: Identifiable, Hashable {
@@ -38,6 +37,8 @@ struct StagedBalance: Identifiable, Hashable {
     let id = UUID()
     var asOfDate: Date
     var balance: Decimal
+    var interestRateAPR: Decimal? = nil
+    var interestRateScale: Int? = nil
     var include: Bool = true
     var sourceAccountLabel: String? = nil
 }

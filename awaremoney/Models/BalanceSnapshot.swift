@@ -13,6 +13,8 @@ final class BalanceSnapshot {
     @Attribute(.unique) var id: UUID
     var asOfDate: Date
     var balance: Decimal
+    var interestRateAPR: Decimal?
+    var interestRateScale: Int?
 
     // Provenance
     var isUserCreated: Bool = false
@@ -20,13 +22,15 @@ final class BalanceSnapshot {
     var isUserModified: Bool = false
 
     // Relationships
-    var account: Account?
+    @Relationship(inverse: \Account.balanceSnapshots) var account: Account?
     var importBatch: ImportBatch?
 
     init(
         id: UUID = UUID(),
         asOfDate: Date,
         balance: Decimal,
+        interestRateAPR: Decimal? = nil,
+        interestRateScale: Int? = nil,
         account: Account? = nil,
         importBatch: ImportBatch? = nil,
         isUserCreated: Bool = false,
@@ -36,6 +40,8 @@ final class BalanceSnapshot {
         self.id = id
         self.asOfDate = asOfDate
         self.balance = balance
+        self.interestRateAPR = interestRateAPR
+        self.interestRateScale = interestRateScale
         self.account = account
         self.importBatch = importBatch
         self.isUserCreated = isUserCreated

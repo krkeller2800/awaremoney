@@ -19,6 +19,7 @@ struct ImportBatchDetailView: View {
     @State private var pendingConflicts: [TxConflict] = []
     @State private var showSummaryAlert = false
     @State private var summaryMessage: String = ""
+    @State private var showPDFSheet = false
 
     var body: some View {
         Group {
@@ -75,6 +76,11 @@ struct ImportBatchDetailView: View {
                                     .labelsHidden()
                                     Text(snap.asOfDate, style: .date)
                                     Spacer()
+                                    if let apr = snap.interestRateAPR {
+                                        Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Text(format(amount: snap.balance))
                                 }
                             }
@@ -108,11 +114,22 @@ struct ImportBatchDetailView: View {
                         Divider()
                         HStack {
                             Button {
+                                showPDFSheet = true
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "doc.text.magnifyingglass")
+                                    Text("View PDF").lineLimit(1).minimumScaleFactor(0.85).truncationMode(.tail).allowsTightening(true)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .frame(maxWidth: .infinity)
+
+                            Button {
                                 isImporterPresented = true
                             } label: {
-                                HStack(spacing: 6) {
+                                HStack(spacing: 3) {
                                     Image(systemName: "arrow.triangle.2.circlepath")
-                                    Text("Replace Batch…")
+                                    Text("Replace Batch…").lineLimit(1).minimumScaleFactor(0.85).truncationMode(.tail).allowsTightening(true)
                                 }
                             }
                             .buttonStyle(.borderedProminent)
@@ -172,6 +189,51 @@ struct ImportBatchDetailView: View {
                         )
                     } else {
                         NavigationStack { Text("Preparing conflicts…") }
+                    }
+                }
+                .sheet(isPresented: $showPDFSheet) {
+                    NavigationStack {
+                        Group {
+                            if let path = batch.sourceFileLocalPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+                                PDFKitView(url: URL(fileURLWithPath: path))
+                                    .ignoresSafeArea()
+                            } else if batch.sourceFileName.lowercased().hasSuffix(".pdf"),
+                                      let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                                let candidate = caches.appendingPathComponent(batch.sourceFileName)
+                                if FileManager.default.fileExists(atPath: candidate.path) {
+                                    PDFKitView(url: candidate)
+                                        .ignoresSafeArea()
+                                } else {
+                                    VStack {
+                                        Text("File: \(batch.sourceFileName)")
+                                            .font(.subheadline)
+                                        ContentUnavailableView(
+                                            "PDF Viewer",
+                                            systemImage: "doc.richtext",
+                                            description: Text("Original PDF preview isn't available yet.")
+                                        )
+                                    }
+                                    .padding()
+                                }
+                            } else {
+                                VStack {
+                                    Text("File: \(batch.sourceFileName)")
+                                        .font(.subheadline)
+                                    ContentUnavailableView(
+                                        "PDF Viewer",
+                                        systemImage: "doc.richtext",
+                                        description: Text("Original PDF preview isn't available yet.")
+                                    )
+                                }
+                                .padding()
+                            }
+                        }
+                    }
+                    .navigationTitle("View PDF")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showPDFSheet = false }
+                        }
                     }
                 }
                 .alert("Replace Batch", isPresented: $showSummaryAlert) {
@@ -264,6 +326,14 @@ struct ImportBatchDetailView: View {
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
+    private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .percent
+        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s }
+        else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
+
     @MainActor
     private func replaceBatch(from url: URL) async {
         guard let batch else { return }
@@ -292,6 +362,25 @@ struct ImportBatchDetailView: View {
             }
             var staged = try parser.parse(rows: rows, headers: headers)
             staged.sourceFileName = url.lastPathComponent
+
+            // Maintain a local copy for PDF preview
+            if ext == "pdf" {
+                let fm = FileManager.default
+                if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+                    let dest = caches.appendingPathComponent(url.lastPathComponent)
+                    try? fm.removeItem(at: dest)
+                    if fm.fileExists(atPath: url.path) {
+                        try? fm.copyItem(at: url, to: dest)
+                        batch.sourceFileLocalPath = dest.path
+                        try? modelContext.save()
+                    }
+                }
+            } else {
+                if batch.sourceFileLocalPath != nil {
+                    batch.sourceFileLocalPath = nil
+                    try? modelContext.save()
+                }
+            }
 
             // Conflict detection (transactions): user-modified items whose staged values differ
             var conflicts: [TxConflict] = []
@@ -332,3 +421,4 @@ struct ImportBatchDetailView: View {
 #Preview {
     Text("Preview requires model data")
 }
+

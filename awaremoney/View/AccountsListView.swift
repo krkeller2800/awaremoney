@@ -3,41 +3,64 @@ import SwiftData
 
 struct AccountsListView: View {
     @Query(sort: \Account.name) private var accounts: [Account]
-    @State private var refreshTick: Int = 0
 #if DEBUG
     @State private var isDebugSettingsPresented: Bool = false
 #endif
+    @State private var isAboutPresented: Bool = false
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(accounts) { account in
-                    NavigationLink(destination: AccountDetailView(accountID: account.id)) {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(!account.name.isEmpty ? account.name : ((account.institutionName?.isEmpty == false) ? account.institutionName! : "Unnamed"))
-                                Text(account.type.rawValue.capitalized)
-                                    .font(.caption)
+                if accounts.isEmpty {
+                    ContentUnavailableView(
+                        label: {
+                            VStack(spacing: 8) {
+                                Image("aware")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 64, height: 64)
                                     .foregroundStyle(.secondary)
+                                Text("No Accounts Yet")
+                                    .font(.title3)
                             }
-                            Spacer()
+                        },
+                        description: {
+                            Text("Go to the Import tab to add statements and activity.")
+                        }
+                    )
+                    .listRowInsets(EdgeInsets())
+                } else {
+                    ForEach(accounts) { account in
+                        NavigationLink(destination: AccountDetailView(accountID: account.id)) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(!account.name.isEmpty ? account.name : ((account.institutionName?.isEmpty == false) ? account.institutionName! : "Unnamed"))
+                                    Text(account.type.rawValue.capitalized)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
                         }
                     }
                 }
             }
             .navigationTitle("Accounts")
-            .id(refreshTick)
-            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-                refreshTick &+= 1
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
-                refreshTick &+= 1
+            .sheet(isPresented: $isAboutPresented) {
+                AboutView()
             }
 #if DEBUG
             .sheet(isPresented: $isDebugSettingsPresented) {
                 DebugSettingsView()
             }
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        isAboutPresented = true
+                    } label: {
+                        Label("About", systemImage: "info.circle")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         isDebugSettingsPresented = true
@@ -48,6 +71,17 @@ struct AccountsListView: View {
             }
 #endif
         }
+#if !DEBUG
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    isAboutPresented = true
+                } label: {
+                    Label("About", systemImage: "info.circle")
+                }
+            }
+        }
+#endif
     }
 }
 
