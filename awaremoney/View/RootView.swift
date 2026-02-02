@@ -16,6 +16,9 @@ struct RootView: View {
             NetWorthView()
                 .tabItem { Label("Net Worth", systemImage: "chart.pie") }
 
+            DebtDashboardView()
+                .tabItem { Label("Debt", systemImage: "creditcard") }
+
             ImportFlowView()
                 .tabItem { Label("Import", systemImage: "tray.and.arrow.down") }
         }
