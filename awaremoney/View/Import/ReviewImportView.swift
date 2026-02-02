@@ -55,8 +55,28 @@ struct ReviewImportView: View {
                         set: { newValue in
                             selectedAccountId = newValue
                             vm.selectedAccountID = newValue
+                            AMLogging.always("ReviewImportView: Account selection changed -> \(String(describing: newValue))", component: "ReviewImportView")
                             if newValue != nil {
                                 vm.newAccountName = ""
+                                // Prefill institution from selected account if user hasn't entered one
+                                if let id = newValue, let acct = accounts.first(where: { $0.id == id }) {
+                                    let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if current.isEmpty, let inst = acct.institutionName, !inst.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        vm.userInstitutionName = inst
+                                        AMLogging.always("ReviewImportView: Prefilled institution from selected account — category=selectedAccount value=\(inst)", component: "ReviewImportView")
+                                    } else {
+                                        let reason = current.isEmpty ? "noAccountInstitution" : "alreadySet"
+                                        AMLogging.always("ReviewImportView: Did not prefill from selected account — category=none reason=\(reason)", component: "ReviewImportView")
+                                    }
+                                }
+                            } else {
+                                // Switched back to Create New… — prefill from parser if available and empty
+                                let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if current.isEmpty, let inst = parsed, !inst.isEmpty {
+                                    vm.userInstitutionName = inst
+                                    AMLogging.always("ReviewImportView: Prefilled institution from parser on Create New — category=parser value=\(inst)", component: "ReviewImportView")
+                                }
                             }
                         }
                     )) {
@@ -66,6 +86,7 @@ struct ReviewImportView: View {
                         }
                     }
                     .onAppear {
+                        AMLogging.always("ReviewImportView.onAppear — file=\(staged.sourceFileName), initial userInstitutionName='\(vm.userInstitutionName)'", component: "ReviewImportView")
                         // Default to creating a new account for each staged import unless user explicitly picks an existing one
                         selectedAccountId = nil
                         vm.selectedAccountID = nil
@@ -75,11 +96,17 @@ struct ReviewImportView: View {
                             vm.newAccountType = suggested
                         }
 
-                        // If we can guess an institution, seed it; otherwise require user input
-                        if let inst = vm.guessInstitutionName(from: staged.sourceFileName) {
+                        // Prefill institution from parser (staged) if available and field is empty
+                        let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        AMLogging.always("ReviewImportView.onAppear — parsedInstitution=\(parsed ?? "nil") currentEmpty=\(current.isEmpty)", component: "ReviewImportView")
+                        if current.isEmpty, let inst = parsed, !inst.isEmpty {
                             vm.userInstitutionName = inst
+                            AMLogging.always("ReviewImportView: Prefilled institution from parser — category=parser value=\(inst)", component: "ReviewImportView")
+                        } else if current.isEmpty {
+                            AMLogging.always("ReviewImportView: No prefill — category=none reason=noParsedInstitution", component: "ReviewImportView")
                         } else {
-                            vm.userInstitutionName = ""
+                            AMLogging.always("ReviewImportView: No prefill — category=none reason=alreadySet", component: "ReviewImportView")
                         }
                     }
 
@@ -226,6 +253,12 @@ struct ReviewImportView: View {
                     }
                 }
             }
+            .onChange(of: vm.userInstitutionName) {
+                AMLogging.always("ReviewImportView: userInstitutionName changed -> '\(vm.userInstitutionName)'", component: "ReviewImportView")
+            }
+            .onChange(of: selectedAccountId) { 
+                AMLogging.always("ReviewImportView: selectedAccountId changed -> \(String(describing: selectedAccountId))", component: "ReviewImportView")
+            }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     Divider()
@@ -247,6 +280,10 @@ struct ReviewImportView: View {
                         .frame(maxWidth: .infinity)
 
                         Button {
+                            // Diagnostics: log institution state at approve time
+                            let guess = vm.guessInstitutionName(from: staged.sourceFileName)
+                            let selected = selectedAccountId.flatMap { id in accounts.first(where: { $0.id == id }) }
+                            AMLogging.always("ReviewImportView: Approve tapped — selectedAccount=\(selected?.name ?? "nil"), selectedInst=\(selected?.institutionName ?? "nil"), vm.userInstitutionName='\(vm.userInstitutionName)', filenameGuess=\(guess ?? "nil")", component: "ReviewImportView")
                             do { try vm.approveAndSave(context: modelContext) }
                             catch { vm.errorMessage = error.localizedDescription }
                         } label: {

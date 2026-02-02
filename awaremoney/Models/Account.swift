@@ -73,6 +73,7 @@ final class Account {
     }
 }
 
+@MainActor
 extension Account {
     var isLiability: Bool { type == AccountType.loan || type == AccountType.creditCard }
     var type: AccountType {

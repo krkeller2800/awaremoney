@@ -92,7 +92,7 @@ struct DebtDashboardView: View {
     }
 
     private func statementDate(onOrBefore date: Date, day: Int) -> Date {
-        var cal = Calendar.current
+        let cal = Calendar.current
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
         let range = cal.range(of: .day, in: .month, for: monthStart)!
         let clampedDay = min(max(1, day), range.count)
@@ -112,7 +112,7 @@ struct DebtDashboardView: View {
     }
 
     private func nextStatementDate(after date: Date, day: Int) -> Date {
-        var cal = Calendar.current
+        let cal = Calendar.current
         let nextMonth = cal.date(byAdding: DateComponents(month: 1), to: date)!
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: nextMonth))!
         let range = cal.range(of: .day, in: .month, for: monthStart)!
@@ -203,8 +203,8 @@ struct DebtDetailView: View {
                     }
                 }
 
-                // Payment amount (shown for loans and for credit cards when Fixed Amount is selected)
-                if account.type == .loan || (account.type == .creditCard && ccMode == .fixedAmount) {
+                // Payment amount (shown for loans and credit cards)
+                if account.type == .loan || account.type == .creditCard {
                     LabeledContent("Typical Payment") {
                         TextField("0.00", text: $paymentInput)
                             .multilineTextAlignment(.trailing)
@@ -270,7 +270,7 @@ struct DebtDetailView: View {
                         }
                         if account.type == .creditCard {
                             LabeledContent("Mode", value: (account.creditCardPaymentMode ?? .minimum).rawValue.capitalized)
-                            if let pay = account.loanTerms?.paymentAmount, account.creditCardPaymentMode == .fixedAmount {
+                            if let pay = account.loanTerms?.paymentAmount {
                                 LabeledContent("Typical Payment", value: formatAmount(pay))
                             }
                         } else {
@@ -301,10 +301,12 @@ struct DebtDetailView: View {
     private func payoffDate(for account: Account) -> Date? {
         let startingBalance = absDecimal(latestBalance(account))
         guard startingBalance > 0 else { return nil }
+        AMLogging.always("DebtDetailView: payoffDate start — balance=\(startingBalance), apr=\(String(describing: account.loanTerms?.apr)), payment=\(String(describing: account.loanTerms?.paymentAmount))", component: "DebtDetailView")
         let apr = account.loanTerms?.apr
         let payment = account.loanTerms?.paymentAmount
 
         if let anchor = latestSnapshotDate(account), let pay = payment, pay > 0 {
+            AMLogging.always("DebtDetailView: payoffDate using statement-anchored simulation — pay=\(pay)", component: "DebtDetailView")
             let sDay = Calendar.current.component(.day, from: anchor)
             var bal = startingBalance
             var stmt = nextStatementDate(after: statementDate(onOrBefore: anchor, day: sDay), day: sDay)
@@ -318,6 +320,7 @@ struct DebtDetailView: View {
             }
             return nil
         } else {
+            AMLogging.always("DebtDetailView: payoffDate using engine projection — apr=\(String(describing: apr)) payment=\(String(describing: payment))", component: "DebtDetailView")
             // Fallback
             do {
                 let kind: DebtKind = (account.type == .loan) ? .loan : .creditCard(account.creditCardPaymentMode ?? .minimum)
@@ -356,7 +359,7 @@ struct DebtDetailView: View {
     }
 
     private func statementDate(onOrBefore date: Date, day: Int) -> Date {
-        var cal = Calendar.current
+        let cal = Calendar.current
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
         let range = cal.range(of: .day, in: .month, for: monthStart)!
         let clampedDay = min(max(1, day), range.count)
@@ -376,7 +379,7 @@ struct DebtDetailView: View {
     }
 
     private func nextStatementDate(after date: Date, day: Int) -> Date {
-        var cal = Calendar.current
+        let cal = Calendar.current
         let nextMonth = cal.date(byAdding: DateComponents(month: 1), to: date)!
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: nextMonth))!
         let range = cal.range(of: .day, in: .month, for: monthStart)!
@@ -421,9 +424,11 @@ struct DebtDetailView: View {
             self.paymentDay = nil
         }
         if account.type == .creditCard { self.ccMode = account.creditCardPaymentMode ?? .minimum }
+        AMLogging.always("DebtDetailView: initializeState — paymentInput=\(paymentInput), terms.paymentAmount=\(String(describing: account.loanTerms?.paymentAmount)), apr=\(String(describing: account.loanTerms?.apr))", component: "DebtDetailView")
     }
 
     private func saveTerms() {
+        AMLogging.always("DebtDetailView: saveTerms start — aprInput=\(aprInput), paymentInput=\(paymentInput), paymentDay=\(String(describing: paymentDay)), ccMode=\(ccMode.rawValue)", component: "DebtDetailView")
         var terms = account.loanTerms ?? LoanTerms()
 
         // APR parsing: interpret input as percent (e.g., 19.99 -> 0.1999)
@@ -434,6 +439,7 @@ struct DebtDetailView: View {
             terms.apr = nil
             terms.aprScale = nil
         }
+        AMLogging.always("DebtDetailView: parsed APR — fraction=\(String(describing: terms.apr)) scale=\(String(describing: terms.aprScale))", component: "DebtDetailView")
 
         // Payment amount parsing (currency/decimal)
         if let pay = parseCurrencyInput(paymentInput) {
@@ -441,16 +447,20 @@ struct DebtDetailView: View {
         } else {
             terms.paymentAmount = nil
         }
+        AMLogging.always("DebtDetailView: parsed paymentAmount=\(String(describing: terms.paymentAmount))", component: "DebtDetailView")
         terms.paymentDayOfMonth = paymentDay
 
         // Persist terms and mode
         account.loanTerms = terms
         if account.type == .creditCard { account.creditCardPaymentMode = ccMode }
+        AMLogging.always("DebtDetailView: saving terms — apr=\(String(describing: terms.apr)), scale=\(String(describing: terms.aprScale)), payment=\(String(describing: terms.paymentAmount)), day=\(String(describing: terms.paymentDayOfMonth))", component: "DebtDetailView")
 
         do {
             try modelContext.save()
+            AMLogging.always("DebtDetailView: saveTerms persisted — account.loanTerms.paymentAmount=\(String(describing: account.loanTerms?.paymentAmount))", component: "DebtDetailView")
             NotificationCenter.default.post(name: .accountsDidChange, object: nil)
         } catch {
+            AMLogging.always("DebtDetailView: saveTerms failed to persist — error=\(error.localizedDescription)", component: "DebtDetailView")
             // Silently ignore for now; UI can surface errors later
         }
     }
@@ -493,6 +503,21 @@ struct DebtDetailView: View {
         nf.numberStyle = .decimal
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: percent)) ?? "\(percent)"
+    }
+
+    private func monthlyPayment(for account: Account, balance: Decimal) -> Decimal {
+        // Use user's typical payment if provided; otherwise estimate at 2% of balance
+        let configured = account.loanTerms?.paymentAmount
+        let twoPercent = Decimal(string: "0.02") ?? 0.02
+        // Round to 2 fraction digits explicitly (bankers rounding)
+        let intermediate = balance * twoPercent
+        var result = intermediate
+        var original = intermediate
+        NSDecimalRound(&result, &original, 2, .plain)
+        let estimate = result
+        let chosen = (configured != nil && configured! > 0) ? configured! : estimate
+        AMLogging.always("DebtDetailView: monthlyPayment — account=\(account.name) configured=\(String(describing: configured)) balance=\(balance) chosen=\(chosen)", component: "DebtDetailView")
+        return chosen
     }
 }
 

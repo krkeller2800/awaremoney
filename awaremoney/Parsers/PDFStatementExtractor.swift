@@ -1165,8 +1165,68 @@ enum PDFStatementExtractor {
                 return false
             }
 
+            // Inserted helper function to detect loan payment amount
+            func detectLoanPaymentAmount(in src: [String]) -> String? {
+                // Prefer Amount Due; fall back to Regular/Scheduled/Monthly Payment
+                let dueLabels = [
+                    "current amount due", "total amount due", "amount due", "payment due", "amount due now", "due now"
+                ]
+                let typicalLabels = [
+                    "regular monthly payment amount", "regular payment amount", "scheduled payment", "monthly payment", "installment amount", "payment amount"
+                ]
+
+                func amountNearLabel(lineIndex: Int, labels: [String]) -> String? {
+                    guard lineIndex >= 0 && lineIndex < src.count else { return nil }
+                    let line = src[lineIndex]
+                    let lower = line.lowercased()
+                    // If label is on this line, prefer the rightmost amount on the same line; otherwise, check the next line
+                    for lbl in labels {
+                        if let r = lower.range(of: lbl) {
+                            let suffix = String(line[r.upperBound...])
+                            let matches = amountAnywhereRegex.matches(in: suffix, options: [], range: NSRange(location: 0, length: suffix.utf16.count))
+                            if let chosen = matches.last, let rr = Range(chosen.range, in: suffix) {
+                                return sanitizeAmount(String(suffix[rr]))
+                            }
+                            // Try same line anywhere if suffix failed
+                            let sameMatches = amountAnywhereRegex.matches(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count))
+                            if let chosen2 = sameMatches.last, let rr2 = Range(chosen2.range, in: line) {
+                                return sanitizeAmount(String(line[rr2]))
+                            }
+                            // Try next line
+                            if lineIndex + 1 < src.count {
+                                let next = src[lineIndex + 1]
+                                if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count)) != nil {
+                                    return sanitizeAmount(next)
+                                }
+                                let nextMatches = amountAnywhereRegex.matches(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count))
+                                if let chosen3 = nextMatches.last, let rr3 = Range(chosen3.range, in: next) {
+                                    return sanitizeAmount(String(next[rr3]))
+                                }
+                            }
+                        }
+                    }
+                    return nil
+                }
+
+                // 1) Try Amount Due first
+                for (idx, raw) in src.enumerated() {
+                    let lower = raw.lowercased()
+                    if dueLabels.contains(where: { lower.contains($0) }) {
+                        if let amt = amountNearLabel(lineIndex: idx, labels: dueLabels) { return amt }
+                    }
+                }
+                // 2) Fall back to typical/regular payment labels
+                for (idx, raw) in src.enumerated() {
+                    let lower = raw.lowercased()
+                    if typicalLabels.contains(where: { lower.contains($0) }) {
+                        if let amt = amountNearLabel(lineIndex: idx, labels: typicalLabels) { return amt }
+                    }
+                }
+                return nil
+            }
+
             func findBalancesPerAccount(in src: [String], useSectionFilter: Bool) -> [AccountKind: (begin: String?, end: String?)] {
-                var beginLabels = [
+                let beginLabels = [
                     "beginning balance", "opening balance",
                     "beginning account value", "beginning value", "beginning account balance",
                     "previous balance", "prior balance", "starting balance",
@@ -1396,6 +1456,37 @@ enum PDFStatementExtractor {
             }
 
             let hasAnyBalances2 = balancesByAccount.values.contains { $0.begin != nil || $0.end != nil }
+            
+            // Inserted code to detect loan payment and append suggested payment row
+            // Detect a loan/mortgage context and suggest a monthly payment from the statement
+            let docLooksLoan: Bool = {
+                let lc = lines.map { $0.lowercased() }
+                return lc.contains(where: { $0.contains("loan") || $0.contains("mortgage") })
+            }()
+
+            var suggestedPayment: String? = nil
+            if docLooksLoan {
+                suggestedPayment = detectLoanPaymentAmount(in: lines)
+                if suggestedPayment == nil && enableOCR {
+                    let ocrLines = ocrExtractLines(from: doc, scale: 2.0)
+                    suggestedPayment = detectLoanPaymentAmount(in: ocrLines)
+                }
+            }
+
+            // Choose a date for the suggested payment row (use statement end date if available)
+            var paymentDateStr: String? = nil
+            if let sp = periodForSummary, let (_, endDate) = summaryDates(from: sp) {
+                paymentDateStr = df.string(from: endDate)
+            } else if let latest = latestDate {
+                paymentDateStr = df.string(from: latest)
+            }
+
+            if let pay = suggestedPayment, let pDate = paymentDateStr {
+                rows.append([pDate, "Estimated Monthly Payment (Loan)", pay, "", "loan"])
+                AMLogging.always("PDF summary: appended typical payment row amount=\(pay) date=\(pDate)", component: "PDFStatementExtractor")
+            }
+            // End inserted code
+
             if !hasAnyBalances2 {
                 let source = balancesFromOCR ? ocrLinesLocal : lines
                 let loan = scanLoanBalances(in: source)
@@ -1457,7 +1548,7 @@ enum PDFStatementExtractor {
                 rows = rows.filter { r in
                     guard r.count >= 2 else { return false }
                     let d = r[1].lowercased()
-                    return d.contains("statement beginning balance") || d.contains("statement ending balance")
+                    return d.contains("statement beginning balance") || d.contains("statement ending balance") || d.contains("typical payment (loan)") || d.contains("estimated monthly payment (loan)")
                 }
             }
 

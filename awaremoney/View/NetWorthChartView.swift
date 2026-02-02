@@ -42,7 +42,7 @@ struct NetWorthChartView: View {
             .task { await load() }
             .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in Task { await load() } }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in Task { await load() } }
-            .onChange(of: mode) { _ in Task { await load() } }
+            .onChange(of: mode) { Task { await load() } }
         }
     }
     

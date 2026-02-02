@@ -64,25 +64,29 @@ struct ImportBatchDetailView: View {
                     if !balances.isEmpty {
                         Section("Balances") {
                             ForEach(balances, id: \.id) { snap in
-                                HStack {
-                                    Toggle("", isOn: Binding(get: {
-                                        !(snap.isExcluded)
-                                    }, set: { newVal in
-                                        snap.isExcluded = !newVal
-                                        snap.isUserModified = true
-                                        try? modelContext.save()
-                                        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
-                                    }))
-                                    .labelsHidden()
-                                    Text(snap.asOfDate, style: .date)
-                                    Spacer()
+                                VStack{
+                                    HStack {
+                                        Toggle("", isOn: Binding(get: {
+                                            !(snap.isExcluded)
+                                        }, set: { newVal in
+                                            snap.isExcluded = !newVal
+                                            snap.isUserModified = true
+                                            try? modelContext.save()
+                                            NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+                                        }))
+                                        .labelsHidden()
+                                        Text(snap.asOfDate, style: .date)
+                                        Spacer()
+                                        Text(format(amount: snap.balance))
+                                    }
                                     if let apr = snap.interestRateAPR {
                                         Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                            .frame(maxWidth: .infinity, alignment: .trailing)
                                     }
-                                    Text(format(amount: snap.balance))
                                 }
+               
                             }
                         }
                     }

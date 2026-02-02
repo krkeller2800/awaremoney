@@ -46,6 +46,7 @@ struct StagedBalance: Identifiable, Hashable {
 struct StagedImport {
     var parserId: String
     var sourceFileName: String
+    var inferredInstitutionName: String? = nil
     var suggestedAccountType: Account.AccountType?
     var transactions: [StagedTransaction]
     var holdings: [StagedHolding]
