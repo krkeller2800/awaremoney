@@ -96,12 +96,43 @@ struct PDFSummaryParser: StatementParser {
         }()
         AMLogging.always("PDFSummaryParser: globalAPR=\(String(describing: globalAPR))", component: LOG_COMPONENT)
 
+        // Pre-scan all rows for credit card context indicators
+        let hasCreditCardIndicators: Bool = {
+            let tokens = [
+                "new balance",
+                "previous balance",
+                "minimum payment due",
+                "payment due date",
+                "credit limit",
+                "available credit",
+                "card ending"
+            ]
+            for row in rows {
+                let joined = row.joined(separator: " ").lowercased()
+                if tokens.contains(where: { joined.contains($0) }) {
+                    return true
+                }
+            }
+            return false
+        }()
+        AMLogging.always("PDFSummaryParser: ccIndicators=\(hasCreditCardIndicators)", component: LOG_COMPONENT)
+
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
             let desc = value(row, map, key: "description")?.lowercased() ?? ""
-            let isStatementSummary = desc.contains("statement beginning balance") || desc.contains("statement ending balance")
-            let isLoanSummary = desc.contains("beginning balance") || desc.contains("ending balance") || desc.contains("current amount due") || desc.contains("amount due") || desc.contains("payment due") || desc.contains("principal balance") || desc.contains("outstanding principal")
-            guard isStatementSummary || isLoanSummary else { continue }
+            let lower = desc
+            // Detect credit-card style summary lines
+            let isCreditCardSummary = lower.contains("new balance")
+                || lower.contains("previous balance")
+                || lower.contains("minimum payment due")
+                || lower.contains("payment due date")
+                || lower.contains("credit limit")
+                || lower.contains("available credit")
+                || lower.contains("card ending")
+
+            let isStatementSummary = lower.contains("statement beginning balance") || lower.contains("statement ending balance")
+            let isLoanSummary = lower.contains("beginning balance") || lower.contains("ending balance") || lower.contains("current amount due") || lower.contains("amount due") || lower.contains("payment due") || lower.contains("principal balance") || lower.contains("outstanding principal")
+            guard isStatementSummary || isLoanSummary || isCreditCardSummary else { continue }
             guard let dateStr = value(row, map, key: "date"), let date = parseDate(dateStr) else { continue }
 
             // Prefer the explicit balance column if present; otherwise fall back to amount (should be 0)
@@ -131,21 +162,32 @@ struct PDFSummaryParser: StatementParser {
                 if sb.interestRateScale == nil { sb.interestRateScale = 2 }
                 AMLogging.always("Applied global APR to snapshot: apr=\(apr) date=\(date)", component: LOG_COMPONENT)
             }
-            // Prefer explicit Account column, fallback to description text
-            var accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
-            // Bias to loan when loan phrases are present
-            let loanPhrases = ["loan", "mortgage", "principal balance", "outstanding principal", "amount due", "payment due"]
-            if accountKey == nil {
-                let lower = desc
-                if loanPhrases.contains(where: { lower.contains($0) }) {
-                    accountKey = "loan"
+            // Prefer explicit Account column, fallback to description text; bias to credit card when CC context is present anywhere in the document
+            if isCreditCardSummary || hasCreditCardIndicators {
+                sb.sourceAccountLabel = "creditcard"
+            } else {
+                var accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
+                // Bias to loan when loan phrases are present
+                let loanPhrases = ["loan", "mortgage", "principal balance", "outstanding principal", "amount due", "payment due"]
+                if accountKey == nil {
+                    if loanPhrases.contains(where: { lower.contains($0) }) {
+                        accountKey = "loan"
+                    }
                 }
+                sb.sourceAccountLabel = accountKey
             }
-            sb.sourceAccountLabel = accountKey
             balances.append(sb)
         }
 
         AMLogging.always("PDFSummaryParser — parsed balances: \(balances.count)", component: LOG_COMPONENT)
+
+        // Final coercion: if the document contains clear credit card indicators, treat all summary balances as credit card snapshots
+        if hasCreditCardIndicators && !balances.isEmpty {
+            AMLogging.always("PDFSummaryParser: coercing \(balances.count) snapshot label(s) to creditcard due to document-level CC indicators", component: LOG_COMPONENT)
+            for i in balances.indices {
+                balances[i].sourceAccountLabel = "creditcard"
+            }
+        }
 
         // If we didn't find any summary rows, surface a helpful message
         if balances.isEmpty {

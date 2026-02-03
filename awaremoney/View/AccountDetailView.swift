@@ -72,6 +72,63 @@ struct AccountDetailView: View {
                         }
                     }
 
+                    if account.type == .loan || account.type == .creditCard {
+                        Section("Payment Plan") {
+                            // Typical payment editor
+                            LabeledContent("Typical Payment") {
+                                TextField("0.00", text: Binding<String>(
+                                    get: {
+                                        if let amt = account.loanTerms?.paymentAmount {
+                                            return formatAmountForInput(amt)
+                                        } else { return "" }
+                                    },
+                                    set: { newVal in
+                                        var terms = account.loanTerms ?? LoanTerms()
+                                        if let dec = parseCurrencyInput(newVal) {
+                                            terms.paymentAmount = dec
+                                        } else {
+                                            terms.paymentAmount = nil
+                                        }
+                                        account.loanTerms = terms
+                                        try? modelContext.save()
+                                        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                    }
+                                ))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            }
+
+                            // Due day picker
+                            Picker("Due Day", selection: Binding<Int?>(
+                                get: { account.loanTerms?.paymentDayOfMonth },
+                                set: { newVal in
+                                    var terms = account.loanTerms ?? LoanTerms()
+                                    terms.paymentDayOfMonth = newVal
+                                    account.loanTerms = terms
+                                    try? modelContext.save()
+                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                }
+                            )) {
+                                Text("None").tag(nil as Int?)
+                                ForEach(1...31, id: \.self) { d in
+                                    Text("\(d)").tag(Optional(d))
+                                }
+                            }
+
+                            if let amt = account.loanTerms?.paymentAmount, amt > 0 {
+                                Text("Used for payoff estimates and budget projections.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Enter your usual monthly payment to enable payoff estimates.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     Section("Balance Info") {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
@@ -388,6 +445,21 @@ struct AccountDetailView: View {
         nf.numberStyle = .percent
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
+
+    private func parseCurrencyInput(_ s: String) -> Decimal? {
+        let cleaned = s.replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "$", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Decimal(string: cleaned)
+    }
+
+    private func formatAmountForInput(_ amount: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        nf.minimumFractionDigits = 0
+        nf.maximumFractionDigits = 2
+        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 }
 

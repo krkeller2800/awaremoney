@@ -48,30 +48,161 @@ final class ImportViewModel: ObservableObject {
     private static func extractAPRFromPDF(at url: URL) -> (Decimal, Int)? {
         AMLogging.always("ImportViewModel: extractAPRFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
-        let pattern = #"(?:(?:interest\s*rate)|apr)[^0-9%]{0,32}([0-9]{1,2}(?:\.[0-9]{1,4})?)\s*%?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
         let pageCount = doc.pageCount
         AMLogging.always("ImportViewModel: PDF pageCount=\(pageCount)", component: "ImportViewModel")
-        for i in 0..<pageCount {
-            guard let page = doc.page(at: i), let raw = page.string else { continue }
-            let lower = raw.lowercased()
-            let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
-            if let match = regex.firstMatch(in: lower, options: [], range: range), match.numberOfRanges >= 2,
-               let r = Range(match.range(at: 1), in: lower) {
-                let token = String(lower[r])
-                if var val = Decimal(string: token) {
-                    let scale: Int = {
-                        if let dot = token.firstIndex(of: ".") {
-                            return token.distance(from: token.index(after: dot), to: token.endIndex)
-                        }
-                        return 0
-                    }()
-                    AMLogging.always("ImportViewModel: APR match on page \(i+1): token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
-                    if val > 1 { val /= 100 } // convert percent to fraction
-                    return (val, scale)
+
+        // Combine first few pages to avoid early false positives and allow context filtering
+        let pagesToScan = pageCount
+        var combined = ""
+        for i in 0..<pagesToScan {
+            if let page = doc.page(at: i), let s = page.string { combined.append("\n"); combined.append(s) }
+        }
+        let lowerText = combined.lowercased()
+
+        func computeScale(_ token: String) -> Int {
+            if let dot = token.firstIndex(of: ".") {
+                return token.distance(from: token.index(after: dot), to: token.endIndex)
+            }
+            return 0
+        }
+
+        // Require a percent sign to avoid matching dollar amounts
+        let aprNumber = "([0-9]{1,2}(?:\\.[0-9]{1,4})?)\\s*%"
+
+        // Helper to get the first percentage number in a string as a fraction APR (0.2324) with scale
+        func firstPercent(in s: String) -> (Decimal, Int)? {
+            guard let re = try? NSRegularExpression(pattern: aprNumber, options: []) else { return nil }
+            let ns = s as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            guard let m = re.firstMatch(in: s, options: [], range: range), m.numberOfRanges >= 2 else { return nil }
+            let r = m.range(at: 1)
+            guard r.location != NSNotFound, let swift = Range(r, in: s) else { return nil }
+            let token = String(s[swift])
+            if var val = Decimal(string: token) {
+                let scale = computeScale(token)
+                if val > 1 { val /= 100 }
+                AMLogging.always("ImportViewModel: APR percent line match token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
+                return (val, scale)
+            }
+            return nil
+        }
+
+        // 0) Table-aware pass: detect an APR table header (e.g., "Type of Balance" + "APR" or the "Interest Charge Calculation" section)
+        let lines = lowerText.components(separatedBy: CharacterSet.newlines)
+        var headerIndex: Int? = nil
+        for (i, line) in lines.enumerated() {
+            if line.contains("type of balance") && line.contains("apr") { headerIndex = i; break }
+            if headerIndex == nil && line.contains("interest charge calculation") { headerIndex = i }
+        }
+        if let idx = headerIndex {
+            AMLogging.always("ImportViewModel: APR table header detected at line \(idx)", component: "ImportViewModel")
+            let end = min(lines.count, idx + 120)
+            // Prefer purchases row; allow percent to be on adjacent lines/columns
+            for j in (idx+1)..<end {
+                let line = lines[j]
+                if line.contains("purchases") {
+                    if let hit = firstPercent(in: line) { return hit }
+                    // look ahead a few lines for the percent token (table column)
+                    let lookaheadEnd = min(end, j + 8)
+                    for k in (j+1)..<lookaheadEnd {
+                        if let hit = firstPercent(in: lines[k]) { return hit }
+                    }
+                }
+            }
+            // Fallback: cash advances row with adjacent percent
+            for j in (idx+1)..<end {
+                let line = lines[j]
+                if line.contains("cash advance") {
+                    if let hit = firstPercent(in: line) { return hit }
+                    let lookaheadEnd = min(end, j + 8)
+                    for k in (j+1)..<lookaheadEnd {
+                        if let hit = firstPercent(in: lines[k]) { return hit }
+                    }
                 }
             }
         }
+
+        // 1) Non-table direct line: any line containing "purchases" with a percent
+        for line in lines {
+            if line.contains("purchases"), let hit = firstPercent(in: line) { return hit }
+        }
+
+        // 2) Prefer Purchases APR where the token "apr" appears near the number (some layouts)
+        func firstAPRMatch(pattern: String) -> (Decimal, Int)? {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+            let range = NSRange(location: 0, length: (lowerText as NSString).length)
+            guard let m = re.firstMatch(in: lowerText, options: [], range: range) else { return nil }
+            guard m.numberOfRanges >= 2 else { return nil }
+            let r = m.range(at: 1)
+            guard r.location != NSNotFound, let swiftRange = Range(r, in: lowerText) else { return nil }
+            let token = String(lowerText[swiftRange]).replacingOccurrences(of: "%", with: "")
+            if var val = Decimal(string: token) {
+                let scale = computeScale(token)
+                if val > 1 { val /= 100 }
+                AMLogging.always("ImportViewModel: APR match (pattern) token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
+                return (val, scale)
+            }
+            return nil
+        }
+
+        let purchasesPatterns = [
+            "(?:standard\\s+)?purchases?\\s*apr[^0-9%]{0,32}" + aprNumber,
+            "purchases?[^\\n\\r]{0,40}?apr[^0-9%]{0,32}" + aprNumber
+        ]
+        for pat in purchasesPatterns { if let hit = firstAPRMatch(pattern: pat) { return hit } }
+
+        // Looser cross-line match: a 'purchases' token followed by a percentage within ~80 chars (across line breaks)
+        let purchasesLoosePattern = "(?:purchases?|purchase)[\\s\\S]{0,80}?" + aprNumber
+        if let hit = firstAPRMatch(pattern: purchasesLoosePattern) { return hit }
+
+        // 3) Consider labeled APRs (Purchases or Cash Advances); choose Purchases if both present
+        let labeledPattern = "(?:purchases?|cash\\s+advances?)\\s*apr[^0-9%]{0,32}" + aprNumber
+        if let re = try? NSRegularExpression(pattern: labeledPattern, options: [.caseInsensitive]) {
+            let ns = lowerText as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            let matches = re.matches(in: lowerText, options: [], range: range)
+            var best: (val: Decimal, scale: Int, labelScore: Int)? = nil
+            for m in matches {
+                guard m.numberOfRanges >= 2 else { continue }
+                let numRange = m.range(at: 1)
+                guard numRange.location != NSNotFound, let swiftRange = Range(numRange, in: lowerText) else { continue }
+                let token = String(lowerText[swiftRange]).replacingOccurrences(of: "%", with: "")
+                guard var v = Decimal(string: token) else { continue }
+                let scale = computeScale(token)
+                if v > 1 { v /= 100 }
+                let fullRange = Range(m.range, in: lowerText)!
+                let lineRange = (lowerText as NSString).lineRange(for: NSRange(fullRange, in: lowerText))
+                let line = (lowerText as NSString).substring(with: lineRange)
+                let score: Int = line.contains("purchases") ? 2 : (line.contains("cash advance") ? 1 : 0)
+                if best == nil || score > best!.labelScore { best = (v, scale, score) }
+            }
+            if let b = best { return (b.val, b.scale) }
+        }
+
+        // 4) Generic APR mention with required percent sign; filter out disclaimers like "will not exceed"
+        let genericAPRPattern = "(?:(?:annual\\s+percentage\\s+rate\\s*\\(apr\\))|apr)[^0-9%]{0,64}" + aprNumber
+        if let re = try? NSRegularExpression(pattern: genericAPRPattern, options: [.caseInsensitive]) {
+            let ns = lowerText as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            let matches = re.matches(in: lowerText, options: [], range: range)
+            for m in matches {
+                let fullRange = Range(m.range, in: lowerText)!
+                let lineRange = ns.lineRange(for: NSRange(fullRange, in: lowerText))
+                let line = ns.substring(with: lineRange)
+                let isDisclaimer = line.contains("will not exceed") || line.contains("maximum") || line.contains("not exceed")
+                if isDisclaimer { continue }
+                let numRange = m.range(at: 1)
+                guard numRange.location != NSNotFound, let nSwift = Range(numRange, in: lowerText) else { continue }
+                let token = String(lowerText[nSwift]).replacingOccurrences(of: "%", with: "")
+                if var v = Decimal(string: token) {
+                    let scale = computeScale(token)
+                    if v > 1 { v /= 100 }
+                    AMLogging.always("ImportViewModel: APR generic match token=\(token) fraction=\(v) scale=\(scale)", component: "ImportViewModel")
+                    return (v, scale)
+                }
+            }
+        }
+
         AMLogging.always("ImportViewModel: extractAPRFromPDF no APR found", component: "ImportViewModel")
         return nil
     }
@@ -89,6 +220,10 @@ final class ImportViewModel: ObservableObject {
             }
         }
         let text = combined
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
 
         func firstMatch(_ pattern: String, group: Int = 1, options: NSRegularExpression.Options = [.caseInsensitive]) -> String? {
             guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return nil }
@@ -102,7 +237,14 @@ final class ImportViewModel: ObservableObject {
         }
 
         func parseAmount(_ s: String) -> Decimal? {
-            let cleaned = s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleaned = s
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "\u{00A0}", with: "")
+                .replacingOccurrences(of: "\u{202F}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return Decimal(string: cleaned)
         }
 
@@ -123,23 +265,279 @@ final class ImportViewModel: ObservableObject {
 
         // Patterns resilient to extra spaces/formatting
         let amountToken = #"(\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$?\s*[0-9]+(?:\.[0-9]{2})?)"#
+        let currencyToken = #"(\$\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$\s*[0-9]+(?:\.[0-9]{2})?)"#
         let newBalancePattern = "(?:new\\s*balance)\\s*[:\\-]?\\s*" + amountToken
-        let minPaymentPattern = "(?:total\\s+minimum\\s+payment\\s+due|min(?:imum)?\\s+payment(?:\\s+due)?)\\s*[:\\-]?\\s*" + amountToken
+
+        // Cross-line tolerant minimum payment extraction
+        let minPaymentPattern = "(?:total\\s+minimum\\s+payment\\s+due|min(?:imum)?\\s+payment(?:\\s+due)?)\\s*[:\\-]?\\s*" + currencyToken
+        var minPayStr = firstMatch(minPaymentPattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        if minPayStr == nil {
+            // Allow newline or colon/hyphen between label and amount
+            let minPaymentCross = "(?:total\\s+minimum\\s+payment\\s+due|min(?:imum)?\\s+payment(?:\\s+due)?)\\s*[:\\-\\n\\r]*" + currencyToken
+            minPayStr = firstMatch(minPaymentCross, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        }
+        // Fallback: accept amounts without a currency symbol (some PDFs drop the glyph)
+        if minPayStr == nil {
+            let minPaymentPatternAny = "(?:total\\s+minimum\\s+payment\\s+due|min(?:imum)?\\s+payment(?:\\s+due)?)\\s*[:\\-]?\\s*" + amountToken
+            minPayStr = firstMatch(minPaymentPatternAny, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        }
+        if minPayStr == nil {
+            let minPaymentCrossAny = "(?:total\\s+minimum\\s+payment\\s+due|min(?:imum)?\\s+payment(?:\\s+due)?)\\s*[:\\-\\n\\r]*" + amountToken
+            minPayStr = firstMatch(minPaymentCrossAny, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        }
+
         let dueDatePattern = #"(?:payment\s+due\s+date)\s*[:\-]?\s*([A-Za-z]{3,9}\s+[0-9]{1,2},\s*[0-9]{2,4}|[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"#
+        let dueStr = firstMatch(dueDatePattern)
+
+        var minPay = minPayStr.flatMap(parseAmount)
+        if minPay == nil {
+            // Targeted fallback: anchor within the Payment Information section and avoid advisory text
+            let lines = text.components(separatedBy: CharacterSet.newlines)
+            let lowerLines = lines.map { $0.lowercased() }
+            let ignoreLineKeywords = ["if you", "only", "additional", "add ", "pay off", "years", "months"]
+
+            // Prefer searching within the Payment Information section if present
+            let paymentInfoIdx = lowerLines.firstIndex(where: { $0.contains("payment information") })
+            let startIdx = paymentInfoIdx ?? lowerLines.firstIndex(where: { $0.contains("minimum payment") })
+
+            if let start = startIdx {
+                let windowEnd = min(lines.count, start + 40)
+                // Find a clean label line that mentions Minimum Payment but not advisory text
+                var minLabelIdx: Int? = nil
+                for i in start..<windowEnd {
+                    let l = lowerLines[i]
+                    if l.contains("minimum payment") && !ignoreLineKeywords.contains(where: { l.contains($0) }) {
+                        minLabelIdx = i
+                        break
+                    }
+                }
+
+                if let labelIdx = minLabelIdx {
+                    let amtReCurrency = try? NSRegularExpression(pattern: currencyToken, options: [])
+                    let amtReAny = try? NSRegularExpression(pattern: amountToken, options: [])
+
+                    // 1) Same line as label — try currency first, then any amount
+                    do {
+                        let s = lines[labelIdx] as NSString
+                        let r = NSRange(location: 0, length: s.length)
+                        if let re = amtReCurrency, let m = re.firstMatch(in: lines[labelIdx], options: [], range: r), m.numberOfRanges >= 2 {
+                            let gr = m.range(at: 1)
+                            if gr.location != NSNotFound {
+                                let token = s.substring(with: gr)
+                                if let val = parseAmount(token) {
+                                    minPay = val
+                                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line) = \(val)", component: "ImportViewModel")
+                                }
+                            }
+                        }
+                        if minPay == nil, let re = amtReAny, let m = re.firstMatch(in: lines[labelIdx], options: [], range: r), m.numberOfRanges >= 2 {
+                            let gr = m.range(at: 1)
+                            if gr.location != NSNotFound {
+                                let token = s.substring(with: gr)
+                                if let val = parseAmount(token) {
+                                    minPay = val
+                                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line any) = \(val)", component: "ImportViewModel")
+                                }
+                            }
+                        }
+                    }
+
+                    // 2) If not on the same line, look ahead a couple lines for the amount, skipping advisory text
+                    if minPay == nil {
+                        let lookaheadEnd = min(lines.count, labelIdx + 3)
+                        outer: for j in (labelIdx+1)..<lookaheadEnd {
+                            let l = lowerLines[j]
+                            if ignoreLineKeywords.contains(where: { l.contains($0) }) { continue }
+                            let s = lines[j] as NSString
+                            let r = NSRange(location: 0, length: s.length)
+
+                            // Try currency amount first
+                            if let re = amtReCurrency {
+                                let matches = re.matches(in: lines[j], options: [], range: r)
+                                for m in matches {
+                                    guard m.numberOfRanges >= 2 else { continue }
+                                    let gr = m.range(at: 1)
+                                    if gr.location != NSNotFound {
+                                        let token = s.substring(with: gr)
+                                        if let val = parseAmount(token) {
+                                            minPay = val
+                                            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead) = \(val)", component: "ImportViewModel")
+                                            break outer
+                                        }
+                                    }
+                                }
+                            }
+                            // Fallback: any amount without currency symbol
+                            if minPay == nil, let re = amtReAny {
+                                let matches = re.matches(in: lines[j], options: [], range: r)
+                                for m in matches {
+                                    guard m.numberOfRanges >= 2 else { continue }
+                                    let gr = m.range(at: 1)
+                                    if gr.location != NSNotFound {
+                                        let token = s.substring(with: gr)
+                                        if let val = parseAmount(token) {
+                                            minPay = val
+                                            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead any) = \(val)", component: "ImportViewModel")
+                                            break outer
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let due = dueStr.flatMap(parseDate)
 
         guard let newBalStr = firstMatch(newBalancePattern) else {
             AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — no New Balance match", component: "ImportViewModel")
             return nil
         }
-        let minPayStr = firstMatch(minPaymentPattern)
-        let dueStr = firstMatch(dueDatePattern)
 
         guard let newBal = parseAmount(newBalStr) else {
             AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — New Balance parse failed: \(newBalStr)", component: "ImportViewModel")
             return nil
         }
-        let minPay = minPayStr.flatMap(parseAmount)
-        let due = dueStr.flatMap(parseDate)
+
+        // Secondary plausibility filter for Minimum Payment: prefer whole-dollar >= $25 and 1.0%–10% of New Balance
+        if newBal > 0 {
+            func isWholeDollar(_ amount: Decimal) -> Bool {
+                let cents = ((amount as NSDecimalNumber).multiplying(byPowerOf10: 2)).intValue % 100
+                return cents == 0
+            }
+            func fraction(of amount: Decimal, relativeTo total: Decimal) -> Double? {
+                let totalDouble = (total as NSDecimalNumber).doubleValue
+                guard totalDouble > 0 else { return nil }
+                return (amount as NSDecimalNumber).doubleValue / totalDouble
+            }
+
+            // Only refine if the currently found minPay is missing or implausible
+            let existingIsPlausible: Bool = {
+                guard let mp = minPay, let f = fraction(of: mp, relativeTo: newBal) else { return false }
+                return isWholeDollar(mp) && mp >= 25 && f >= 0.01 && f <= 0.10
+            }()
+
+            if !existingIsPlausible {
+                var candidates: [Decimal] = []
+                let lines = text.components(separatedBy: CharacterSet.newlines)
+                let lowerLines = lines.map { $0.lowercased() }
+                let ignoreLineKeywords = ["if you", "only", "additional", "add ", "pay off", "years", "months"]
+
+                let paymentInfoIdx = lowerLines.firstIndex(where: { $0.contains("payment information") })
+                let startIdx = paymentInfoIdx ?? lowerLines.firstIndex(where: { $0.contains("minimum payment") })
+
+                if let start = startIdx {
+                    let windowEnd = min(lines.count, start + 40)
+                    var minLabelIdx: Int? = nil
+                    for i in start..<windowEnd {
+                        let l = lowerLines[i]
+                        if l.contains("minimum payment") && !ignoreLineKeywords.contains(where: { l.contains($0) }) {
+                            minLabelIdx = i
+                            break
+                        }
+                    }
+                    if let labelIdx = minLabelIdx {
+                        let amtReCurrency = try? NSRegularExpression(pattern: currencyToken, options: [])
+                        let amtReAny = try? NSRegularExpression(pattern: amountToken, options: [])
+
+                        // Same line candidates (currency, then any)
+                        do {
+                            let s = lines[labelIdx] as NSString
+                            let r = NSRange(location: 0, length: s.length)
+                            if let re = amtReCurrency {
+                                let ms = re.matches(in: lines[labelIdx], options: [], range: r)
+                                for m in ms {
+                                    if m.numberOfRanges >= 2 {
+                                        let gr = m.range(at: 1)
+                                        if gr.location != NSNotFound {
+                                            let token = s.substring(with: gr)
+                                            if let val = parseAmount(token) {
+                                                if !candidates.contains(where: { $0 == val }) { candidates.append(val) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let re = amtReAny {
+                                let ms = re.matches(in: lines[labelIdx], options: [], range: r)
+                                for m in ms {
+                                    if m.numberOfRanges >= 2 {
+                                        let gr = m.range(at: 1)
+                                        if gr.location != NSNotFound {
+                                            let token = s.substring(with: gr)
+                                            if let val = parseAmount(token) {
+                                                if !candidates.contains(where: { $0 == val }) { candidates.append(val) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Lookahead candidates (skip advisory lines, limit to next 3 lines)
+                        let lookaheadEnd = min(lines.count, labelIdx + 3)
+                        for j in (labelIdx+1)..<lookaheadEnd {
+                            let l = lowerLines[j]
+                            if ignoreLineKeywords.contains(where: { l.contains($0) }) { continue }
+                            let s2 = lines[j] as NSString
+                            let r2 = NSRange(location: 0, length: s2.length)
+                            if let re = amtReCurrency {
+                                let ms2 = re.matches(in: lines[j], options: [], range: r2)
+                                for m in ms2 {
+                                    if m.numberOfRanges >= 2 {
+                                        let gr = m.range(at: 1)
+                                        if gr.location != NSNotFound {
+                                            let token = s2.substring(with: gr)
+                                            if let val = parseAmount(token) {
+                                                if !candidates.contains(where: { $0 == val }) { candidates.append(val) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let re = amtReAny {
+                                let ms2 = re.matches(in: lines[j], options: [], range: r2)
+                                for m in ms2 {
+                                    if m.numberOfRanges >= 2 {
+                                        let gr = m.range(at: 1)
+                                        if gr.location != NSNotFound {
+                                            let token = s2.substring(with: gr)
+                                            if let val = parseAmount(token) {
+                                                if !candidates.contains(where: { $0 == val }) { candidates.append(val) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply plausibility preferences
+                let plausible = candidates.compactMap { amt -> (Decimal, Double)? in
+                    guard let f = fraction(of: amt, relativeTo: newBal) else { return nil }
+                    if isWholeDollar(amt) && amt >= 25 && f >= 0.01 && f <= 0.10 {
+                        return (amt, f)
+                    }
+                    return nil
+                }
+
+                if let best = plausible.sorted(by: { abs($0.1 - 0.02) < abs($1.1 - 0.02) }).first {
+                    minPay = best.0
+                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — refined Minimum Payment selected = \(best.0) (ratio=\(best.1))", component: "ImportViewModel")
+                }
+            }
+            // Enforce plausibility: if still implausible after refinement, discard it
+            let finalIsPlausible: Bool = {
+                guard let mp = minPay, let f = fraction(of: mp, relativeTo: newBal) else { return false }
+                return isWholeDollar(mp) && mp >= 25 && f >= 0.01 && f <= 0.10
+            }()
+            if !finalIsPlausible {
+                AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — discarding implausible Minimum Payment=\(String(describing: minPay)) for newBalance=\(newBal)", component: "ImportViewModel")
+                minPay = nil
+            }
+        }
 
         AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — newBalance=\(newBal), minPayment=\(String(describing: minPay)), dueDate=\(String(describing: due))", component: "ImportViewModel")
         return (newBalance: newBal, minimumPayment: minPay, dueDate: due)
@@ -339,6 +737,23 @@ final class ImportViewModel: ObservableObject {
                                 }
                             }
 
+                            // Try to capture minimum payment from PDF header even if parser guessed a non-card type.
+                            // This is safe: we only keep it if a plausible minimum payment is found.
+                            if ext == "pdf", self.detectedTypicalPaymentByLabel["creditCard"] == nil {
+                                let probeURL = self.lastPickedLocalURL ?? url
+                                if let summary = Self.extractCardSummaryFromPDF(at: probeURL),
+                                   let mp = summary.minimumPayment, mp > 0 {
+                                    self.detectedTypicalPaymentByLabel["creditCard"] = mp
+                                    self.detectedTypicalPaymentByLabel["default"] = mp
+                                    AMLogging.always("ImportViewModel: Captured minimum payment from PDF summary — amount=\(mp)", component: "ImportViewModel")
+
+                                    // If no suggestion yet, nudge toward credit card. Don’t override an explicit brokerage/loan suggestion.
+                                    if stagedImport.suggestedAccountType == nil {
+                                        stagedImport.suggestedAccountType = .creditCard
+                                    }
+                                }
+                            }
+
                             // After summary fallback, attempt APR extraction if still missing
                             if ext == "pdf" {
                                 let allMissingAPR = stagedImport.balances.allSatisfy { $0.interestRateAPR == nil }
@@ -417,10 +832,18 @@ final class ImportViewModel: ObservableObject {
                             if let suggested = stagedImport.suggestedAccountType {
                                 self.newAccountType = suggested
                                 AMLogging.always("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
+    AMLogging.always("ImportViewModel: invoking safety net before staging filter (local staged)", component: "ImportViewModel")
+    self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
                             } else {
                                 AMLogging.always("No suggested account type from parser/guess", component: "ImportViewModel")
                             }
                             
+                            // Ensure safety net has a chance to run even if suggestion was nil
+                            if stagedImport.suggestedAccountType == nil {
+                                AMLogging.always("ImportViewModel: invoking safety net before staging filter (no suggestion)", component: "ImportViewModel")
+                                self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
+                            }
+
                             // Filter out non-liability balances at staging time for liability imports
                             let importTypeForStaging = stagedImport.suggestedAccountType ?? self.newAccountType
                             if importTypeForStaging == .loan || importTypeForStaging == .creditCard {
@@ -521,7 +944,7 @@ final class ImportViewModel: ObservableObject {
     }
 
     // Normalize a raw source account label or description into a canonical key used in import grouping
-    private func normalizeSourceLabel(_ raw: String?) -> String? {
+     func normalizeSourceLabel(_ raw: String?) -> String? {
         guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
         if s.contains("checking") { return "checking" }
         if s.contains("savings") { return "savings" }
@@ -532,6 +955,17 @@ final class ImportViewModel: ObservableObject {
         if s.contains("brokerage") || s.contains("investment") || s.contains("stock") || s.contains("options") {
             return "brokerage" }
         return nil
+    }
+
+    // Expose a best-effort typical payment hint for a given account type (liabilities only)
+    func typicalPaymentHint(for type: Account.AccountType) -> Decimal? {
+        let key: String
+        switch type {
+        case .loan: key = "loan"
+        case .creditCard: key = "creditCard"
+        default: return nil
+        }
+        return detectedTypicalPaymentByLabel[key] ?? detectedTypicalPaymentByLabel["default"]
     }
 
     func approveAndSave(context: ModelContext) throws {
@@ -1801,12 +2235,10 @@ struct MappingSession {
     var balanceIndex: Int?
     var dateFormat: String? // optional override
 }
-
 extension Notification.Name {
     static let transactionsDidChange = Notification.Name("TransactionsDidChange")
     static let accountsDidChange = Notification.Name("AccountsDidChange")
 }
-
 private extension Array {
     subscript(safe index: Index) -> Element? {
         return indices.contains(index) ? self[index] : nil
