@@ -29,6 +29,7 @@ final class ImportViewModel: ObservableObject {
 
     // Captured from pre-parse scan of statement rows: normalized label -> typical payment amount
     private var detectedTypicalPaymentByLabel: [String: Decimal] = [:]
+    private var detectedDueDateByLabel: [String: Date] = [:]
 
     private let importer = StatementImporter()
 
@@ -180,7 +181,7 @@ final class ImportViewModel: ObservableObject {
         }
 
         // 4) Generic APR mention with required percent sign; filter out disclaimers like "will not exceed"
-        let genericAPRPattern = "(?:(?:annual\\s+percentage\\s+rate\\s*\\(apr\\))|apr)[^0-9%]{0,64}" + aprNumber
+        let genericAPRPattern = "(?:annual\\s+percentage\\s+rate(?:\\s*\\(apr\\))?|apr)[^0-9%]{0,64}" + aprNumber
         if let re = try? NSRegularExpression(pattern: genericAPRPattern, options: [.caseInsensitive]) {
             let ns = lowerText as NSString
             let range = NSRange(location: 0, length: ns.length)
@@ -542,6 +543,184 @@ final class ImportViewModel: ObservableObject {
         AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — newBalance=\(newBal), minPayment=\(String(describing: minPay)), dueDate=\(String(describing: due))", component: "ImportViewModel")
         return (newBalance: newBal, minimumPayment: minPay, dueDate: due)
     }
+    
+    private static func extractBankSummaryFromPDF(at url: URL) -> (endingBalance: Decimal, asOfDate: Date?, label: String?)? {
+        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        guard let doc = PDFDocument(url: url) else { return nil }
+        let pageCount = doc.pageCount
+        let pagesToScan = min(3, pageCount)
+        var combined = ""
+        for i in 0..<pagesToScan {
+            if let page = doc.page(at: i), let s = page.string {
+                combined.append("\n")
+                combined.append(s)
+            }
+        }
+        let text = combined
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
+        let lower = text.lowercased()
+
+        func parseAmount(_ s: String) -> Decimal? {
+            let cleaned = s
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "\u{00A0}", with: "")
+                .replacingOccurrences(of: "\u{202F}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Decimal(string: cleaned)
+        }
+        func parseDate(_ s: String) -> Date? {
+            let fmts = [
+                "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy",
+                "MMMM d, yyyy", "MMM d, yyyy"
+            ]
+            for f in fmts {
+                let df = DateFormatter()
+                df.locale = Locale(identifier: "en_US_POSIX")
+                df.timeZone = TimeZone(secondsFromGMT: 0)
+                df.dateFormat = f
+                if let d = df.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines)) { return d }
+            }
+            return nil
+        }
+
+        let ns = text as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+
+        // Amount tokens
+        let amountToken = #"(\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$?\s*[0-9]+(?:\.[0-9]{2})?)"#
+        let currencyToken = #"(\$\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$\s*[0-9]+(?:\.[0-9]{2})?)"#
+
+        // Try several patterns for ending balance / balance as of
+        let patterns: [String] = [
+            "(?:ending\\s+balance(?:\\s+as\\s+of|\\s+on)?)\\s*[:\\-\\n\\r]*" + currencyToken,
+            "(?:ending\\s+balance(?:\\s+as\\s+of|\\s+on)?)\\s*[:\\-\\n\\r]*" + amountToken,
+            "(?:balance\\s+as\\s+of)[^\\n\\r]{0,40}" + currencyToken,
+            "(?:balance\\s+as\\s+of)[^\\n\\r]{0,40}" + amountToken
+        ]
+
+        // Date pattern to search near the match
+        let datePattern = #"([A-Za-z]{3,9}\s+[0-9]{1,2},\s*[0-9]{2,4}|[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"#
+        let dateRegex = try? NSRegularExpression(pattern: datePattern, options: [.caseInsensitive])
+
+        for pat in patterns {
+            guard let re = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) else { continue }
+            if let m = re.firstMatch(in: text, options: [], range: fullRange), m.numberOfRanges >= 2 {
+                let amtRange = m.range(at: 1)
+                if amtRange.location != NSNotFound {
+                    let token = ns.substring(with: amtRange)
+                    if let amount = parseAmount(token) {
+                        // Look for a nearby date (same line or surrounding text)
+                        var asOf: Date? = nil
+                        if let dateRegex {
+                            let windowStart = max(0, m.range.location - 120)
+                            let windowLen = min(ns.length - windowStart, m.range.length + 240)
+                            let window = NSRange(location: windowStart, length: windowLen)
+                            if let dm = dateRegex.firstMatch(in: text, options: [], range: window), dm.numberOfRanges >= 2 {
+                                let dr = dm.range(at: 1)
+                                if dr.location != NSNotFound {
+                                    let dToken = ns.substring(with: dr)
+                                    asOf = parseDate(dToken)
+                                }
+                            }
+                        }
+                        // Infer label from context near the matched balance first, then fall back to global text
+                        var inferredLabel: String? = nil
+                        // Build a window around the match to inspect nearby text for label hints
+                        let labelWindowStart = max(0, m.range.location - 160)
+                        let labelWindowLen = min(ns.length - labelWindowStart, m.range.length + 320)
+                        let labelWindow = NSRange(location: labelWindowStart, length: labelWindowLen)
+                        let contextLower = ns.substring(with: labelWindow).lowercased()
+                        if contextLower.contains("loan") || contextLower.contains("mortgage") {
+                            inferredLabel = "Loan"
+                        } else if contextLower.contains("savings") {
+                            inferredLabel = "Savings"
+                        } else if contextLower.contains("checking") {
+                            inferredLabel = "Checking"
+                        }
+                        // Fallback to global text if context was inconclusive
+                        if inferredLabel == nil {
+                            if lower.contains("loan") || lower.contains("mortgage") {
+                                inferredLabel = "Loan"
+                            } else if lower.contains("savings") {
+                                inferredLabel = "Savings"
+                            } else if lower.contains("checking") {
+                                inferredLabel = "Checking"
+                            }
+                        }
+                        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF — endingBalance=\(amount), asOf=\(String(describing: asOf)), label=\(String(describing: inferredLabel))", component: "ImportViewModel")
+                        return (endingBalance: amount, asOfDate: asOf, label: inferredLabel)
+                    }
+                }
+            }
+        }
+        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF — no ending balance found", component: "ImportViewModel")
+        return nil
+    }
+
+    private static func extractLoanPaymentFromPDF(at url: URL) -> (amount: Decimal, dueDate: Date)? {
+        AMLogging.always("ImportViewModel: extractLoanPaymentFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        guard let doc = PDFDocument(url: url) else { return nil }
+        let pageCount = doc.pageCount
+        let pagesToScan = min(3, pageCount)
+        var combined = ""
+        for i in 0..<pagesToScan {
+            if let page = doc.page(at: i), let s = page.string {
+                combined.append("\n"); combined.append(s)
+            }
+        }
+        let text = combined
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
+
+        // Amount and date tokens
+        let amountToken = #"(\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$?\s*[0-9]+(?:\.[0-9]{2})?)"#
+        let dateToken = #"([A-Za-z]{3,9}\s+[0-9]{1,2},\s*[0-9]{2,4}|[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})"#
+        // Pattern like: "A payment of 726.18 is due on February 10, 2026"
+        let pattern = "(?:a\\s+)?payment\\s+of\\s+" + amountToken + "\\s+is\\s+due\\s+on\\s+" + dateToken
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let m = re.firstMatch(in: text, options: [], range: range), m.numberOfRanges >= 3 else { return nil }
+        let amtRange = m.range(at: 1)
+        let dateRange = m.range(at: 2)
+        guard amtRange.location != NSNotFound, dateRange.location != NSNotFound else { return nil }
+        let amtStr = ns.substring(with: amtRange)
+        let dateStr = ns.substring(with: dateRange)
+
+        func parseAmount(_ s: String) -> Decimal? {
+            let cleaned = s
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "\u{00A0}", with: "")
+                .replacingOccurrences(of: "\u{202F}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Decimal(string: cleaned)
+        }
+        func parseDate(_ s: String) -> Date? {
+            let fmts = ["MMMM d, yyyy", "MMM d, yyyy", "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy"]
+            for f in fmts {
+                let df = DateFormatter()
+                df.locale = Locale(identifier: "en_US_POSIX")
+                df.timeZone = TimeZone(secondsFromGMT: 0)
+                df.dateFormat = f
+                if let d = df.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines)) { return d }
+            }
+            return nil
+        }
+        guard let amount = parseAmount(amtStr), let due = parseDate(dateStr) else { return nil }
+        AMLogging.always("ImportViewModel: extractLoanPaymentFromPDF — amount=\(amount), due=\(due)", component: "ImportViewModel")
+        return (amount: amount, dueDate: due)
+    }
 
     init(parsers: [StatementParser]) {
         self.parsers = parsers
@@ -633,6 +812,7 @@ final class ImportViewModel: ObservableObject {
 
                 await MainActor.run { [coordinatorResult] in
                     self.detectedTypicalPaymentByLabel = [:]
+                    self.detectedDueDateByLabel = [:]
                     guard !headers.isEmpty else {
                         self.errorMessage = ImportError.invalidCSV.localizedDescription
                         self.infoMessage = nil
@@ -779,6 +959,17 @@ final class ImportViewModel: ObservableObject {
                                 }
                             }
 
+                            // Attempt to extract loan payment amount and due date for loan statements
+                            if ext == "pdf" {
+                                let probeURL = self.lastPickedLocalURL ?? url
+                                if let loan = Self.extractLoanPaymentFromPDF(at: probeURL) {
+                                    self.detectedTypicalPaymentByLabel["loan"] = loan.amount
+                                    if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
+                                    self.detectedDueDateByLabel["loan"] = loan.dueDate
+                                    AMLogging.always("ImportViewModel: captured loan payment from PDF — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                }
+                            }
+
                             AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
 
                             if !stagedImport.balances.isEmpty {
@@ -826,14 +1017,19 @@ final class ImportViewModel: ObservableObject {
                             AMLogging.always("Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
                             let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
                             AMLogging.always("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
+                            // Use userSelectedDocHint to prevent override of user choice
                             if stagedImport.suggestedAccountType == nil, let guessedType = guessedType {
                                 stagedImport.suggestedAccountType = guessedType
                             }
                             if let suggested = stagedImport.suggestedAccountType {
-                                self.newAccountType = suggested
-                                AMLogging.always("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
-    AMLogging.always("ImportViewModel: invoking safety net before staging filter (local staged)", component: "ImportViewModel")
-    self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
+                                if self.userSelectedDocHint == nil {
+                                    self.newAccountType = suggested
+                                    AMLogging.always("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                                } else {
+                                    AMLogging.always("Preserving user-selected account type '\(self.newAccountType.rawValue)' over suggested '\(suggested.rawValue)'", component: "ImportViewModel")
+                                }
+                                AMLogging.always("ImportViewModel: invoking safety net before staging filter (local staged)", component: "ImportViewModel")
+                                self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
                             } else {
                                 AMLogging.always("No suggested account type from parser/guess", component: "ImportViewModel")
                             }
@@ -845,7 +1041,8 @@ final class ImportViewModel: ObservableObject {
                             }
 
                             // Filter out non-liability balances at staging time for liability imports
-                            let importTypeForStaging = stagedImport.suggestedAccountType ?? self.newAccountType
+                            // Use user-selected newAccountType instead of parser's suggestion here
+                            let importTypeForStaging = self.newAccountType
                             if importTypeForStaging == .loan || importTypeForStaging == .creditCard {
                                 let before = stagedImport.balances.count
                                 let filtered = stagedImport.balances.filter { b in
@@ -930,6 +1127,84 @@ final class ImportViewModel: ObservableObject {
                     self.isImporting = false
                 }
             } catch {
+                // PDF rescue fallback: if parsing failed, attempt to extract a bank-style ending balance
+                let ext = url.pathExtension.lowercased()
+                if ext == "pdf" {
+                    let probeURL = await self.lastPickedLocalURL ?? url
+                    if let bank = await Self.extractBankSummaryFromPDF(at: probeURL) {
+                        await MainActor.run {
+                            let label = bank.label
+                            let asOf = bank.asOfDate ?? Date()
+                            let stagedBalance = StagedBalance(
+                                asOfDate: asOf,
+                                balance: bank.endingBalance,
+                                interestRateAPR: nil,
+                                interestRateScale: nil,
+                                include: true,
+                                sourceAccountLabel: label
+                            )
+                            var suggested: Account.AccountType? = nil
+                            if let l = label?.lowercased() {
+                                if l.contains("loan") || l.contains("mortgage") { suggested = .loan }
+                                else if l.contains("savings") { suggested = .savings }
+                                else if l.contains("checking") { suggested = .checking }
+                            }
+                            // Prefer the user's hint if provided
+                            if let hint = self.userSelectedDocHint { suggested = hint }
+                            let stagedImport = StagedImport(
+                                parserId: "pdf.rescue.bank",
+                                sourceFileName: url.lastPathComponent,
+                                suggestedAccountType: suggested,
+                                transactions: [],
+                                holdings: [],
+                                balances: [stagedBalance]
+                            )
+                            // Enrich rescue with APR if available
+                            if let (apr, scale) = Self.extractAPRFromPDF(at: probeURL) {
+                                // Update the single staged balance with APR
+                                var bs = stagedBalance
+                                bs.interestRateAPR = apr
+                                bs.interestRateScale = scale
+                                // Rebuild stagedImport with updated balance snapshot
+                                let updatedImport = StagedImport(
+                                    parserId: "pdf.rescue.bank",
+                                    sourceFileName: url.lastPathComponent,
+                                    suggestedAccountType: suggested,
+                                    transactions: [],
+                                    holdings: [],
+                                    balances: [bs]
+                                )
+                                // Replace stagedImport reference
+                                // Note: we will assign to self.staged below
+                                // Attempt to capture loan payment and due date as hints
+                                if let loan = Self.extractLoanPaymentFromPDF(at: probeURL) {
+                                    self.detectedTypicalPaymentByLabel["loan"] = loan.amount
+                                    if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
+                                    self.detectedDueDateByLabel["loan"] = loan.dueDate
+                                    AMLogging.always("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                }
+                                self.staged = updatedImport
+                            } else {
+                                // Attempt to capture loan payment and due date even if APR not found
+                                if let loan = Self.extractLoanPaymentFromPDF(at: probeURL) {
+                                    self.detectedTypicalPaymentByLabel["loan"] = loan.amount
+                                    if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
+                                    self.detectedDueDateByLabel["loan"] = loan.dueDate
+                                    AMLogging.always("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                }
+                                self.staged = stagedImport
+                            }
+                            // Early return handled after setting self.staged
+                            self.errorMessage = nil
+                            self.infoMessage = "Parsed a balance snapshot from the PDF; transactions weren’t available."
+                            self.userSelectedDocHint = nil
+                            self.isImporting = false
+                            return
+                        }
+                        return
+                    }
+                }
+
                 await MainActor.run {
                     let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     AMLogging.always("Importer error (user-facing): \(userMessage)", component: "ImportViewModel")
@@ -1134,7 +1409,8 @@ final class ImportViewModel: ObservableObject {
 
         // Build accounts per label (checking/savings) using both tx and balances labels.
         // For liability/report types (credit card, loan, brokerage), do NOT split by label — treat as a single account.
-        let importType = staged.suggestedAccountType ?? self.newAccountType
+        // Prefer user-selected newAccountType over parser suggestion here
+        let importType = self.newAccountType
         let allowSplitByLabel: Bool = {
             switch importType {
             case .checking, .savings:
@@ -1226,7 +1502,7 @@ final class ImportViewModel: ObservableObject {
         }
 
         // Prefill typical payment and due day on resolved accounts before inserts
-        for (label, account) in accountsByLabel {
+        for (_, account) in accountsByLabel {
             guard account.type == .loan || account.type == .creditCard else { continue }
             let typeKey = (account.type == .loan) ? "loan" : "creditCard"
             let typical = self.detectedTypicalPaymentByLabel[typeKey] ?? self.detectedTypicalPaymentByLabel["default"]
@@ -1236,11 +1512,18 @@ final class ImportViewModel: ObservableObject {
                 terms.paymentAmount = typical
                 AMLogging.always("Prefill (pre-insert): typical payment — amount: \(typical), typeKey: \(typeKey), account: \(account.name)", component: "ImportViewModel")
             }
-            if terms.paymentDayOfMonth == nil, let asOf = effectiveIncludedBalances.first?.asOfDate {
-                let cal = Calendar(identifier: .gregorian)
-                let day = cal.component(.day, from: asOf)
-                terms.paymentDayOfMonth = day
-                AMLogging.always("Prefill (pre-insert): due day — day: \(day) from asOf: \(asOf) account: \(account.name)", component: "ImportViewModel")
+            if terms.paymentDayOfMonth == nil {
+                if let due = self.detectedDueDateByLabel[typeKey] {
+                    let cal = Calendar(identifier: .gregorian)
+                    let day = cal.component(.day, from: due)
+                    terms.paymentDayOfMonth = day
+                    AMLogging.always("Prefill (pre-insert): due day — day: \(day) from detected dueDate: \(due) account: \(account.name)", component: "ImportViewModel")
+                } else if let asOf = effectiveIncludedBalances.first?.asOfDate {
+                    let cal = Calendar(identifier: .gregorian)
+                    let day = cal.component(.day, from: asOf)
+                    terms.paymentDayOfMonth = day
+                    AMLogging.always("Prefill (pre-insert): due day — day: \(day) from asOf: \(asOf) account: \(account.name)", component: "ImportViewModel")
+                }
             }
             account.loanTerms = terms
         }
@@ -1993,7 +2276,44 @@ final class ImportViewModel: ObservableObject {
      - Batch Tools: Provide per-batch actions (flip signs, reassign account, delete/undo) from a Batch Detail screen.
     */
 
-    // MARK: - Replace existing batch with staged import (preserving user edits)
+    // MARK: - Manual import bootstrap
+    /// Starts a manual (user-defined) import by creating a blank staged import and presenting the review screen.
+    /// The provided kind seeds the account type suggestion and influences liability-specific behavior during save.
+    func startManualImport(kind: Account.AccountType, prefillInstitution: String? = nil) {
+        // Ensure any previous parsing state is cleared
+        self.isImporting = false
+        self.userSelectedDocHint = nil
+        self.creditCardFlipOverride = nil
+        self.lastPickedLocalURL = nil
+
+        // Seed user-entered account context
+        self.newAccountType = kind
+        if let name = prefillInstitution { self.userInstitutionName = name } else { self.userInstitutionName = "" }
+
+        // Provide one editable placeholder balance; users can change date/value or add more in the detail view
+        let placeholder = StagedBalance(
+            asOfDate: Date(),
+            balance: 0,
+            interestRateAPR: nil,
+            interestRateScale: nil,
+            include: true,
+            sourceAccountLabel: nil
+        )
+
+        let manual = StagedImport(
+            parserId: "manual.user",
+            sourceFileName: "Manual Entry",
+            suggestedAccountType: kind,
+            transactions: [],
+            holdings: [],
+            balances: [placeholder]
+        )
+
+        self.staged = manual
+        self.infoMessage = "Enter the details below and tap Save."
+    }
+
+    // MARK: - Replace existing batch with staged import
     /// Replaces the content of an existing ImportBatch with a newly parsed staged import.
     /// Matching is by immutable importHashKey for transactions, by asOfDate for balances,
     /// and by (symbol, asOfDate) for holdings. Items marked `isUserModified` are left untouched.

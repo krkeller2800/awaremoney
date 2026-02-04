@@ -17,9 +17,24 @@ struct DebtSummaryView: View {
             GeometryReader { proxy in
                 let compact = isCompactLayout(proxy.size)
                 let isPortrait = proxy.size.height > proxy.size.width
-                VStack { // outer container to center the constrained content
-                    if isPortrait && proxy.size.width < 844 {
-                        ScrollView(.horizontal) {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if isPortrait && proxy.size.width < 844 {
+                            ScrollView(.horizontal) {
+                                VStack(alignment: .leading, spacing: compact ? 4 : 8) {
+                                    headerRow(compact: compact)
+                                    Divider()
+                                    ForEach(accounts, id: \.id) { acct in
+                                        row(for: acct, compact: compact)
+                                        Divider()
+                                    }
+                                    totalRow(compact: compact)
+                                }
+                                .padding(.horizontal, compact ? 6 : 16)
+                                .frame(width: 844, alignment: .topLeading)
+                            }
+                            .scrollIndicators(.hidden)
+                        } else {
                             VStack(alignment: .leading, spacing: compact ? 4 : 8) {
                                 headerRow(compact: compact)
                                 Divider()
@@ -30,25 +45,12 @@ struct DebtSummaryView: View {
                                 totalRow(compact: compact)
                             }
                             .padding(.horizontal, compact ? 6 : 16)
-                            .frame(width: 844, alignment: .topLeading)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
-                        .scrollIndicators(.hidden)
-                    } else {
-                        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-                            headerRow(compact: compact)
-                            Divider()
-                            ForEach(accounts, id: \.id) { acct in
-                                row(for: acct, compact: compact)
-                                Divider()
-                            }
-                            totalRow(compact: compact)
-                        }
-                        .padding(.horizontal, compact ? 6 : 16)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(.vertical, 8)
                 }
-                .frame(maxWidth: .infinity, alignment: .top)
-                .frame(minHeight: proxy.size.height, alignment: .top)
                 .navigationTitle("Debt Summary")
                 .task { await load() }
             }

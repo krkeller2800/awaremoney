@@ -180,8 +180,14 @@ struct ImportFlowView: View {
                         Button("Credit Card Statement") {
                             pickerKind = .pdf
                             vm.userSelectedDocHint = .creditCard
+                            vm.newAccountType = .creditCard
                             AMLogging.always("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                             isFileImporterPresented = true
+                        }
+                        Divider()
+                        Button("User-defined…") {
+                            vm.startManualImport(kind: .creditCard)
+                            AMLogging.always("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
                         }
                     }
                 }

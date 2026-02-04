@@ -131,7 +131,7 @@ struct ReviewImportView: View {
                             .keyboardType(.decimalPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .onChange(of: typicalPaymentInput) { _ in
+                            .onChange(of: typicalPaymentInput) {
                                 typicalPaymentParsed = parseCurrencyInput(typicalPaymentInput)
                             }
                     }
@@ -264,8 +264,8 @@ struct ReviewImportView: View {
                 }
             }
         }
-        .onChange(of: selectedAccountId) { newValue in
-            AMLogging.always("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
+        .onChange(of: selectedAccountId) { 
+            AMLogging.always("ReviewImportView: selectedAccountId changed -> \(String(describing: selectedAccountId))", component: "ReviewImportView")
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
     }
