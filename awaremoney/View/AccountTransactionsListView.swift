@@ -40,6 +40,16 @@ struct AccountTransactionsListView: View {
             }
         }
         .navigationTitle("Transactions")
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+            }
+        }
         .onAppear {
             AMLogging.always("AccountTransactionsListView appear accountID=\(accountID)", component: "AccountTransactionsListView")
             DispatchQueue.main.async {

@@ -28,12 +28,16 @@ struct awaremoneyApp: App {
         do {
             try fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
         } catch {
-            AMLogging.log("Failed to create Application Support directory: \(error)", component: "App")  // DEBUG LOG
+            AMLogging.always("Failed to create Application Support directory: \(error)", component: "App")
+        }
+        AMLogging.always("Application Support directory path: \(appSupport.path)", component: "App")
+        if let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+            AMLogging.always("Documents directory path: \(documents.path)", component: "App")
         }
         let storeURL = appSupport.appendingPathComponent("awaremoney.store")
 
         container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
-        AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")  // DEBUG LOG
+        AMLogging.always("SwiftData store URL: \(storeURL.path)", component: "App")
         runInstitutionMigrationIfNeeded()
     }
 

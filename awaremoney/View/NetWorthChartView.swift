@@ -11,9 +11,11 @@ struct NetWorthChartView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    var showsDoneButton: Bool = true
 
     @State private var slices: [AccountSlice] = []
     @State private var mode: ChartMode = .assets
+    @State private var initializedMode = false
 
     var body: some View {
         NavigationStack {
@@ -35,11 +37,13 @@ struct NetWorthChartView: View {
             .navigationTitle("Net Worth")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                if showsDoneButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
-            .task { await load() }
+            .task { await determineInitialMode(); await load() }
             .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in Task { await load() } }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in Task { await load() } }
             .onChange(of: mode) { Task { await load() } }
@@ -151,6 +155,43 @@ struct NetWorthChartView: View {
             await MainActor.run { self.slices = out }
         } catch {
             await MainActor.run { self.slices = [] }
+        }
+    }
+    
+    @Sendable private func determineInitialMode() async {
+        do {
+            let accounts = try modelContext.fetch(FetchDescriptor<Account>())
+            var hasAssets = false
+            var hasLiabilities = false
+            for acct in accounts {
+                let snapshots = acct.balanceSnapshots.filter { !$0.isExcluded }
+                let last = snapshots.sorted { $0.asOfDate > $1.asOfDate }.first
+                let txs = acct.transactions.filter { !$0.isExcluded }
+                let value: Decimal = {
+                    if let last = last {
+                        let delta = txs.filter { $0.datePosted > last.asOfDate }
+                            .reduce(Decimal.zero) { $0 + $1.amount }
+                        return last.balance + delta
+                    } else {
+                        return txs.reduce(Decimal.zero) { $0 + $1.amount }
+                    }
+                }()
+                if value > 0 { hasAssets = true }
+                if value < 0 { hasLiabilities = true }
+                if hasAssets && hasLiabilities { break }
+            }
+            if !initializedMode {
+                await MainActor.run {
+                    if !hasAssets && hasLiabilities {
+                        self.mode = .liabilities
+                    } else if hasAssets && !hasLiabilities {
+                        self.mode = .assets
+                    }
+                    self.initializedMode = true
+                }
+            }
+        } catch {
+            await MainActor.run { self.initializedMode = true }
         }
     }
 

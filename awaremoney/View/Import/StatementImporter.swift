@@ -35,10 +35,10 @@ struct StatementImporter {
         let confidence = confidenceForPDF(rows: rows)
         var warnings: [String] = []
         if confidence <= .low {
-            warnings.append("Low confidence parsing PDF. Consider importing a CSV for best results.")
+            warnings.append("If your institution fails to parse, fill in the data manually")
         }
         if mode == .transactions && confidence <= .low {
-            warnings.append("You can also try Summary Only mode to avoid mis-parsed transactions.")
+            warnings.append("For a monthly snapshot, try Summary Only mode; for mid-month detail, import a CSV.")
         }
         return StatementImportResult(source: .pdf, headers: headers, rows: rows, confidence: confidence, warnings: warnings)
     }
@@ -61,3 +61,4 @@ struct StatementImporter {
         return .high
     }
 }
+

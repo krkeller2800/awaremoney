@@ -228,23 +228,25 @@ struct ReviewImportView: View {
                 }
             }
 
-            // Balance snapshots
-            if !staged.balances.isEmpty {
+            if let balances = vm.staged?.balances, !balances.isEmpty {
                 Section("Balance Snapshots") {
-                    ForEach(staged.balances.indices, id: \.self) { idx in
-                        let b = staged.balances[idx]
+                    ForEach(balances.indices, id: \.self) { idx in
                         HStack(alignment: .top) {
                             Toggle("", isOn: balanceIncludeBinding(for: idx))
-                            .labelsHidden()
+                                .labelsHidden()
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(b.asOfDate, style: .date)
-                                        .font(.subheadline)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 12) {
+                                    DatePicker("As of", selection: balanceDateBinding(for: idx), displayedComponents: .date)
+                                        .labelsHidden()
                                     Spacer()
-                                    Text(b.balance as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                                    TextField("0.00", text: balanceAmountTextBinding(for: idx))
+                                        .multilineTextAlignment(.trailing)
+                                        .keyboardType(.decimalPad)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
                                 }
-                                if let label = b.sourceAccountLabel, !label.isEmpty {
+                                if let label = vm.staged?.balances[idx].sourceAccountLabel, !label.isEmpty {
                                     Text(label.capitalized)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -253,12 +255,33 @@ struct ReviewImportView: View {
                                         .background(Color.secondary.opacity(0.12))
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                 }
-                                if let apr = b.interestRateAPR {
-                                    Text("APR: \(formatAPR(apr, scale: b.interestRateScale))")
+                                if let apr = vm.staged?.balances[idx].interestRateAPR {
+                                    Text("APR: \(formatAPR(apr, scale: vm.staged?.balances[idx].interestRateScale))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                if var staged = vm.staged, idx < staged.balances.count {
+                                    staged.balances.remove(at: idx)
+                                    vm.staged = staged
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    Button {
+                        var staged = vm.staged ?? StagedImport(parserId: "manual.user", sourceFileName: "Manual Entry", suggestedAccountType: vm.newAccountType, transactions: [], holdings: [], balances: [])
+                        let newBalance = StagedBalance(asOfDate: Date(), balance: 0, interestRateAPR: nil, interestRateScale: nil, include: true, sourceAccountLabel: nil)
+                        staged.balances.append(newBalance)
+                        vm.staged = staged
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle")
+                            Text("Add Balance")
                         }
                     }
                 }
@@ -441,6 +464,42 @@ struct ReviewImportView: View {
         nf.numberStyle = .percent
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
+
+    private func balanceDateBinding(for index: Int) -> Binding<Date> {
+        Binding(
+            get: {
+                if let d = vm.staged?.balances[index].asOfDate { return d }
+                return Date()
+            },
+            set: { newVal in
+                if var staged = vm.staged, index < staged.balances.count {
+                    staged.balances[index].asOfDate = newVal
+                    vm.staged = staged
+                }
+            }
+        )
+    }
+    private func balanceAmountTextBinding(for index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard let amount = vm.staged?.balances[index].balance else { return "" }
+                let nf = NumberFormatter()
+                nf.numberStyle = .decimal
+                nf.minimumFractionDigits = 0
+                nf.maximumFractionDigits = 2
+                return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+            },
+            set: { newText in
+                let cleaned = newText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if let dec = Decimal(string: cleaned) {
+                    if var staged = vm.staged, index < staged.balances.count {
+                        staged.balances[index].balance = dec
+                        vm.staged = staged
+                    }
+                }
+            }
+        )
     }
 }
 

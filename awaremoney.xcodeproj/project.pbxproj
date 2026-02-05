@@ -6,6 +6,16 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DF3BCB792F33A05300BCA4E9 /* DebtTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB782F33A05300BCA4E9 /* DebtTypes.swift */; };
+		DF3BCB7B2F33A06B00BCA4E9 /* ProjectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB7A2F33A06B00BCA4E9 /* ProjectionEngine.swift */; };
+		DF3BCB7D2F33A07300BCA4E9 /* DebtProjectionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB7C2F33A07300BCA4E9 /* DebtProjectionViewModel.swift */; };
+		DF3BCB7F2F33A07E00BCA4E9 /* DebtProjectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB7E2F33A07E00BCA4E9 /* DebtProjectionView.swift */; };
+		DF3BCB812F33A1B500BCA4E9 /* DebtPayoffViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB802F33A1B500BCA4E9 /* DebtPayoffViewModel.swift */; };
+		DF3BCB832F33A1BC00BCA4E9 /* DebtPayoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB822F33A1BC00BCA4E9 /* DebtPayoffView.swift */; };
+		DF3BCB852F33A29400BCA4E9 /* DebtPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF3BCB842F33A29400BCA4E9 /* DebtPlannerView.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		DFF289762F266E0C00122962 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -21,6 +31,13 @@
 
 /* Begin PBXFileReference section */
 		DF1800CC2F23D66800F6A522 /* awaremoney.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = awaremoney.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF3BCB782F33A05300BCA4E9 /* DebtTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtTypes.swift; sourceTree = "<group>"; };
+		DF3BCB7A2F33A06B00BCA4E9 /* ProjectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectionEngine.swift; sourceTree = "<group>"; };
+		DF3BCB7C2F33A07300BCA4E9 /* DebtProjectionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtProjectionViewModel.swift; sourceTree = "<group>"; };
+		DF3BCB7E2F33A07E00BCA4E9 /* DebtProjectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtProjectionView.swift; sourceTree = "<group>"; };
+		DF3BCB802F33A1B500BCA4E9 /* DebtPayoffViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtPayoffViewModel.swift; sourceTree = "<group>"; };
+		DF3BCB822F33A1BC00BCA4E9 /* DebtPayoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtPayoffView.swift; sourceTree = "<group>"; };
+		DF3BCB842F33A29400BCA4E9 /* DebtPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebtPlannerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -60,6 +77,13 @@
 			children = (
 				DF1800CE2F23D66800F6A522 /* awaremoney */,
 				DF1800CD2F23D66800F6A522 /* Products */,
+				DF3BCB782F33A05300BCA4E9 /* DebtTypes.swift */,
+				DF3BCB7A2F33A06B00BCA4E9 /* ProjectionEngine.swift */,
+				DF3BCB7C2F33A07300BCA4E9 /* DebtProjectionViewModel.swift */,
+				DF3BCB7E2F33A07E00BCA4E9 /* DebtProjectionView.swift */,
+				DF3BCB802F33A1B500BCA4E9 /* DebtPayoffViewModel.swift */,
+				DF3BCB822F33A1BC00BCA4E9 /* DebtPayoffView.swift */,
+				DF3BCB842F33A29400BCA4E9 /* DebtPlannerView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -146,6 +170,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF3BCB7D2F33A07300BCA4E9 /* DebtProjectionViewModel.swift in Sources */,
+				DF3BCB832F33A1BC00BCA4E9 /* DebtPayoffView.swift in Sources */,
+				DF3BCB7B2F33A06B00BCA4E9 /* ProjectionEngine.swift in Sources */,
+				DF3BCB792F33A05300BCA4E9 /* DebtTypes.swift in Sources */,
+				DF3BCB852F33A29400BCA4E9 /* DebtPlannerView.swift in Sources */,
+				DF3BCB812F33A1B500BCA4E9 /* DebtPayoffViewModel.swift in Sources */,
+				DF3BCB7F2F33A07E00BCA4E9 /* DebtProjectionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

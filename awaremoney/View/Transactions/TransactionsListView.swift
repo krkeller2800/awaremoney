@@ -13,6 +13,7 @@ struct TransactionsListView: View {
     private var transactions: [Transaction]
 
     @State private var refreshTick: Int = 0
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -39,6 +40,16 @@ struct TransactionsListView: View {
                 }
             }
             .navigationTitle("Transactions")
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                }
+            }
         }
         .id(refreshTick)
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in

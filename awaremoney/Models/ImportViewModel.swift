@@ -1081,8 +1081,8 @@ final class ImportViewModel: ObservableObject {
                             if let res = coordinatorResult {
                                 for w in res.warnings { if !messages.contains(w) { messages.append(w) } }
                                 if res.source == .pdf && res.confidence <= .low {
-                                    let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
-                                    if !messages.contains(warn) { messages.append(warn) }
+//                                    let warn = "Low parsing confidence. PDFs are best for monthly snapshots; use CSV for mid-month transaction detail."
+//                                    if !messages.contains(warn) { messages.append(warn) }
                                 }
                             }
                             if (stagedImport.suggestedAccountType == .brokerage || self.newAccountType == .brokerage),
@@ -1114,8 +1114,8 @@ final class ImportViewModel: ObservableObject {
                             var msgs: [String] = []
                             for w in res.warnings { if !msgs.contains(w) { msgs.append(w) } }
                             if res.source == .pdf && res.confidence <= .low {
-                                let warn = "Low confidence parsing PDF. Consider importing a CSV for best results."
-                                if !msgs.contains(warn) { msgs.append(warn) }
+//                                let warn = "Low parsing confidence. PDFs are best for monthly snapshots; use CSV for mid-month transaction detail."
+//                                if !msgs.contains(warn) { msgs.append(warn) }
                             }
                             self.infoMessage = msgs.joined(separator: "\n")
                         } else {

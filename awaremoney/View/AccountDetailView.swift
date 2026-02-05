@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct AccountDetailView: View {
     let accountID: UUID
@@ -29,7 +30,7 @@ struct AccountDetailView: View {
         Group {
             if let account {
                 List {
-                    Section("Details") {
+                    Section(header: GroupedSectionHeader("Details")) {
                         LabeledContent("Name", value: account.name)
                         if isInvalidInstitutionName(account.institutionName) {
                             VStack(alignment: .leading, spacing: 6) {
@@ -73,7 +74,7 @@ struct AccountDetailView: View {
                     }
 
                     if account.type == .loan || account.type == .creditCard {
-                        Section("Payment Plan") {
+                        Section(header: GroupedSectionHeader("Payment Plan")) {
                             // Typical payment editor
                             LabeledContent("Typical Payment") {
                                 TextField("0.00", text: Binding<String>(
@@ -129,7 +130,7 @@ struct AccountDetailView: View {
                         }
                     }
 
-                    Section("Balance Info") {
+                    Section(header: GroupedSectionHeader("Balance Info")) {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Text("Transactional Balance")
@@ -189,7 +190,7 @@ struct AccountDetailView: View {
                         }
                     }
 
-                    Section("Balances") {
+                    Section(header: GroupedSectionHeader("Balances")) {
                         ForEach(sortedSnapshots(for: account), id: \.id) { snap in
                             HStack {
                                 Text(snap.asOfDate, style: .date)
@@ -236,13 +237,28 @@ struct AccountDetailView: View {
                         }
                     }
 
-                    Section("Maintenance") {
+                    Section(header: GroupedSectionHeader("Maintenance")) {
                         Button(role: .destructive) {
                             mergeTargetID = nil
                             showMergeSheet = true
                         } label: {
                             Label("Merge Into Another Account…", systemImage: "arrow.triangle.merge")
                         }
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .frame(maxWidth: 760, alignment: .center)
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .overlay(alignment: .topTrailing) {
+                    if isIPadLandscape {
+                        NavigationLink {
+                            AccountTransactionsListView(accountID: account.id)
+                        } label: {
+                            Label("Transactions", systemImage: "list.bullet")
+                        }
+                        .padding(.top, 0)
+                        .padding(.trailing, 50)
                     }
                 }
                 .navigationTitle(account.name)
@@ -290,14 +306,18 @@ struct AccountDetailView: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        NavigationLink {
-                            AccountTransactionsListView(accountID: account.id)
-                        } label: {
-                            Label("Transactions", systemImage: "list.bullet")
+                        if isIPadLandscape {
+                            EmptyView()
+                        } else {
+                            NavigationLink {
+                                AccountTransactionsListView(accountID: account.id)
+                            } label: {
+                                Label("Transactions", systemImage: "list.bullet")
+                            }
+                            .simultaneousGesture(TapGesture().onEnded {
+                                AMLogging.always("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
+                            })
                         }
-                        .simultaneousGesture(TapGesture().onEnded {
-                            AMLogging.always("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
-                        })
                     }
                 }
             } else {
@@ -321,6 +341,14 @@ struct AccountDetailView: View {
         .onAppear {
             AMLogging.always("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
         }
+    }
+
+    private var isIPadLandscape: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad && UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        #else
+        return false
+        #endif
     }
 
     private func earliestTransactionDate(for account: Account) -> Date? {

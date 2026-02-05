@@ -1,10 +1,3 @@
-//
-//  NetWorthView.swift
-//  awaremoney
-//
-//  Created by Karl Keller on 1/23/26.
-//
-
 import SwiftUI
 import SwiftData
 
@@ -19,95 +12,184 @@ private struct AccountValue: Identifiable {
 
 struct NetWorthView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var totalNetWorth: Decimal = 0
     @State private var byAccount: [AccountValue] = []
     @State private var showNetWorthChart = false
+    @State private var totalAssets: Decimal = 0
+    @State private var totalLiabilities: Decimal = 0
+    @State private var monthToDateDelta: Decimal = 0
 
     var body: some View {
-        NavigationStack {
-            List {
-                // Consolidated accounts view: single section with one card per account type and its details
-                Section("Accounts") {
-                    ForEach(accountTypeOrder, id: \.self) { type in
-                        let groups = groupsFor(type: type)
-                        if !groups.isEmpty {
-                            let subtotal = groups.reduce(Decimal.zero) { $0 + $1.value }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                // Header line
-                                HStack {
-                                    Text(typeDisplayName(type))
-                                        .font(.headline)
-                                }
-
-                                // Institution sublines
-                                ForEach(groups, id: \.institution) { grp in
-                                    HStack {
-                                        Text(grp.institution)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        Text(format(amount: grp.value))
-                                            .foregroundStyle(grp.value < .zero ? .red : .secondary)
-                                    }
-                                    .padding(.leading, 16)
-                                }
-
-                                // Sub-total line
-                                HStack {
-                                    Text("Total")
-                                        .font(.subheadline)
-                                    Spacer()
-                                    Text(format(amount: subtotal))
-                                        .font(.headline)
-                                        .foregroundStyle(subtotal < .zero ? .red : .primary)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
+        Group {
+            if hSizeClass == .regular {
+                NavigationSplitView {
+                    primaryList
+                        .navigationTitle("Net Worth")
+                } detail: {
+                    dashboardDetail
                 }
+            } else {
+                NavigationStack {
+                    primaryList
+                        .navigationTitle("Net Worth")
+                }
+                .sheet(isPresented: $showNetWorthChart) {
+                    NetWorthChartView(showsDoneButton: true)
+                }
+            }
+        }
+    }
 
-                // Overall total
-                Section("Total") {
-                    Button {
-                        showNetWorthChart = true
-                    } label: {
-                        HStack {
-                            Text("Net Worth")
-                            Spacer()
-                            HStack(spacing: 6) {
-                                Text(format(amount: totalNetWorth))
+    @ViewBuilder
+    private var primaryList: some View {
+        List {
+            // Consolidated accounts view: single section with one card per account type and its details
+            Section("Accounts") {
+                ForEach(accountTypeOrder, id: \.self) { type in
+                    let groups = groupsFor(type: type)
+                    if !groups.isEmpty {
+                        let subtotal = groups.reduce(Decimal.zero) { $0 + $1.value }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            // Header line
+                            HStack {
+                                Text(typeDisplayName(type))
                                     .font(.headline)
-                                    .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
-                                Image(systemName: "chevron.up")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+                            }
+
+                            // Institution sublines
+                            ForEach(groups, id: \.institution) { grp in
+                                HStack {
+                                    Text(grp.institution)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(format(amount: grp.value))
+                                        .foregroundStyle(grp.value < .zero ? .red : .secondary)
+                                }
+                                .padding(.leading, 16)
+                            }
+
+                            // Sub-total line
+                            HStack {
+                                Text("Total")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text(format(amount: subtotal))
+                                    .font(.headline)
+                                    .foregroundStyle(subtotal < .zero ? .red : .primary)
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .navigationTitle("Net Worth")
-            .task { await load() }
-            .refreshable { await load() }
-            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-                Task { await load() }
+
+            // Overall total
+            Section("Total") {
+                Button {
+                    if hSizeClass == .compact {
+                        showNetWorthChart = true
+                    }
+                } label: {
+                    HStack {
+                        Text("Net Worth")
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Text(format(amount: totalNetWorth))
+                                .font(.headline)
+                                .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
+                            Image(systemName: "chevron.up")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
-                Task { await load() }
+        }
+        .task { await load() }
+        .refreshable { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+            Task { await load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            Task { await load() }
+        }
+    }
+
+    @ViewBuilder
+    private var dashboardDetail: some View {
+        ScrollView {
+            iPadDashboardHeader
+        }
+        .navigationTitle("Overview")
+    }
+
+    @ViewBuilder
+    private var KPIRow: some View {
+        HStack(spacing: 16) {
+            KPI(title: "Assets",
+                value: format(amount: totalAssets),
+                valueColor: .primary)
+            KPI(title: "Liabilities",
+                value: format(amount: totalLiabilities),
+                valueColor: .red)
+            KPI(title: "MTD Change",
+                value: format(amount: monthToDateDelta),
+                valueColor: monthToDateDelta < .zero ? .red : .green)
+        }
+    }
+
+    @ViewBuilder
+    private var iPadDashboardHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                KPIRow
+                    .frame(maxWidth: 480, alignment: .leading)
+                NetWorthChartView(showsDoneButton: false)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 480)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            .sheet(isPresented: $showNetWorthChart) {
-                NetWorthChartView()
+            VStack(spacing: 16) {
+                KPIRow
+                NetWorthChartView(showsDoneButton: false)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 480)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-//            .toolbar {
-//                ToolbarItem(placement: .navigationBarTrailing) {
-//                    NavigationLink(destination: AccountsListView()) {
-//                        Label("Accounts", systemImage: "person.crop.circle")
-//                    }
-//                }
-//            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 12)
+    }
+
+    private struct KPI: View {
+        let title: String
+        let value: String
+        var valueColor: Color = .primary
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(valueColor)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            }
         }
     }
 
@@ -126,9 +208,16 @@ struct NetWorthView: View {
                 total += value
             }
 
+            let assets = perAccount.map(\.value).filter { $0 > 0 }.reduce(Decimal.zero, +)
+            let liabilitiesSigned = perAccount.map(\.value).filter { $0 < 0 }.reduce(Decimal.zero, +)
+            let mtd = try computeMonthToDateDelta(accounts: accounts)
+
             await MainActor.run {
                 self.byAccount = perAccount.sorted { $0.displayName < $1.displayName }
                 self.totalNetWorth = total
+                self.totalAssets = assets
+                self.totalLiabilities = -liabilitiesSigned
+                self.monthToDateDelta = mtd
             }
         } catch {
             // For MVP, ignore errors and keep zeros
@@ -173,6 +262,19 @@ struct NetWorthView: View {
             let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
             return adjustForLiability(sum, for: account)
         }
+    }
+
+    private func computeMonthToDateDelta(accounts: [Account]) throws -> Decimal {
+        let cal = Calendar.current
+        guard let startOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: Date())) else {
+            return .zero
+        }
+        var delta: Decimal = .zero
+        for account in accounts {
+            let tx = account.transactions.filter { $0.datePosted >= startOfMonth }
+            delta += tx.reduce(.zero) { $0 + $1.amount }
+        }
+        return delta
     }
 
     private func format(amount: Decimal) -> String {

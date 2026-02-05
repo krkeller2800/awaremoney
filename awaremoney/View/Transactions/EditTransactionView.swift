@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct EditTransactionView: View {
-    let transaction: Transaction
+    @Bindable var transaction: Transaction
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -15,7 +15,7 @@ struct EditTransactionView: View {
     @State private var date: Date
 
     init(transaction: Transaction) {
-        self.transaction = transaction
+        self._transaction = Bindable(transaction)
         _payee = State(initialValue: transaction.payee)
         _memo = State(initialValue: transaction.memo ?? "")
         _amountInput = State(initialValue: EditTransactionView.formatAmountForInput(transaction.amount))
@@ -51,9 +51,14 @@ struct EditTransactionView: View {
             }
         }
         .navigationTitle("Edit Transaction")
+        .navigationBarBackButtonHidden(true)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
