@@ -15,6 +15,13 @@ struct CSVMappingSheet: View {
         case memo = "Memo"
         case category = "Category"
         case account = "Account"
+        case symbol = "Symbol"
+        case quantity = "Quantity"
+        case price = "Price"
+        case marketValue = "Market Value"
+        case balance = "Balance"
+        case runningBalance = "Running Balance"
+        case interestRateAPR = "Interest Rate (APR)"
         case none = "None"
         
         var id: String { rawValue }
@@ -29,6 +36,13 @@ struct CSVMappingSheet: View {
         case .memo: return .memo
         case .category: return .category
         case .account: return .account
+        case .symbol: return .symbol
+        case .quantity: return .quantity
+        case .price: return .price
+        case .marketValue: return .marketValue
+        case .balance: return .balance
+        case .runningBalance: return .runningBalance
+        case .interestRateAPR: return .interestRateAPR
         case .none: return nil
         }
     }
@@ -139,7 +153,7 @@ struct CSVMappingSheet: View {
                     }
                 }
             }
-            .navigationBarTitle("CSV Mapping", displayMode: .inline)
+            .navigationBarTitle("Edit Mapping", displayMode: .inline)
             .navigationBarItems(leading: Button("Cancel") {
                 onCancel()
             }, trailing: Button("Save") {
@@ -161,6 +175,7 @@ struct CSVMappingSheet: View {
 struct CSVColumnMapping {
     enum Field {
         case date, kind, amount, payee, memo, category, account
+        case symbol, quantity, price, marketValue, balance, runningBalance, interestRateAPR
     }
     let mappings: [CSVColumnMapping.Field: String]
     
@@ -173,7 +188,7 @@ struct CSVColumnMapping {
 struct CSVMappingSheet_Previews: PreviewProvider {
     static var previews: some View {
         CSVMappingSheet(
-            headers: ["Full Name", "Email Address", "Phone Number", "Street Address"],
+            headers: ["Full Name", "Email Address", "Phone Number", "Street Address", "Symbol", "Quantity", "Price", "Market Value", "Balance", "APR"],
             sampleRows: [
                 ["John Doe", "john@example.com", "123-456-7890", "123 Apple St."],
                 ["Jane Smith", "jane@example.com", "987-654-3210", "456 Orange Ave."]

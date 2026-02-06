@@ -493,76 +493,95 @@ struct ImportBatchDetailView: View {
     @MainActor
     private func replaceBatch(from url: URL) async {
         guard let batch else { return }
+        var parsedRows: [[String]] = []
+        var parsedHeaders: [String] = []
+        let fileExtension = url.pathExtension.lowercased()
         // Security scoped access for Files app URLs
         let didStart = url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         do {
             // Decide parser pathway by extension; we will reuse ImportViewModel's existing parsers best-effort
-            let ext = url.pathExtension.lowercased()
             let rowsAndHeaders: ([[String]], [String])
-            if ext == "pdf" {
+            if fileExtension == "pdf" {
                 rowsAndHeaders = try PDFStatementExtractor.parse(url: url)
             } else {
                 let data = try Data(contentsOf: url)
                 rowsAndHeaders = try CSV.read(data: data)
             }
             let (rows, headers) = rowsAndHeaders
+            parsedRows = rows
+            parsedHeaders = headers
 
             // Attempt to find parser using default parsers first
             let parsers: [StatementParser] = ImportViewModel.defaultParsers()
             if let parser = parsers.first(where: { $0.canParse(headers: headers) }) {
-                // Found default parser, proceed
-                var staged = try parser.parse(rows: rows, headers: headers)
-                staged.sourceFileName = url.lastPathComponent
+                do {
+                    var staged = try parser.parse(rows: rows, headers: headers)
+                    staged.sourceFileName = url.lastPathComponent
 
-                // Maintain a local copy for PDF preview
-                if ext == "pdf" {
-                    let fm = FileManager.default
-                    if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                        let dest = caches.appendingPathComponent(url.lastPathComponent)
-                        try? fm.removeItem(at: dest)
-                        if fm.fileExists(atPath: url.path) {
-                            try? fm.copyItem(at: url, to: dest)
-                            batch.sourceFileLocalPath = dest.path
+                    // Maintain a local copy for PDF preview
+                    if fileExtension == "pdf" {
+                        let fm = FileManager.default
+                        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+                            let dest = caches.appendingPathComponent(url.lastPathComponent)
+                            try? fm.removeItem(at: dest)
+                            if fm.fileExists(atPath: url.path) {
+                                try? fm.copyItem(at: url, to: dest)
+                                batch.sourceFileLocalPath = dest.path
+                                try? modelContext.save()
+                            }
+                        }
+                    } else {
+                        if batch.sourceFileLocalPath != nil {
+                            batch.sourceFileLocalPath = nil
                             try? modelContext.save()
                         }
                     }
-                } else {
-                    if batch.sourceFileLocalPath != nil {
-                        batch.sourceFileLocalPath = nil
-                        try? modelContext.save()
-                    }
-                }
 
-                // Conflict detection (transactions): user-modified items whose staged values differ
-                var conflicts: [TxConflict] = []
-                let existingMap: [String: Transaction] = (self.batch?.transactions ?? []).reduce(into: [:]) { acc, tx in
-                    let key = tx.importHashKey ?? tx.hashKey
-                    acc[key] = tx
-                }
-                for st in staged.transactions {
-                    let key = st.hashKey
-                    if let ex = existingMap[key], ex.isUserModified {
-                        let differs = (ex.amount != st.amount) || (ex.datePosted != st.datePosted) || (ex.payee != st.payee) || (ex.memo ?? "") != (st.memo ?? "")
-                        if differs {
-                            conflicts.append(TxConflict(id: key, existing: ex, staged: st))
+                    // Conflict detection (transactions): user-modified items whose staged values differ
+                    var conflicts: [TxConflict] = []
+                    let existingMap: [String: Transaction] = (self.batch?.transactions ?? []).reduce(into: [:]) { acc, tx in
+                        let key = tx.importHashKey ?? tx.hashKey
+                        acc[key] = tx
+                    }
+                    for st in staged.transactions {
+                        let key = st.hashKey
+                        if let ex = existingMap[key], ex.isUserModified {
+                            let differs = (ex.amount != st.amount) || (ex.datePosted != st.datePosted) || (ex.payee != st.payee) || (ex.memo ?? "") != (st.memo ?? "")
+                            if differs {
+                                conflicts.append(TxConflict(id: key, existing: ex, staged: st))
+                            }
                         }
                     }
-                }
-                if !conflicts.isEmpty {
-                    self.pendingConflicts = conflicts
-                    self.stagedForReplace = staged
-                    self.showConflictsSheet = true
-                    return // wait for user resolution
-                }
+                    if !conflicts.isEmpty {
+                        self.pendingConflicts = conflicts
+                        self.stagedForReplace = staged
+                        self.showConflictsSheet = true
+                        return // wait for user resolution
+                    }
 
-                // Apply replacement using ImportViewModel helper
-                let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
-                AMLogging.always("Replace Batch summary — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
-                self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
-                self.showSummaryAlert = true
-                await load()
-                return
+                    // Apply replacement using ImportViewModel helper
+                    let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
+                    AMLogging.always("Replace Batch summary — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
+                    self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
+                    self.showSummaryAlert = true
+                    await load()
+                    return
+                } catch {
+                    // If a CSV parse fails, fall back to mapping editor instead of showing an error
+                    if fileExtension != "pdf" {
+                        self.pendingCSVHeaders = parsedHeaders
+                        self.pendingCSVRows = parsedRows
+                        self.showMappingSheet = true
+                        return
+                    } else {
+                        // For PDFs, keep existing error surfacing
+                        AMLogging.error("Replace Batch (PDF) parse failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
+                        self.summaryMessage = error.localizedDescription
+                        self.showSummaryAlert = true
+                        return
+                    }
+                }
             }
 
             // No default parser found, try saved CSVColumnMapping
@@ -570,57 +589,72 @@ struct ImportBatchDetailView: View {
             let mappings = try modelContext.fetch(mappingsRequest)
             if let mapping = mappings.first(where: { $0.matches(headers: headers) }) {
                 let parser = GenericCSVParser(mapping: mapping)
-                var staged = try parser.parse(rows: rows, headers: headers)
-                staged.sourceFileName = url.lastPathComponent
+                do {
+                    var staged = try parser.parse(rows: rows, headers: headers)
+                    staged.sourceFileName = url.lastPathComponent
 
-                // Maintain a local copy for PDF preview
-                if ext == "pdf" {
-                    let fm = FileManager.default
-                    if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                        let dest = caches.appendingPathComponent(url.lastPathComponent)
-                        try? fm.removeItem(at: dest)
-                        if fm.fileExists(atPath: url.path) {
-                            try? fm.copyItem(at: url, to: dest)
-                            batch.sourceFileLocalPath = dest.path
+                    // Maintain a local copy for PDF preview
+                    if fileExtension == "pdf" {
+                        let fm = FileManager.default
+                        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+                            let dest = caches.appendingPathComponent(url.lastPathComponent)
+                            try? fm.removeItem(at: dest)
+                            if fm.fileExists(atPath: url.path) {
+                                try? fm.copyItem(at: url, to: dest)
+                                batch.sourceFileLocalPath = dest.path
+                                try? modelContext.save()
+                            }
+                        }
+                    } else {
+                        if batch.sourceFileLocalPath != nil {
+                            batch.sourceFileLocalPath = nil
                             try? modelContext.save()
                         }
                     }
-                } else {
-                    if batch.sourceFileLocalPath != nil {
-                        batch.sourceFileLocalPath = nil
-                        try? modelContext.save()
-                    }
-                }
 
-                // Conflict detection (transactions): user-modified items whose staged values differ
-                var conflicts: [TxConflict] = []
-                let existingMap: [String: Transaction] = (self.batch?.transactions ?? []).reduce(into: [:]) { acc, tx in
-                    let key = tx.importHashKey ?? tx.hashKey
-                    acc[key] = tx
-                }
-                for st in staged.transactions {
-                    let key = st.hashKey
-                    if let ex = existingMap[key], ex.isUserModified {
-                        let differs = (ex.amount != st.amount) || (ex.datePosted != st.datePosted) || (ex.payee != st.payee) || (ex.memo ?? "") != (st.memo ?? "")
-                        if differs {
-                            conflicts.append(TxConflict(id: key, existing: ex, staged: st))
+                    // Conflict detection (transactions): user-modified items whose staged values differ
+                    var conflicts: [TxConflict] = []
+                    let existingMap: [String: Transaction] = (self.batch?.transactions ?? []).reduce(into: [:]) { acc, tx in
+                        let key = tx.importHashKey ?? tx.hashKey
+                        acc[key] = tx
+                    }
+                    for st in staged.transactions {
+                        let key = st.hashKey
+                        if let ex = existingMap[key], ex.isUserModified {
+                            let differs = (ex.amount != st.amount) || (ex.datePosted != st.datePosted) || (ex.payee != st.payee) || (ex.memo ?? "") != (st.memo ?? "")
+                            if differs {
+                                conflicts.append(TxConflict(id: key, existing: ex, staged: st))
+                            }
                         }
                     }
-                }
-                if !conflicts.isEmpty {
-                    self.pendingConflicts = conflicts
-                    self.stagedForReplace = staged
-                    self.showConflictsSheet = true
-                    return // wait for user resolution
-                }
+                    if !conflicts.isEmpty {
+                        self.pendingConflicts = conflicts
+                        self.stagedForReplace = staged
+                        self.showConflictsSheet = true
+                        return // wait for user resolution
+                    }
 
-                // Apply replacement using ImportViewModel helper
-                let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
-                AMLogging.always("Replace Batch summary (mapped CSV) — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
-                self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
-                self.showSummaryAlert = true
-                await load()
-                return
+                    // Apply replacement using ImportViewModel helper
+                    let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
+                    AMLogging.always("Replace Batch summary (mapped CSV) — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
+                    self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
+                    self.showSummaryAlert = true
+                    await load()
+                    return
+                } catch {
+                    // If a CSV parse fails even with a saved mapping, present the mapping editor for correction
+                    if fileExtension != "pdf" {
+                        self.pendingCSVHeaders = parsedHeaders
+                        self.pendingCSVRows = parsedRows
+                        self.showMappingSheet = true
+                        return
+                    } else {
+                        AMLogging.error("Replace Batch (PDF) mapped parse failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
+                        self.summaryMessage = error.localizedDescription
+                        self.showSummaryAlert = true
+                        return
+                    }
+                }
             }
 
             // No default parser and no mapping matched - require user mapping
@@ -629,8 +663,15 @@ struct ImportBatchDetailView: View {
             self.showMappingSheet = true
         } catch {
             AMLogging.error("Replace Batch failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
-            self.summaryMessage = error.localizedDescription
-            self.showSummaryAlert = true
+            if fileExtension != "pdf" && !parsedHeaders.isEmpty {
+                // We have CSV headers/rows — offer mapping editor instead of an error
+                self.pendingCSVHeaders = parsedHeaders
+                self.pendingCSVRows = parsedRows
+                self.showMappingSheet = true
+            } else {
+                self.summaryMessage = error.localizedDescription
+                self.showSummaryAlert = true
+            }
         }
     }
 }

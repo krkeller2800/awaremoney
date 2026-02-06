@@ -19,7 +19,8 @@ struct awaremoneyApp: App {
             Security.self,
             HoldingSnapshot.self,
             BalanceSnapshot.self,
-            ImportBatch.self
+            ImportBatch.self,
+            CSVColumnMapping.self
         ])
 
         // Ensure Application Support directory exists and build a file URL for the store

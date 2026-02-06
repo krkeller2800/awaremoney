@@ -15,12 +15,30 @@ struct BankCSVParser: StatementParser {
         let lower = headers.map { $0.lowercased() }
         let hasDate = lower.contains(where: { $0.contains("date") })
         let hasDesc = lower.contains(where: { $0.contains("description") || $0.contains("payee") || $0.contains("memo") })
-        let hasAmount = lower.contains("amount") || (lower.contains("debit") || lower.contains("credit"))
+        let hasAmount = lower.contains(where: { $0.contains("amount") }) || lower.contains(where: { $0.contains("debit") }) || lower.contains(where: { $0.contains("credit") })
         return hasDate && hasDesc && hasAmount
     }
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {
         let map = headerMap(headers)
+        let lowerHeaders = headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let hasPostDate = lowerHeaders.contains(where: { $0.contains("post date") })
+        let hasTransactionDate = lowerHeaders.contains(where: { $0.contains("transaction date") })
+        let hasTypeCol = lowerHeaders.contains(where: { $0.contains("type") })
+        let typeIndex = headerMap(headers).first(where: { $0.key.contains("type") })?.value
+        let typeTokens: [String] = {
+            guard let typeIdx = typeIndex else { return [] }
+            return rows.prefix(50).compactMap { row in
+                guard typeIdx < row.count else { return nil }
+                let v = row[typeIdx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return v.isEmpty ? nil : v
+            }
+        }()
+        let looksLikeCreditCardTypes = typeTokens.contains(where: { t in
+            t.contains("payment") || t.contains("sale") || t.contains("purchase") || t.contains("refund") || t.contains("interest charge") || t.contains("fee")
+        })
+        let suggestedType: Account.AccountType = ((hasTransactionDate && hasPostDate && (hasTypeCol || looksLikeCreditCardTypes)) || looksLikeCreditCardTypes) ? .creditCard : .checking
+
         var staged: [StagedTransaction] = []
 
         let hasBalanceColumn = map.keys.contains(where: { $0.contains("balance") })
@@ -91,7 +109,7 @@ struct BankCSVParser: StatementParser {
         return StagedImport(
             parserId: Self.id,
             sourceFileName: "Unknown.csv",
-            suggestedAccountType: .checking,
+            suggestedAccountType: suggestedType,
             transactions: staged,
             holdings: [],
             balances: balances

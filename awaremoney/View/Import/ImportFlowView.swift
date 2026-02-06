@@ -12,6 +12,10 @@ struct ImportFlowView: View {
     @State private var isFileImporterPresented = false
     @State private var pickerKind: PickerKind? = nil
     @State private var selectedBatchID: PersistentIdentifier? = nil
+    @State private var phoneRoute: BatchRoute? = nil
+    @State private var lastKnownBatchIDs: Set<UUID> = []
+    @State private var hasLoadedBatchesOnce: Bool = false
+    @State private var suppressNextAutoNavigation: Bool = false
 
     private enum PickerKind { case csv, pdf }
 
@@ -71,12 +75,36 @@ struct ImportFlowView: View {
         }
     }
 
+    // Wrapper to navigate by batch ID on phone
+    private struct BatchRoute: Identifiable, Hashable {
+        let id: UUID
+    }
+
+    // Prefer selecting a non-empty batch (has transactions, balances, or holdings); fall back to the first batch
+    private func preferredSelectionID(in list: [ImportBatch]) -> PersistentIdentifier? {
+        if let nonEmpty = list.first(where: { !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty }) {
+            return nonEmpty.persistentModelID
+        }
+        return list.first?.persistentModelID
+    }
+
+    private var orderedBatches: [ImportBatch] {
+        batches.sorted { lhs, rhs in
+            let lNonEmpty = !lhs.transactions.isEmpty || !lhs.balances.isEmpty || !lhs.holdings.isEmpty
+            let rNonEmpty = !rhs.transactions.isEmpty || !rhs.balances.isEmpty || !rhs.holdings.isEmpty
+            if lNonEmpty == rNonEmpty {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lNonEmpty && !rNonEmpty
+        }
+    }
+    
     @ViewBuilder
     private func importsSection() -> some View {
         if batches.isEmpty {
             emptyStateView
         } else {
-            ForEach(batches, id: \.id) { batch in
+            ForEach(orderedBatches, id: \.id) { batch in
                 NavigationLink(destination: ImportBatchDetailView(batchID: batch.id)) {
                     BatchRowContent(batch: batch)
                 }
@@ -112,13 +140,175 @@ struct ImportFlowView: View {
         }
     }
 
+    private func autoApplyMappingIfPossible(headers: [String], rows: [[String]]) {
+        do {
+            let saved = try modelContext.fetch(FetchDescriptor<CSVColumnMapping>())
+            AMLogging.always("ImportFlowView: autoApplyMapping — savedMappings=\(saved.count), headers=\(headers), headerSet=\(Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }))", component: "Import")
+            let headerSet = Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            for map in saved {
+                let values = map.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                let isSubset = Set(values).isSubset(of: headerSet)
+                AMLogging.always("ImportFlowView: autoApplyMapping — candidate='" + (map.label ?? "(unnamed)") + "' values=\(values) subset=\(isSubset)", component: "Import")
+            }
+            if let mapping = saved.first(where: { map in
+                let values = map.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                return Set(values).isSubset(of: headerSet)
+            }) {
+                do {
+                    let parser = GenericCSVParser(mapping: mapping)
+                    let staged = try parser.parse(rows: rows, headers: headers)
+                    vm.staged = staged
+                    vm.mappingSession = nil
+                    AMLogging.always("ImportFlowView: auto-applied saved CSV mapping '" + (mapping.label ?? "(unnamed)") + "'", component: "Import")
+                } catch {
+                    AMLogging.error("ImportFlowView: auto-apply mapping failed: \(error.localizedDescription)", component: "Import")
+                }
+            } else {
+                AMLogging.always("ImportFlowView: autoApplyMapping — no matching saved mapping; presenting editor", component: "Import")
+            }
+        } catch {
+            AMLogging.error("ImportFlowView: fetch saved mappings failed: \(error.localizedDescription)", component: "Import")
+        }
+    }
+
+    private static func prefillMappings(from rawHeaders: [String], sampleRows: [[String]]) -> [CSVColumnMapping.Field: String] {
+        let normalized = rawHeaders.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        func findHeader(where predicate: (String) -> Bool) -> String? {
+            for (i, l) in normalized.enumerated() {
+                if predicate(l) { return rawHeaders[i] }
+            }
+            return nil
+        }
+
+        func findHeader(containing tokens: [String]) -> String? {
+            return findHeader { lower in tokens.contains(where: { lower.contains($0) }) }
+        }
+
+        // Prefer "Transaction Date", then "Post Date", then any header containing "Date"
+        let dateHeader = findHeader(containing: ["transaction date"]) ??
+                         findHeader(containing: ["post date"]) ??
+                         findHeader(containing: ["date"])
+
+        // Prefer clear description/payee fields; avoid matching headers that also contain "date" (e.g., "Transaction Date")
+        let payeeHeader = findHeader { l in
+            (l.contains("description") || l.contains("payee") || l.contains("memo") || l.contains("details")) && !l.contains("date")
+        }
+
+        // Try common amount-like tokens first
+        var amountHeader: String? = findHeader(containing: ["amount", "amt", "debit", "credit", "withdrawal", "deposit", "charge"])
+
+        // Fallback to guess amount column by scanning sample rows for numeric-looking data
+        if amountHeader == nil {
+            // Guess amount column by scanning sample rows for numeric-looking data
+            let excludeTokens = ["date", "description", "payee", "memo", "details", "category", "account", "acct", "balance", "running", "type", "kind", "apr", "interest"]
+            let excludedIndices: Set<Int> = Set(rawHeaders.enumerated().compactMap { idx, h in
+                let lower = h.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return excludeTokens.contains(where: { lower.contains($0) }) ? idx : nil
+            })
+            func sanitize(_ s: String) -> String { s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            var numericCounts: [Int: Int] = [:]
+            for row in sampleRows {
+                for (idx, cell) in row.enumerated() {
+                    if excludedIndices.contains(idx) { continue }
+                    let cleaned = sanitize(idx < row.count ? cell : "")
+                    if cleaned.isEmpty { continue }
+                    if Decimal(string: cleaned) != nil {
+                        numericCounts[idx, default: 0] += 1
+                    }
+                }
+            }
+            if let bestIdx = numericCounts.max(by: { $0.value < $1.value })?.key, bestIdx < rawHeaders.count {
+                amountHeader = rawHeaders[bestIdx]
+            }
+        }
+
+        // Optional supporting fields
+        let kindHeader = findHeader(containing: ["type", "kind"]) // e.g., "Type"
+        let categoryHeader = findHeader(containing: ["category"]) // e.g., "Category"
+        let accountHeader = findHeader(containing: ["account", "acct"]) // e.g., "Account"
+        let balanceHeader = findHeader(containing: ["balance"]) // e.g., running balance
+
+        var prefilled: [CSVColumnMapping.Field: String] = [:]
+        if let h = dateHeader { prefilled[.date] = h }
+        if let h = payeeHeader { prefilled[.payee] = h }
+        if let h = amountHeader { prefilled[.amount] = h }
+        if let h = kindHeader { prefilled[.kind] = h }
+        if let h = categoryHeader { prefilled[.category] = h }
+        if let h = accountHeader { prefilled[.account] = h }
+        if let h = balanceHeader { prefilled[.balance] = h }
+
+        return prefilled
+    }
+
     @ViewBuilder
     private func sheetContent() -> some View {
         if let staged = vm.staged {
             ReviewImportView(staged: staged, vm: vm)
                 .environment(\.modelContext, modelContext)
-        } else if vm.mappingSession != nil {
-            NavigationStack { MappingView(vm: vm) }
+        } else if let session = vm.mappingSession {
+            let fieldsForHint: [CSVColumnMapping.Field]? = {
+                switch vm.userSelectedDocHint {
+                case .loan:
+                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance, .interestRateAPR]
+                case .creditCard:
+                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance, .interestRateAPR]
+                case .brokerage:
+                    return [.date, .symbol, .quantity, .price, .marketValue, .balance, .account]
+                case .checking:
+                    fallthrough
+                default:
+                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance]
+                }
+            }()
+
+            NavigationStack {
+                CSVMappingEditorView(
+                    mapping: CSVColumnMapping(label: "New Mapping", mappings: Self.prefillMappings(from: session.headers, sampleRows: session.sampleRows)),
+                    headers: session.headers,
+                    onSave: { mapping in
+                        AMLogging.always("ImportFlowView: CSVMappingEditorView.onSave — label='" + (mapping.label ?? "(unnamed)") + "' mappings=\(mapping.mappings)", component: "Import")
+                        AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+                        // Persist the mapping
+                        modelContext.insert(mapping)
+                        do {
+                            try modelContext.save()
+                            AMLogging.always("ImportFlowView: save succeeded — mapping persistentID=\(String(describing: mapping.persistentModelID))", component: "Import")
+                        } catch {
+                            AMLogging.error("ImportFlowView: failed to save mapping — \(error.localizedDescription)", component: "Import")
+                        }
+                        do {
+                            let all = try modelContext.fetch(FetchDescriptor<CSVColumnMapping>())
+                            AMLogging.always("ImportFlowView: after save — total saved mappings=\(all.count)", component: "Import")
+                            for m in all {
+                                let vals = m.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                                AMLogging.always("ImportFlowView: mapping catalog — label='" + (m.label ?? "(unnamed)") + "' values=\(vals)", component: "Import")
+                            }
+                        } catch {
+                            AMLogging.error("ImportFlowView: fetch after save failed — \(error.localizedDescription)", component: "Import")
+                        }
+                        // Immediately parse using the session's rows and headers
+                        do {
+                            let parser = GenericCSVParser(mapping: mapping)
+                            let staged = try parser.parse(rows: session.sampleRows, headers: session.headers)
+                            vm.staged = staged
+                            vm.mappingSession = nil
+                        } catch {
+                            // If parsing fails, keep the mapping session open for correction
+                            AMLogging.error("CSV mapping parse failed: \(error.localizedDescription)", component: "ImportFlowView")
+                        }
+                    },
+                    onCancel: {
+                        // Simply close the mapping session
+                        vm.mappingSession = nil
+                    },
+                    visibleFields: fieldsForHint,
+                    autoSaveWhenReady: false
+                )
+                .onAppear {
+                    AMLogging.always("ImportFlowView: CSVMappingEditorView appearing — staged=\(vm.staged != nil), mappingSession=\(vm.mappingSession != nil)", component: "Import")
+                }
+            }
         } else {
             EmptyView()
         }
@@ -138,6 +328,7 @@ struct ImportFlowView: View {
                 hintBar
             }
             .navigationTitle("Import")
+            .onAppear { AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
             .task { await loadBatches() }
             .refreshable { await loadBatches() }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
@@ -154,11 +345,14 @@ struct ImportFlowView: View {
                     AMLogging.always("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
                 } else {
                     AMLogging.always("ImportFlowView: staged import cleared", component: "Import")
+                    suppressNextAutoNavigation = true
                 }
             }
             .onReceive(vm.$mappingSession) { session in
                 if let session {
                     AMLogging.always("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
+                    AMLogging.always("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
+                    autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
                 } else {
                     AMLogging.always("ImportFlowView: mapping session cleared", component: "Import")
                 }
@@ -245,6 +439,9 @@ struct ImportFlowView: View {
                     }
                 }
             }
+            .navigationDestination(item: $phoneRoute) { route in
+                ImportBatchDetailView(batchID: route.id)
+            }
         }
     }
 
@@ -257,7 +454,7 @@ struct ImportFlowView: View {
                         if batches.isEmpty {
                             emptyStateView
                         } else {
-                            ForEach(batches, id: \.persistentModelID) { batch in
+                            ForEach(orderedBatches, id: \.persistentModelID) { batch in
                                 BatchRowContent(batch: batch)
                                     .tag(batch.persistentModelID)
                             }
@@ -363,6 +560,7 @@ struct ImportFlowView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         // Attach shared modifiers to the outer container so behavior remains the same
+        .onAppear { AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
             Task { await loadBatches() }
         }
@@ -377,21 +575,32 @@ struct ImportFlowView: View {
                 AMLogging.always("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
             } else {
                 AMLogging.always("ImportFlowView: staged import cleared", component: "Import")
+                suppressNextAutoNavigation = true
             }
         }
         .onReceive(vm.$mappingSession) { session in
             if let session {
                 AMLogging.always("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
+                AMLogging.always("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
+                autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
             } else {
                 AMLogging.always("ImportFlowView: mapping session cleared", component: "Import")
             }
         }
         .onChange(of: batches) {
             if isPad {
+                let preferred = preferredSelectionID(in: batches)
+                // If the current selection disappeared, or is nil, select the preferred batch
                 if let sel = selectedBatchID, !batches.contains(where: { $0.persistentModelID == sel }) {
-                    selectedBatchID = batches.first?.persistentModelID
+                    selectedBatchID = preferred
                 } else if selectedBatchID == nil {
-                    selectedBatchID = batches.first?.persistentModelID
+                    selectedBatchID = preferred
+                } else if let sel = selectedBatchID,
+                          let current = batches.first(where: { $0.persistentModelID == sel }),
+                          current.transactions.isEmpty && current.balances.isEmpty && current.holdings.isEmpty,
+                          let pref = preferred, pref != sel {
+                    // If a non-empty batch exists, prefer it over an empty selection
+                    selectedBatchID = pref
                 }
             }
         }
@@ -438,11 +647,31 @@ struct ImportFlowView: View {
             desc.sortBy = [SortDescriptor(\ImportBatch.createdAt, order: .reverse)]
             let fetched = try modelContext.fetch(desc)
             await MainActor.run {
+                // Track previous IDs across loads to detect newly created batches; avoid auto-nav on initial load
+                let previousIDs = self.lastKnownBatchIDs
                 self.batches = fetched
+                let currentIDs = Set(fetched.map { $0.id })
+                let newIDs = currentIDs.subtracting(previousIDs)
+                self.lastKnownBatchIDs = currentIDs
+                let isInitialLoad = !self.hasLoadedBatchesOnce
+                self.hasLoadedBatchesOnce = true
+
                 let summary = fetched.map { batch in
                     "[label=\(batch.label), id=\(batch.id), pid=\(batch.persistentModelID)]"
                 }.joined(separator: ", ")
                 AMLogging.always("ImportFlowView: loaded batches count=\(fetched.count) details=\(summary)", component: "Import")
+
+                // On phone, if a new non-empty batch was added and we're not in a sheet, navigate to it
+                if !isPad && vm.staged == nil && vm.mappingSession == nil && !isInitialLoad && !self.suppressNextAutoNavigation {
+                    let newNonEmpty = fetched
+                        .filter { newIDs.contains($0.id) && (!($0.transactions.isEmpty) || !($0.balances.isEmpty) || !($0.holdings.isEmpty)) }
+                        .sorted { $0.createdAt > $1.createdAt }
+                    if let target = newNonEmpty.first {
+                        self.phoneRoute = BatchRoute(id: target.id)
+                        AMLogging.always("ImportFlowView: auto-navigating to new non-empty batch id=\(target.id)", component: "Import")
+                    }
+                }
+                self.suppressNextAutoNavigation = false
             }
         } catch {
             await MainActor.run { self.batches = [] }

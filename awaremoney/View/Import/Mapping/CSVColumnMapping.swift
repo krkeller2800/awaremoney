@@ -18,6 +18,13 @@ final class CSVColumnMapping {
         case memo
         case category
         case account
+        case symbol
+        case quantity
+        case price
+        case marketValue
+        case balance
+        case runningBalance
+        case interestRateAPR
     }
 
     enum AmountMode: String, Codable, Sendable {
@@ -34,17 +41,20 @@ final class CSVColumnMapping {
     }
 
     @Attribute(.unique) var id: UUID
+    var label: String?
     var mappings: [Field: String]
     var amountMode: AmountMode
     var parsingOptions: ParsingOptions
 
     init(
         id: UUID = .init(),
+        label: String? = nil,
         mappings: [Field: String] = [:],
         amountMode: AmountMode = .none,
         parsingOptions: ParsingOptions = ParsingOptions()
     ) {
         self.id = id
+        self.label = label
         self.mappings = mappings
         self.amountMode = amountMode
         self.parsingOptions = parsingOptions
@@ -89,5 +99,12 @@ extension CSVColumnMapping {
     var memoColumn: String? { mappings[.memo] }
     var categoryColumn: String? { mappings[.category] }
     var accountColumn: String? { mappings[.account] }
+    var symbolColumn: String? { mappings[.symbol] }
+    var quantityColumn: String? { mappings[.quantity] }
+    var priceColumn: String? { mappings[.price] }
+    var marketValueColumn: String? { mappings[.marketValue] }
+    var balanceColumn: String? { mappings[.balance] }
+    var runningBalanceColumn: String? { mappings[.runningBalance] }
+    var interestRateAPRColumn: String? { mappings[.interestRateAPR] }
 }
 
