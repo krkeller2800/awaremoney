@@ -47,10 +47,10 @@ final class ImportViewModel: ObservableObject {
     }
 
     private static func extractAPRFromPDF(at url: URL) -> (Decimal, Int)? {
-        AMLogging.always("ImportViewModel: extractAPRFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractAPRFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
         let pageCount = doc.pageCount
-        AMLogging.always("ImportViewModel: PDF pageCount=\(pageCount)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: PDF pageCount=\(pageCount)", component: "ImportViewModel")
 
         // Combine first few pages to avoid early false positives and allow context filtering
         let pagesToScan = pageCount
@@ -82,7 +82,7 @@ final class ImportViewModel: ObservableObject {
             if var val = Decimal(string: token) {
                 let scale = computeScale(token)
                 if val > 1 { val /= 100 }
-                AMLogging.always("ImportViewModel: APR percent line match token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
+                AMLogging.log("ImportViewModel: APR percent line match token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
                 return (val, scale)
             }
             return nil
@@ -96,7 +96,7 @@ final class ImportViewModel: ObservableObject {
             if headerIndex == nil && line.contains("interest charge calculation") { headerIndex = i }
         }
         if let idx = headerIndex {
-            AMLogging.always("ImportViewModel: APR table header detected at line \(idx)", component: "ImportViewModel")
+            AMLogging.log("ImportViewModel: APR table header detected at line \(idx)", component: "ImportViewModel")
             let end = min(lines.count, idx + 120)
             // Prefer purchases row; allow percent to be on adjacent lines/columns
             for j in (idx+1)..<end {
@@ -140,7 +140,7 @@ final class ImportViewModel: ObservableObject {
             if var val = Decimal(string: token) {
                 let scale = computeScale(token)
                 if val > 1 { val /= 100 }
-                AMLogging.always("ImportViewModel: APR match (pattern) token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
+                AMLogging.log("ImportViewModel: APR match (pattern) token=\(token) fraction=\(val) scale=\(scale)", component: "ImportViewModel")
                 return (val, scale)
             }
             return nil
@@ -198,18 +198,18 @@ final class ImportViewModel: ObservableObject {
                 if var v = Decimal(string: token) {
                     let scale = computeScale(token)
                     if v > 1 { v /= 100 }
-                    AMLogging.always("ImportViewModel: APR generic match token=\(token) fraction=\(v) scale=\(scale)", component: "ImportViewModel")
+                    AMLogging.log("ImportViewModel: APR generic match token=\(token) fraction=\(v) scale=\(scale)", component: "ImportViewModel")
                     return (v, scale)
                 }
             }
         }
 
-        AMLogging.always("ImportViewModel: extractAPRFromPDF no APR found", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractAPRFromPDF no APR found", component: "ImportViewModel")
         return nil
     }
     
     private static func extractCardSummaryFromPDF(at url: URL) -> (newBalance: Decimal, minimumPayment: Decimal?, dueDate: Date?)? {
-        AMLogging.always("ImportViewModel: extractCardSummaryFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractCardSummaryFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
         let pageCount = doc.pageCount
         let pagesToScan = min(3, pageCount) // summary is usually on the first page or two
@@ -327,7 +327,7 @@ final class ImportViewModel: ObservableObject {
                                 let token = s.substring(with: gr)
                                 if let val = parseAmount(token) {
                                     minPay = val
-                                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line) = \(val)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line) = \(val)", component: "ImportViewModel")
                                 }
                             }
                         }
@@ -337,7 +337,7 @@ final class ImportViewModel: ObservableObject {
                                 let token = s.substring(with: gr)
                                 if let val = parseAmount(token) {
                                     minPay = val
-                                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line any) = \(val)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (same-line any) = \(val)", component: "ImportViewModel")
                                 }
                             }
                         }
@@ -362,7 +362,7 @@ final class ImportViewModel: ObservableObject {
                                         let token = s.substring(with: gr)
                                         if let val = parseAmount(token) {
                                             minPay = val
-                                            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead) = \(val)", component: "ImportViewModel")
+                                            AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead) = \(val)", component: "ImportViewModel")
                                             break outer
                                         }
                                     }
@@ -378,7 +378,7 @@ final class ImportViewModel: ObservableObject {
                                         let token = s.substring(with: gr)
                                         if let val = parseAmount(token) {
                                             minPay = val
-                                            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead any) = \(val)", component: "ImportViewModel")
+                                            AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — Minimum Payment (lookahead any) = \(val)", component: "ImportViewModel")
                                             break outer
                                         }
                                     }
@@ -392,12 +392,12 @@ final class ImportViewModel: ObservableObject {
         let due = dueStr.flatMap(parseDate)
 
         guard let newBalStr = firstMatch(newBalancePattern) else {
-            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — no New Balance match", component: "ImportViewModel")
+            AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — no New Balance match", component: "ImportViewModel")
             return nil
         }
 
         guard let newBal = parseAmount(newBalStr) else {
-            AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — New Balance parse failed: \(newBalStr)", component: "ImportViewModel")
+            AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — New Balance parse failed: \(newBalStr)", component: "ImportViewModel")
             return nil
         }
 
@@ -526,7 +526,7 @@ final class ImportViewModel: ObservableObject {
 
                 if let best = plausible.sorted(by: { abs($0.1 - 0.02) < abs($1.1 - 0.02) }).first {
                     minPay = best.0
-                    AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — refined Minimum Payment selected = \(best.0) (ratio=\(best.1))", component: "ImportViewModel")
+                    AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — refined Minimum Payment selected = \(best.0) (ratio=\(best.1))", component: "ImportViewModel")
                 }
             }
             // Enforce plausibility: if still implausible after refinement, discard it
@@ -535,17 +535,17 @@ final class ImportViewModel: ObservableObject {
                 return isWholeDollar(mp) && mp >= 25 && f >= 0.01 && f <= 0.10
             }()
             if !finalIsPlausible {
-                AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — discarding implausible Minimum Payment=\(String(describing: minPay)) for newBalance=\(newBal)", component: "ImportViewModel")
+                AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — discarding implausible Minimum Payment=\(String(describing: minPay)) for newBalance=\(newBal)", component: "ImportViewModel")
                 minPay = nil
             }
         }
 
-        AMLogging.always("ImportViewModel: extractCardSummaryFromPDF — newBalance=\(newBal), minPayment=\(String(describing: minPay)), dueDate=\(String(describing: due))", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — newBalance=\(newBal), minPayment=\(String(describing: minPay)), dueDate=\(String(describing: due))", component: "ImportViewModel")
         return (newBalance: newBal, minimumPayment: minPay, dueDate: due)
     }
     
     private static func extractBankSummaryFromPDF(at url: URL) -> (endingBalance: Decimal, asOfDate: Date?, label: String?)? {
-        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractBankSummaryFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
         let pageCount = doc.pageCount
         let pagesToScan = min(3, pageCount)
@@ -653,18 +653,18 @@ final class ImportViewModel: ObservableObject {
                                 inferredLabel = "Checking"
                             }
                         }
-                        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF — endingBalance=\(amount), asOf=\(String(describing: asOf)), label=\(String(describing: inferredLabel))", component: "ImportViewModel")
+                        AMLogging.log("ImportViewModel: extractBankSummaryFromPDF — endingBalance=\(amount), asOf=\(String(describing: asOf)), label=\(String(describing: inferredLabel))", component: "ImportViewModel")
                         return (endingBalance: amount, asOfDate: asOf, label: inferredLabel)
                     }
                 }
             }
         }
-        AMLogging.always("ImportViewModel: extractBankSummaryFromPDF — no ending balance found", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractBankSummaryFromPDF — no ending balance found", component: "ImportViewModel")
         return nil
     }
 
     private static func extractLoanPaymentFromPDF(at url: URL) -> (amount: Decimal, dueDate: Date)? {
-        AMLogging.always("ImportViewModel: extractLoanPaymentFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractLoanPaymentFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
         let pageCount = doc.pageCount
         let pagesToScan = min(3, pageCount)
@@ -718,7 +718,7 @@ final class ImportViewModel: ObservableObject {
             return nil
         }
         guard let amount = parseAmount(amtStr), let due = parseDate(dateStr) else { return nil }
-        AMLogging.always("ImportViewModel: extractLoanPaymentFromPDF — amount=\(amount), due=\(due)", component: "ImportViewModel")
+        AMLogging.log("ImportViewModel: extractLoanPaymentFromPDF — amount=\(amount), due=\(due)", component: "ImportViewModel")
         return (amount: amount, dueDate: due)
     }
 
@@ -737,7 +737,7 @@ final class ImportViewModel: ObservableObject {
             let current = self.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
             if current.isEmpty, let inst = acct.institutionName, !inst.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 self.userInstitutionName = inst
-                AMLogging.always("Prefilled institution from selected account: \(inst)", component: "ImportViewModel")
+                AMLogging.log("Prefilled institution from selected account: \(inst)", component: "ImportViewModel")
             }
         }
         return account
@@ -796,7 +796,7 @@ final class ImportViewModel: ObservableObject {
                         }
                         rowsAndHeaders = primary
                     } catch {
-                        await AMLogging.always("ImportViewModel: PDF summary-only failed (\(error.localizedDescription)); retrying transactions mode", component: "ImportViewModel")
+                        await AMLogging.log("ImportViewModel: PDF summary-only failed (\(error.localizedDescription)); retrying transactions mode", component: "ImportViewModel")
                         let fallback = try await MainActor.run {
                             try PDFStatementExtractor.parse(url: url, mode: .transactions)
                         }
@@ -820,7 +820,7 @@ final class ImportViewModel: ObservableObject {
                         self.isImporting = false
                         return
                     }
-                    AMLogging.always("Import picked — ext: \(ext), rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
+                    AMLogging.log("Import picked — ext: \(ext), rows: \(rows.count), headers: \(headers)", component: "ImportViewModel")
 
                     do {
                         let descIdx = headers.firstIndex(where: { $0.caseInsensitiveCompare("Description") == .orderedSame }) ?? 1
@@ -846,7 +846,7 @@ final class ImportViewModel: ObservableObject {
                             return keywords.contains { d.contains($0) }
                         }
                         if paymentRows.isEmpty {
-                            AMLogging.always("ImportViewModel: no payment rows detected pre-parse", component: "ImportViewModel")
+                            AMLogging.log("ImportViewModel: no payment rows detected pre-parse", component: "ImportViewModel")
                         } else {
                             for r in paymentRows {
                                 let desc = r[safe: descIdx] ?? ""
@@ -857,7 +857,7 @@ final class ImportViewModel: ObservableObject {
                                     return b
                                 }()
                                 let dec = Decimal(string: amtStr.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: ""))
-                                AMLogging.always("ImportViewModel: payment row pre-parse — desc='\(desc)', amountStr='\(amtStr)', parsed=\(String(describing: dec))", component: "ImportViewModel")
+                                AMLogging.log("ImportViewModel: payment row pre-parse — desc='\(desc)', amountStr='\(amtStr)', parsed=\(String(describing: dec))", component: "ImportViewModel")
                                 if let amount = dec {
                                     // Try to get a label from an Account column if present, else infer from description
                                     let accountIdx = headers.firstIndex(where: { $0.caseInsensitiveCompare("Account") == .orderedSame })
@@ -865,14 +865,14 @@ final class ImportViewModel: ObservableObject {
                                     let inferredLabel: String? = self.normalizeSourceLabel(accountRaw) ?? self.normalizeSourceLabel(desc)
                                     let key = inferredLabel ?? "default"
                                     self.detectedTypicalPaymentByLabel[key] = amount
-                                    AMLogging.always("ImportViewModel: captured typical payment hint — label=\(key), amount=\(amount)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: captured typical payment hint — label=\(key), amount=\(amount)", component: "ImportViewModel")
                                 }
                             }
                         }
                     }
 
                     let matchingParsers = self.parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
-                    AMLogging.always("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
+                    AMLogging.log("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
                     if let parser = self.parsers.first(where: { $0.canParse(headers: headers) }) {
                         AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
                         do {
@@ -910,9 +910,9 @@ final class ImportViewModel: ObservableObject {
                                             self.detectedTypicalPaymentByLabel["default"] = mp
                                         }
                                         if stagedImport.suggestedAccountType == nil { stagedImport.suggestedAccountType = .creditCard }
-                                        AMLogging.always("ImportViewModel: Applied PDF summary fallback — newBalance=\(summary.newBalance), minPayment=\(String(describing: summary.minimumPayment)), dueDate=\(String(describing: summary.dueDate))", component: "ImportViewModel")
+                                        AMLogging.log("ImportViewModel: Applied PDF summary fallback — newBalance=\(summary.newBalance), minPayment=\(String(describing: summary.minimumPayment)), dueDate=\(String(describing: summary.dueDate))", component: "ImportViewModel")
                                     } else {
-                                        AMLogging.always("ImportViewModel: PDF summary fallback did not find header fields", component: "ImportViewModel")
+                                        AMLogging.log("ImportViewModel: PDF summary fallback did not find header fields", component: "ImportViewModel")
                                     }
                                 }
                             }
@@ -925,7 +925,7 @@ final class ImportViewModel: ObservableObject {
                                    let mp = summary.minimumPayment, mp > 0 {
                                     self.detectedTypicalPaymentByLabel["creditCard"] = mp
                                     self.detectedTypicalPaymentByLabel["default"] = mp
-                                    AMLogging.always("ImportViewModel: Captured minimum payment from PDF summary — amount=\(mp)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: Captured minimum payment from PDF summary — amount=\(mp)", component: "ImportViewModel")
 
                                     // If no suggestion yet, nudge toward credit card. Don’t override an explicit brokerage/loan suggestion.
                                     if stagedImport.suggestedAccountType == nil {
@@ -937,7 +937,7 @@ final class ImportViewModel: ObservableObject {
                             // After summary fallback, attempt APR extraction if still missing
                             if ext == "pdf" {
                                 let allMissingAPR = stagedImport.balances.allSatisfy { $0.interestRateAPR == nil }
-                                AMLogging.always("ImportViewModel: allMissingAPR=\(allMissingAPR)", component: "ImportViewModel")
+                                AMLogging.log("ImportViewModel: allMissingAPR=\(allMissingAPR)", component: "ImportViewModel")
                                 if allMissingAPR {
                                     if let localURL = self.lastPickedLocalURL, let (apr, scale) = Self.extractAPRFromPDF(at: localURL) {
                                         for idx in stagedImport.balances.indices {
@@ -946,7 +946,7 @@ final class ImportViewModel: ObservableObject {
                                                 stagedImport.balances[idx].interestRateScale = scale
                                             }
                                         }
-                                        AMLogging.always("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (local)", component: "ImportViewModel")
+                                        AMLogging.log("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (local)", component: "ImportViewModel")
                                     } else if let (apr, scale) = Self.extractAPRFromPDF(at: url) {
                                         for idx in stagedImport.balances.indices {
                                             if stagedImport.balances[idx].interestRateAPR == nil {
@@ -954,7 +954,7 @@ final class ImportViewModel: ObservableObject {
                                                 stagedImport.balances[idx].interestRateScale = scale
                                             }
                                         }
-                                        AMLogging.always("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (original)", component: "ImportViewModel")
+                                        AMLogging.log("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (original)", component: "ImportViewModel")
                                     }
                                 }
                             }
@@ -966,18 +966,18 @@ final class ImportViewModel: ObservableObject {
                                     self.detectedTypicalPaymentByLabel["loan"] = loan.amount
                                     if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
                                     self.detectedDueDateByLabel["loan"] = loan.dueDate
-                                    AMLogging.always("ImportViewModel: captured loan payment from PDF — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: captured loan payment from PDF — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
                                 }
                             }
 
-                            AMLogging.always("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
+                            AMLogging.log("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
 
                             if !stagedImport.balances.isEmpty {
-                                AMLogging.always("Staged balances detail (pre-save):", component: "ImportViewModel")
+                                AMLogging.log("Staged balances detail (pre-save):", component: "ImportViewModel")
                                 for b in stagedImport.balances {
                                     let raw = b.sourceAccountLabel ?? "(nil)"
                                     let norm = self.normalizeSourceLabel(b.sourceAccountLabel) ?? "default"
-                                    AMLogging.always("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
+                                    AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
                                 }
                             }
 
@@ -1000,23 +1000,23 @@ final class ImportViewModel: ObservableObject {
                                      return keywords.contains { k in p.contains(k) || m.contains(k) }
                                  }
                                  if paymentLike.isEmpty {
-                                     AMLogging.always("ImportViewModel: no payment-like transactions found post-parse", component: "ImportViewModel")
+                                     AMLogging.log("ImportViewModel: no payment-like transactions found post-parse", component: "ImportViewModel")
                                  } else {
                                      for t in paymentLike {
-                                         AMLogging.always("ImportViewModel: payment-like transaction post-parse — date: \(t.datePosted), amount: \(t.amount), payee: \(t.payee), memo: \(t.memo ?? "")", component: "ImportViewModel")
+                                         AMLogging.log("ImportViewModel: payment-like transaction post-parse — date: \(t.datePosted), amount: \(t.amount), payee: \(t.payee), memo: \(t.memo ?? "")", component: "ImportViewModel")
                                      }
                                  }
                              }
 
                             if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
-                                AMLogging.always("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
+                                AMLogging.log("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
                             }
 
                             // Guess account type
                             let sampleForGuess = Array(rows.prefix(50))
-                            AMLogging.always("Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
+                            AMLogging.log("Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
                             let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
-                            AMLogging.always("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
+                            AMLogging.log("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
                             // Use userSelectedDocHint to prevent override of user choice
                             if stagedImport.suggestedAccountType == nil, let guessedType = guessedType {
                                 stagedImport.suggestedAccountType = guessedType
@@ -1024,19 +1024,19 @@ final class ImportViewModel: ObservableObject {
                             if let suggested = stagedImport.suggestedAccountType {
                                 if self.userSelectedDocHint == nil {
                                     self.newAccountType = suggested
-                                    AMLogging.always("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                                    AMLogging.log("Applied suggested account type: \(self.newAccountType.rawValue)", component: "ImportViewModel")
                                 } else {
-                                    AMLogging.always("Preserving user-selected account type '\(self.newAccountType.rawValue)' over suggested '\(suggested.rawValue)'", component: "ImportViewModel")
+                                    AMLogging.log("Preserving user-selected account type '\(self.newAccountType.rawValue)' over suggested '\(suggested.rawValue)'", component: "ImportViewModel")
                                 }
-                                AMLogging.always("ImportViewModel: invoking safety net before staging filter (local staged)", component: "ImportViewModel")
+                                AMLogging.log("ImportViewModel: invoking safety net before staging filter (local staged)", component: "ImportViewModel")
                                 self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
                             } else {
-                                AMLogging.always("No suggested account type from parser/guess", component: "ImportViewModel")
+                                AMLogging.log("No suggested account type from parser/guess", component: "ImportViewModel")
                             }
                             
                             // Ensure safety net has a chance to run even if suggestion was nil
                             if stagedImport.suggestedAccountType == nil {
-                                AMLogging.always("ImportViewModel: invoking safety net before staging filter (no suggestion)", component: "ImportViewModel")
+                                AMLogging.log("ImportViewModel: invoking safety net before staging filter (no suggestion)", component: "ImportViewModel")
                                 self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
                             }
 
@@ -1052,17 +1052,17 @@ final class ImportViewModel: ObservableObject {
                                 let dropped = before - filtered.count
                                 if dropped > 0 {
                                     let keptLabels = filtered.map { self.normalizeSourceLabel($0.sourceAccountLabel) ?? "default" }
-                                    AMLogging.always("Staging filter: liability import — dropped \(dropped) of \(before) non-liability balances. Kept labels: \(keptLabels)", component: "ImportViewModel")
+                                    AMLogging.log("Staging filter: liability import — dropped \(dropped) of \(before) non-liability balances. Kept labels: \(keptLabels)", component: "ImportViewModel")
                                 } else {
-                                    AMLogging.always("Staging filter: liability import — no non-liability balances to drop", component: "ImportViewModel")
+                                    AMLogging.log("Staging filter: liability import — no non-liability balances to drop", component: "ImportViewModel")
                                 }
                                 stagedImport.balances = filtered
                                 if !stagedImport.balances.isEmpty {
-                                    AMLogging.always("Staged balances detail (post-filter):", component: "ImportViewModel")
+                                    AMLogging.log("Staged balances detail (post-filter):", component: "ImportViewModel")
                                     for b in stagedImport.balances {
                                         let raw = b.sourceAccountLabel ?? "(nil)"
                                         let norm = self.normalizeSourceLabel(b.sourceAccountLabel) ?? "default"
-                                        AMLogging.always("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
+                                        AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
                                     }
                                 }
                             }
@@ -1073,7 +1073,7 @@ final class ImportViewModel: ObservableObject {
                             if self.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                let guessedInst = self.guessInstitutionName(from: stagedImport.sourceFileName) {
                                 self.userInstitutionName = guessedInst
-                                AMLogging.always("Prefilled institution guess for import screen: \(guessedInst)", component: "ImportViewModel")
+                                AMLogging.log("Prefilled institution guess for import screen: \(guessedInst)", component: "ImportViewModel")
                             }
 
                             // Build info messages
@@ -1099,7 +1099,7 @@ final class ImportViewModel: ObservableObject {
                             self.staged = nil
                         }
                     } else {
-                        AMLogging.always("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
+                        AMLogging.log("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
                         let sample = Array(rows.prefix(10))
                         self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: sample, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
 
@@ -1107,7 +1107,7 @@ final class ImportViewModel: ObservableObject {
                         if self.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                            let guessedInst = self.guessInstitutionName(from: url.lastPathComponent) {
                             self.userInstitutionName = guessedInst
-                            AMLogging.always("Prefilled institution guess for import screen (mapping): \(guessedInst)", component: "ImportViewModel")
+                            AMLogging.log("Prefilled institution guess for import screen (mapping): \(guessedInst)", component: "ImportViewModel")
                         }
 
                         if let res = coordinatorResult, (!res.warnings.isEmpty || res.confidence <= .low) {
@@ -1181,7 +1181,7 @@ final class ImportViewModel: ObservableObject {
                                     self.detectedTypicalPaymentByLabel["loan"] = loan.amount
                                     if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
                                     self.detectedDueDateByLabel["loan"] = loan.dueDate
-                                    AMLogging.always("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
                                 }
                                 self.staged = updatedImport
                             } else {
@@ -1190,7 +1190,7 @@ final class ImportViewModel: ObservableObject {
                                     self.detectedTypicalPaymentByLabel["loan"] = loan.amount
                                     if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
                                     self.detectedDueDateByLabel["loan"] = loan.dueDate
-                                    AMLogging.always("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
+                                    AMLogging.log("ImportViewModel: rescue captured loan payment — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
                                 }
                                 self.staged = stagedImport
                             }
@@ -1207,7 +1207,7 @@ final class ImportViewModel: ObservableObject {
 
                 await MainActor.run {
                     let userMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    AMLogging.always("Importer error (user-facing): \(userMessage)", component: "ImportViewModel")
+                    AMLogging.log("Importer error (user-facing): \(userMessage)", component: "ImportViewModel")
                     self.errorMessage = userMessage
                     self.infoMessage = nil
                     self.staged = nil
@@ -1261,7 +1261,7 @@ final class ImportViewModel: ObservableObject {
         
         let providedInst = userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
-        AMLogging.always("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
+        AMLogging.log("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
 
         // Helper to normalize PDF/CSV labels to canonical strings
         func normalizedLabel(_ raw: String?) -> String? {
@@ -1284,13 +1284,13 @@ final class ImportViewModel: ObservableObject {
         // Group balances by source account label
         let includedBalances = staged.balances.filter { $0.include }
         if includedBalances.isEmpty {
-            AMLogging.always("Approve: no included balances in staged import", component: "ImportViewModel")
+            AMLogging.log("Approve: no included balances in staged import", component: "ImportViewModel")
         } else {
-            AMLogging.always("Approve: included balances detail (\(includedBalances.count)):", component: "ImportViewModel")
+            AMLogging.log("Approve: included balances detail (\(includedBalances.count)):", component: "ImportViewModel")
             for b in includedBalances {
                 let raw = b.sourceAccountLabel ?? "(nil)"
                 let norm = normalizedLabel(b.sourceAccountLabel) ?? "default"
-                AMLogging.always("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm)", component: "ImportViewModel")
+                AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm)", component: "ImportViewModel")
             }
         }
         var balanceGroups: [String: [StagedBalance]] = [:]
@@ -1315,8 +1315,8 @@ final class ImportViewModel: ObservableObject {
                 unlabeled.append(t)
             }
         }
-        AMLogging.always("Approve: label groups (tx) => \(labeledGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", ")), unlabeled: \(unlabeled.count)", component: "ImportViewModel")
-        AMLogging.always("Approve: label groups (balances) => \(balanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
+        AMLogging.log("Approve: label groups (tx) => \(labeledGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", ")), unlabeled: \(unlabeled.count)", component: "ImportViewModel")
+        AMLogging.log("Approve: label groups (balances) => \(balanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
 
         // Function to resolve or create an account for a given type/institution
         func resolveAccount(ofType resolvedType: Account.AccountType, institutionName: String?, preferExisting existing: Account?) -> Account {
@@ -1336,10 +1336,10 @@ final class ImportViewModel: ObservableObject {
                         // If institution provided differs, update or switch to a matching account
                         if let current = existing.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(inst) {
                             if let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
-                                AMLogging.always("Switching to existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                                AMLogging.log("Switching to existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                                 return found
                             } else {
-                                AMLogging.always("Creating new account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                                AMLogging.log("Creating new account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                                 let acct = Account(
                                     name: inst,
                                     type: resolvedType,
@@ -1361,7 +1361,7 @@ final class ImportViewModel: ObservableObject {
             }
             // No suitable existing: find by institution, else create
             if let inst = institutionName, let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
-                AMLogging.always("Reusing existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                AMLogging.log("Reusing existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                 return found
             } else {
                 let name = institutionName ?? ""
@@ -1371,7 +1371,7 @@ final class ImportViewModel: ObservableObject {
                     institutionName: institutionName,
                     currencyCode: "USD"
                 )
-                AMLogging.always("Creating new account with institution: \(institutionName ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                AMLogging.log("Creating new account with institution: \(institutionName ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                 context.insert(acct)
                 return acct
             }
@@ -1386,22 +1386,22 @@ final class ImportViewModel: ObservableObject {
             return try context.fetch(descriptor).first
         }() {
             let target = fetched
-            AMLogging.always("Selected account before resolution — name: \(target.name), type: \(target.type.rawValue), inst: \(target.institutionName ?? "(nil)")", component: "ImportViewModel")
+            AMLogging.log("Selected account before resolution — name: \(target.name), type: \(target.type.rawValue), inst: \(target.institutionName ?? "(nil)")", component: "ImportViewModel")
 
             // Apply user-selected account type override so it always carries through
             if target.type != self.newAccountType {
-                AMLogging.always("Applying user-selected account type override: \(target.type.rawValue) -> \(self.newAccountType.rawValue)", component: "ImportViewModel")
+                AMLogging.log("Applying user-selected account type override: \(target.type.rawValue) -> \(self.newAccountType.rawValue)", component: "ImportViewModel")
                 target.type = self.newAccountType
             }
 
             if !providedInst.isEmpty {
-                AMLogging.always("Applying user-provided institution to selected account: '\(providedInst)'", component: "ImportViewModel")
+                AMLogging.log("Applying user-provided institution to selected account: '\(providedInst)'", component: "ImportViewModel")
                 target.institutionName = providedInst
             } else if (target.institutionName == nil) || (target.institutionName?.isEmpty == true) {
-                AMLogging.always("Filling missing institution on selected account with: \(chosenInst ?? "(nil)")", component: "ImportViewModel")
+                AMLogging.log("Filling missing institution on selected account with: \(chosenInst ?? "(nil)")", component: "ImportViewModel")
                 if let chosenInst { target.institutionName = chosenInst }
             } else if let chosenInst, let current = target.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(chosenInst) {
-                AMLogging.always("Institution mismatch — selected: \(current), chosen: \(chosenInst).", component: "ImportViewModel")
+                AMLogging.log("Institution mismatch — selected: \(current), chosen: \(chosenInst).", component: "ImportViewModel")
                 // We'll allow per-label account resolution below to create/find matching accounts for other labels
             }
             selectedAccount = target
@@ -1420,10 +1420,10 @@ final class ImportViewModel: ObservableObject {
             }
         }()
 
-        AMLogging.always("Approve: importType=\(importType.rawValue), allowSplitByLabel=\(allowSplitByLabel)", component: "ImportViewModel")
+        AMLogging.log("Approve: importType=\(importType.rawValue), allowSplitByLabel=\(allowSplitByLabel)", component: "ImportViewModel")
         if !allowSplitByLabel && !includedBalances.isEmpty {
             let labels = includedBalances.map { normalizedLabel($0.sourceAccountLabel) ?? "default" }
-            AMLogging.always("Approve: non-split path will assign all balances to a single account. Staged balance labels: \(labels)", component: "ImportViewModel")
+            AMLogging.log("Approve: non-split path will assign all balances to a single account. Staged balance labels: \(labels)", component: "ImportViewModel")
         }
 
         // Filter out non-liability balances for liability imports (e.g., Chase statements listing checking/savings)
@@ -1438,9 +1438,9 @@ final class ImportViewModel: ObservableObject {
             let dropped = before - filtered.count
             if dropped > 0 {
                 let keptLabels = filtered.map { normalizedLabel($0.sourceAccountLabel) ?? "default" }
-                AMLogging.always("Approve: filtered non-liability balances for liability import — dropped \(dropped) of \(before). Kept labels: \(keptLabels)", component: "ImportViewModel")
+                AMLogging.log("Approve: filtered non-liability balances for liability import — dropped \(dropped) of \(before). Kept labels: \(keptLabels)", component: "ImportViewModel")
             } else {
-                AMLogging.always("Approve: no non-liability balances to filter for liability import", component: "ImportViewModel")
+                AMLogging.log("Approve: no non-liability balances to filter for liability import", component: "ImportViewModel")
             }
             effectiveIncludedBalances = filtered
             // Rebuild balance groups after filtering
@@ -1452,7 +1452,7 @@ final class ImportViewModel: ObservableObject {
                     effectiveBalanceGroups["default", default: []].append(b)
                 }
             }
-            AMLogging.always("Approve: effective label groups (balances) after filter => \(effectiveBalanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
+            AMLogging.log("Approve: effective label groups (balances) after filter => \(effectiveBalanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
         } else {
             // For non-liability imports, use original groups
             effectiveIncludedBalances = includedBalances
@@ -1463,7 +1463,7 @@ final class ImportViewModel: ObservableObject {
 
         if !allowSplitByLabel && !includedBalances.isEmpty {
             let labels = includedBalances.map { normalizedLabel($0.sourceAccountLabel) ?? "default" }
-            AMLogging.always("Approve: non-split path will assign all balances to a single account. Staged balance labels: \(labels)", component: "ImportViewModel")
+            AMLogging.log("Approve: non-split path will assign all balances to a single account. Staged balance labels: \(labels)", component: "ImportViewModel")
         }
 
         var accountsByLabel: [String: Account] = [:]
@@ -1471,7 +1471,7 @@ final class ImportViewModel: ObservableObject {
             // Force single-account path to avoid misclassification (e.g., credit card statement labeled as savings)
             let resolvedType = self.newAccountType
             let account = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: selectedAccount)
-            AMLogging.always("Using single account (no label split) — id: \(account.id), name: \(account.name), type: \(account.type.rawValue)", component: "ImportViewModel")
+            AMLogging.log("Using single account (no label split) — id: \(account.id), name: \(account.name), type: \(account.type.rawValue)", component: "ImportViewModel")
             self.selectedAccountID = account.id
             accountsByLabel["default"] = account
         } else if allLabels.isEmpty {
@@ -1479,7 +1479,7 @@ final class ImportViewModel: ObservableObject {
             let resolvedType = self.newAccountType
             let account = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: selectedAccount)
             AMLogging.log("Resolved account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), existing tx count: \(account.transactions.count)", component: "ImportViewModel")  // DEBUG LOG
-            AMLogging.always("Using account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)")", component: "ImportViewModel")
+            AMLogging.log("Using account — id: \(account.id), name: \(account.name), type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)")", component: "ImportViewModel")
             self.selectedAccountID = account.id
             accountsByLabel["default"] = account
         } else {
@@ -1491,8 +1491,8 @@ final class ImportViewModel: ObservableObject {
                 }()
                 let acct = resolveAccount(ofType: resolvedType, institutionName: chosenInst, preferExisting: preferExisting)
                 accountsByLabel[label] = acct
-                AMLogging.always("Label '\(label)' -> account id: \(acct.id), name: \(acct.name), type: \(acct.type.rawValue)", component: "ImportViewModel")
-                AMLogging.always("Group counts — label: \(label), tx: \(labeledGroups[label]?.count ?? 0), balances: \(effectiveBalanceGroups[label]?.count ?? 0)", component: "ImportViewModel")
+                AMLogging.log("Label '\(label)' -> account id: \(acct.id), name: \(acct.name), type: \(acct.type.rawValue)", component: "ImportViewModel")
+                AMLogging.log("Group counts — label: \(label), tx: \(labeledGroups[label]?.count ?? 0), balances: \(effectiveBalanceGroups[label]?.count ?? 0)", component: "ImportViewModel")
             }
             // Handle default label (no label present)
             if accountsByLabel.isEmpty, let firstLabel = allLabels.first {
@@ -1510,19 +1510,19 @@ final class ImportViewModel: ObservableObject {
             var terms = account.loanTerms ?? LoanTerms()
             if let typical, typical > 0, (terms.paymentAmount ?? 0) == 0 {
                 terms.paymentAmount = typical
-                AMLogging.always("Prefill (pre-insert): typical payment — amount: \(typical), typeKey: \(typeKey), account: \(account.name)", component: "ImportViewModel")
+                AMLogging.log("Prefill (pre-insert): typical payment — amount: \(typical), typeKey: \(typeKey), account: \(account.name)", component: "ImportViewModel")
             }
             if terms.paymentDayOfMonth == nil {
                 if let due = self.detectedDueDateByLabel[typeKey] {
                     let cal = Calendar(identifier: .gregorian)
                     let day = cal.component(.day, from: due)
                     terms.paymentDayOfMonth = day
-                    AMLogging.always("Prefill (pre-insert): due day — day: \(day) from detected dueDate: \(due) account: \(account.name)", component: "ImportViewModel")
+                    AMLogging.log("Prefill (pre-insert): due day — day: \(day) from detected dueDate: \(due) account: \(account.name)", component: "ImportViewModel")
                 } else if let asOf = effectiveIncludedBalances.first?.asOfDate {
                     let cal = Calendar(identifier: .gregorian)
                     let day = cal.component(.day, from: asOf)
                     terms.paymentDayOfMonth = day
-                    AMLogging.always("Prefill (pre-insert): due day — day: \(day) from asOf: \(asOf) account: \(account.name)", component: "ImportViewModel")
+                    AMLogging.log("Prefill (pre-insert): due day — day: \(day) from asOf: \(asOf) account: \(account.name)", component: "ImportViewModel")
                 }
             }
             account.loanTerms = terms
@@ -1578,9 +1578,9 @@ final class ImportViewModel: ObservableObject {
 
         for entry in groupsToProcess {
             guard let account = accountsByLabel[entry.label] else { continue }
-            AMLogging.always("Processing group '\(entry.label)' for account: \(account.name) — tx: \(entry.transactions.count)", component: "ImportViewModel")
+            AMLogging.log("Processing group '\(entry.label)' for account: \(account.name) — tx: \(entry.transactions.count)", component: "ImportViewModel")
             let shouldFlip = shouldFlipCreditCardAmounts(for: account, transactions: entry.transactions)
-            AMLogging.always("Credit card sign decision (data-driven) — flip: \(shouldFlip) for account: \(account.name)", component: "ImportViewModel")
+            AMLogging.log("Credit card sign decision (data-driven) — flip: \(shouldFlip) for account: \(account.name)", component: "ImportViewModel")
 
             // De-dupe set per account
             let existingHashes = try existingTransactionHashes(for: account, context: context)
@@ -1634,7 +1634,7 @@ final class ImportViewModel: ObservableObject {
             }
         }
 
-        AMLogging.always("Inserted transactions this batch: \(insertedTxCount) of included: \(includedTransactions.count), excluded: \(excludedCount)", component: "ImportViewModel")
+        AMLogging.log("Inserted transactions this batch: \(insertedTxCount) of included: \(includedTransactions.count), excluded: \(excludedCount)", component: "ImportViewModel")
 
         // Attempt to reconcile transfers across accounts for newly inserted transactions (±3 days)
         do {
@@ -1689,7 +1689,7 @@ final class ImportViewModel: ObservableObject {
                     )
                     context.insert(bs)
                     batch.balances.append(bs)
-                    AMLogging.always("Inserted brokerage equity snapshot — asOf: \(date), value: \(equity), account: \(firstAccountForAssets.name)", component: "ImportViewModel")
+                    AMLogging.log("Inserted brokerage equity snapshot — asOf: \(date), value: \(equity), account: \(firstAccountForAssets.name)", component: "ImportViewModel")
                 }
             }
         }
@@ -1703,7 +1703,7 @@ final class ImportViewModel: ObservableObject {
             guard let account = targetAccount else { continue }
             // Skip duplicate snapshot for the same account/date within this batch
             if batch.balances.contains(where: { $0.account?.id == account.id && $0.asOfDate == b.asOfDate }) {
-                AMLogging.always("Skipping duplicate balance for account: \(account.name) on \(b.asOfDate)", component: "ImportViewModel")
+                AMLogging.log("Skipping duplicate balance for account: \(account.name) on \(b.asOfDate)", component: "ImportViewModel")
                 continue
             }
             let rawBalance = b.balance
@@ -1729,7 +1729,7 @@ final class ImportViewModel: ObservableObject {
                 terms.apr = apr
                 terms.aprScale = b.interestRateScale
                 account.loanTerms = terms
-                AMLogging.always("Promoted APR to account terms — apr: \(apr) scale: \(String(describing: b.interestRateScale)) account: \(account.name)", component: "ImportViewModel")
+                AMLogging.log("Promoted APR to account terms — apr: \(apr) scale: \(String(describing: b.interestRateScale)) account: \(account.name)", component: "ImportViewModel")
             }
             // Prefill due day-of-month from snapshot date (for liabilities) if not set
             if account.type == .loan || account.type == .creditCard {
@@ -1738,14 +1738,14 @@ final class ImportViewModel: ObservableObject {
                     let cal = Calendar(identifier: .gregorian)
                     let day = cal.component(.day, from: b.asOfDate)
                     terms.paymentDayOfMonth = day
-                    AMLogging.always("Applied due day prefill — day: \(day) from asOf: \(b.asOfDate) account: \(account.name)", component: "ImportViewModel")
+                    AMLogging.log("Applied due day prefill — day: \(day) from asOf: \(b.asOfDate) account: \(account.name)", component: "ImportViewModel")
                     account.loanTerms = terms
                 }
             }
             context.insert(bs)
             batch.balances.append(bs)
             insertedBalancesCount += 1
-            AMLogging.always("Inserted balance — asOf: \(b.asOfDate), balance: \(coercedBalance), label: \(key), rawLabel: \(b.sourceAccountLabel ?? "(nil)"), allowSplitByLabel: \(allowSplitByLabel), account: \(account.name)", component: "ImportViewModel")
+            AMLogging.log("Inserted balance — asOf: \(b.asOfDate), balance: \(coercedBalance), label: \(key), rawLabel: \(b.sourceAccountLabel ?? "(nil)"), allowSplitByLabel: \(allowSplitByLabel), account: \(account.name)", component: "ImportViewModel")
         }
 
         AMLogging.log("Insert summary — tx: \(insertedTxCount), holdings: \(insertedHoldingsCount), balances: \(insertedBalancesCount)", component: "ImportViewModel")  // DEBUG LOG
@@ -1793,17 +1793,17 @@ final class ImportViewModel: ObservableObject {
             // Additional: per-account snapshot of values for debugging Net Worth grouping
             do {
                 let accounts = try context.fetch(FetchDescriptor<Account>())
-                AMLogging.always("Accounts snapshot (\(accounts.count)):", component: "ImportViewModel")
+                AMLogging.log("Accounts snapshot (\(accounts.count)):", component: "ImportViewModel")
                 for acct in accounts {
                     let latest = try latestBalance(for: acct, context: context)
                     let derived = acct.transactions.reduce(Decimal.zero) { $0 + $1.amount }
                     let value = latest ?? derived
-                    AMLogging.always("• \(acct.name) — type: \(acct.type.rawValue), inst: \(acct.institutionName ?? "(nil)"), value: \(value), tx: \(acct.transactions.count), balances: \(acct.balanceSnapshots.count)", component: "ImportViewModel")
+                    AMLogging.log("• \(acct.name) — type: \(acct.type.rawValue), inst: \(acct.institutionName ?? "(nil)"), value: \(value), tx: \(acct.transactions.count), balances: \(acct.balanceSnapshots.count)", component: "ImportViewModel")
                     let payAmt = acct.loanTerms?.paymentAmount
-                    AMLogging.always("  loanTerms — paymentAmount=\(String(describing: payAmt)) apr=\(String(describing: acct.loanTerms?.apr))", component: "ImportViewModel")
+                    AMLogging.log("  loanTerms — paymentAmount=\(String(describing: payAmt)) apr=\(String(describing: acct.loanTerms?.apr))", component: "ImportViewModel")
                 }
             } catch {
-                AMLogging.always("Accounts snapshot failed: \(error)", component: "ImportViewModel")
+                AMLogging.log("Accounts snapshot failed: \(error)", component: "ImportViewModel")
             }
 
             // Notify UI that transactions changed (helps tabs refresh if needed)
@@ -1984,7 +1984,7 @@ final class ImportViewModel: ObservableObject {
 
     // Best-effort account type inference from filename/headers and sample row content
     private func guessAccountType(from fileName: String, headers: [String], sampleRows: [[String]]) -> Account.AccountType? {
-        AMLogging.always("GuessAccountType: start — file: \(fileName), headers: \(headers)", component: "ImportViewModel")
+        AMLogging.log("GuessAccountType: start — file: \(fileName), headers: \(headers)", component: "ImportViewModel")
 
         let normalizedFile = fileName
             .lowercased()
@@ -2002,9 +2002,9 @@ final class ImportViewModel: ObservableObject {
         let hasBrokerageHeader = lowerHeaders.contains { h in
             brokerageHeaderSignals.contains { sig in h == sig || h.contains(sig) }
         }
-        AMLogging.always("GuessAccountType: hasBrokerageHeader=\(hasBrokerageHeader)", component: "ImportViewModel")
+        AMLogging.log("GuessAccountType: hasBrokerageHeader=\(hasBrokerageHeader)", component: "ImportViewModel")
         if hasBrokerageHeader {
-            AMLogging.always("GuessAccountType: returning .brokerage due to header", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .brokerage due to header", component: "ImportViewModel")
             return .brokerage
         }
 
@@ -2018,7 +2018,7 @@ final class ImportViewModel: ObservableObject {
             return nil
         }
         let descIdx = probableDescriptionIndex()
-        AMLogging.always("GuessAccountType: probable description index=\(String(describing: descIdx))", component: "ImportViewModel")
+        AMLogging.log("GuessAccountType: probable description index=\(String(describing: descIdx))", component: "ImportViewModel")
         let brokerageKeywords = [
             "buy", "bought", "sell", "sold", "dividend", "reinvest", "reinvestment", "interest", "cap gain", "capital gain",
             "distribution", "split", "spinoff", "spin-off", "option", "call", "put", "exercise", "assign", "assignment", "expiration",
@@ -2034,9 +2034,9 @@ final class ImportViewModel: ObservableObject {
                 if brokerageHits >= 2 { break }
             }
         }
-        AMLogging.always("GuessAccountType: brokerage keyword hits=\(brokerageHits)", component: "ImportViewModel")
+        AMLogging.log("GuessAccountType: brokerage keyword hits=\(brokerageHits)", component: "ImportViewModel")
         if brokerageHits >= 2 || (brokerageHits == 1 && sampleRows.count <= 5) {
-            AMLogging.always("GuessAccountType: returning .brokerage due to keyword hits", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .brokerage due to keyword hits", component: "ImportViewModel")
             return .brokerage
         }
 
@@ -2062,7 +2062,7 @@ final class ImportViewModel: ObservableObject {
             }
         }
         if hasCCHeader || ccHits >= 2 {
-            AMLogging.always("GuessAccountType: returning .creditCard due to credit card signals (headers=\(hasCCHeader), hits=\(ccHits))", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .creditCard due to credit card signals (headers=\(hasCCHeader), hits=\(ccHits))", component: "ImportViewModel")
             return .creditCard
         }
 
@@ -2090,27 +2090,27 @@ final class ImportViewModel: ObservableObject {
         }
 
         if hasLoanHeader || loanHits >= 2 {
-            AMLogging.always("GuessAccountType: returning .loan due to loan signals (headers=\(hasLoanHeader), hits=\(loanHits))", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .loan due to loan signals (headers=\(hasLoanHeader), hits=\(loanHits))", component: "ImportViewModel")
             return .loan
         }
 
         // 4) Filename-based hints (fallback only)
         if normalizedFile.contains("creditcard") || (normalizedFile.contains("credit") && normalizedFile.contains("card")) || normalizedFile.contains("cc") {
-            AMLogging.always("GuessAccountType: returning .creditCard due to filename heuristic", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .creditCard due to filename heuristic", component: "ImportViewModel")
             return .creditCard
         }
 
         if normalizedFile.contains("ira") || normalizedFile.contains("roth") || normalizedFile.contains("401k") || normalizedFile.contains("brokerage") || normalizedFile.contains("investment") || normalizedFile.contains("retirement") {
-            AMLogging.always("GuessAccountType: returning .brokerage due to filename heuristic", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: returning .brokerage due to filename heuristic", component: "ImportViewModel")
             return .brokerage
         }
 
         // 5) Fallback to user hint if nothing else matched
         if let hint = self.userSelectedDocHint {
-            AMLogging.always("GuessAccountType: falling back to user hint -> \(hint.rawValue)", component: "ImportViewModel")
+            AMLogging.log("GuessAccountType: falling back to user hint -> \(hint.rawValue)", component: "ImportViewModel")
             return hint
         }
-        AMLogging.always("GuessAccountType: no match — returning nil", component: "ImportViewModel")
+        AMLogging.log("GuessAccountType: no match — returning nil", component: "ImportViewModel")
         return nil
     }
 
@@ -2240,7 +2240,7 @@ final class ImportViewModel: ObservableObject {
             if let account = try? context.fetch(descriptor).first {
                 let isEmpty = account.transactions.isEmpty && account.holdingSnapshots.isEmpty && account.balanceSnapshots.isEmpty
                 if isEmpty {
-                    AMLogging.always("Deleting empty account after batch deletion — id: \(account.id), name: \(account.name)", component: "ImportViewModel")
+                    AMLogging.log("Deleting empty account after batch deletion — id: \(account.id), name: \(account.name)", component: "ImportViewModel")
                     context.delete(account)
                     deletedAccounts += 1
                 }

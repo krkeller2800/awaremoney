@@ -315,7 +315,7 @@ struct AccountDetailView: View {
                                 Label("Transactions", systemImage: "list.bullet")
                             }
                             .simultaneousGesture(TapGesture().onEnded {
-                                AMLogging.always("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
+                                AMLogging.log("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
                             })
                         }
                     }
@@ -327,19 +327,19 @@ struct AccountDetailView: View {
         }
         // If the account disappears (e.g., after batch deletion), dismiss this screen
         .onChange(of: fetchedAccounts.count) { _, newCount in
-            AMLogging.always("AccountDetailView fetchedAccounts count changed to \(newCount) for accountID=\(accountID)", component: "AccountDetailView")
+            AMLogging.log("AccountDetailView fetchedAccounts count changed to \(newCount) for accountID=\(accountID)", component: "AccountDetailView")
             if newCount == 0 { dismiss() }
         }
         .task(id: account?.id) {
-            AMLogging.always("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
+            AMLogging.log("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
             if let account = account { await recomputeAccountDerivedData(for: account) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            AMLogging.always("AccountDetailView received transactionsDidChange for accountID=\(accountID)", component: "AccountDetailView")
+            AMLogging.log("AccountDetailView received transactionsDidChange for accountID=\(accountID)", component: "AccountDetailView")
             Task { if let account = account { await recomputeAccountDerivedData(for: account) } }
         }
         .onAppear {
-            AMLogging.always("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
+            AMLogging.log("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
         }
     }
 
@@ -391,7 +391,7 @@ struct AccountDetailView: View {
 
         // Capture ID and last snapshot data on the main actor
         let id = await MainActor.run { account.id }
-        AMLogging.always("recompute start id=\(id)", component: "AccountDetailView")
+        AMLogging.log("recompute start id=\(id)", component: "AccountDetailView")
         let snapshotData: (Decimal?, Date?) = await MainActor.run { () -> (Decimal?, Date?) in
             let last = self.lastBalanceSnapshot(for: account)
             return (last?.balance, last?.asOfDate)
@@ -402,14 +402,14 @@ struct AccountDetailView: View {
         do {
             // Earliest transaction date using an ascending sort and fetch limit 1
             let earliest = try await fetchEarliestTransactionDate(in: bg, accountID: id)
-            AMLogging.always("recompute earliest=\(String(describing: earliest)) id=\(id)", component: "AccountDetailView")
+            AMLogging.log("recompute earliest=\(String(describing: earliest)) id=\(id)", component: "AccountDetailView")
             await MainActor.run {
                 self.cachedEarliestTransactionDate = earliest
             }
 
             // Derived balance: if we have a base snapshot, sum deltas since; otherwise sum all
             let delta = try await sumTransactions(in: bg, accountID: id, since: sinceDate)
-            AMLogging.always("recompute delta=\(delta) base=\(String(describing: baseBalance)) id=\(id)", component: "AccountDetailView")
+            AMLogging.log("recompute delta=\(delta) base=\(String(describing: baseBalance)) id=\(id)", component: "AccountDetailView")
             await MainActor.run {
                 if let base = baseBalance {
                     self.cachedDerivedBalance = base + delta
@@ -419,7 +419,7 @@ struct AccountDetailView: View {
             }
 
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
-            AMLogging.always("recompute done id=\(id) in \(ms)ms", component: "AccountDetailView")
+            AMLogging.log("recompute done id=\(id) in \(ms)ms", component: "AccountDetailView")
         } catch {
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             AMLogging.error("recompute failed id=\(id) after \(ms)ms: \(error.localizedDescription)", component: "AccountDetailView")

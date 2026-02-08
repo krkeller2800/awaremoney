@@ -69,7 +69,7 @@ final class CSVColumnMapping {
             ? headers.map { $0.lowercased() }
             : headers
 
-        for (field, mappedHeader) in mappings {
+        for (_, mappedHeader) in mappings {
             let comparisonTarget = parsingOptions.ignoreCase
                 ? mappedHeader.lowercased()
                 : mappedHeader

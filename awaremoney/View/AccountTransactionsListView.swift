@@ -11,7 +11,7 @@ struct AccountTransactionsListView: View {
 
     init(accountID: UUID) {
         self.accountID = accountID
-        AMLogging.always("AccountTransactionsListView init accountID=\(accountID)", component: "AccountTransactionsListView")
+        AMLogging.log("AccountTransactionsListView init accountID=\(accountID)", component: "AccountTransactionsListView")
     }
 
     // Convenience for existing call sites that pass an Account
@@ -51,23 +51,23 @@ struct AccountTransactionsListView: View {
             }
         }
         .onAppear {
-            AMLogging.always("AccountTransactionsListView appear accountID=\(accountID)", component: "AccountTransactionsListView")
+            AMLogging.log("AccountTransactionsListView appear accountID=\(accountID)", component: "AccountTransactionsListView")
             DispatchQueue.main.async {
-                AMLogging.always("AccountTransactionsListView post-appear tick (0ms) accountID=\(accountID)", component: "AccountTransactionsListView")
+                AMLogging.log("AccountTransactionsListView post-appear tick (0ms) accountID=\(accountID)", component: "AccountTransactionsListView")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                AMLogging.always("AccountTransactionsListView post-appear tick (100ms) accountID=\(accountID)", component: "AccountTransactionsListView")
+                AMLogging.log("AccountTransactionsListView post-appear tick (100ms) accountID=\(accountID)", component: "AccountTransactionsListView")
             }
         }
         .navigationDestination(for: UUID.self) { txID in
             EditTransactionContainer(transactionID: txID)
         }
         .task {
-            AMLogging.always("AccountTransactionsListView task loadRows accountID=\(accountID)", component: "AccountTransactionsListView")
+            AMLogging.log("AccountTransactionsListView task loadRows accountID=\(accountID)", component: "AccountTransactionsListView")
             await loadRows()
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            AMLogging.always("AccountTransactionsListView received transactionsDidChange accountID=\(accountID)", component: "AccountTransactionsListView")
+            AMLogging.log("AccountTransactionsListView received transactionsDidChange accountID=\(accountID)", component: "AccountTransactionsListView")
             Task { await loadRows() }
         }
     }
@@ -93,7 +93,7 @@ struct AccountTransactionsListView: View {
             let fetched = try bg.fetch(descriptor)
             let mapped = fetched.map { TxRow(id: $0.id, payee: $0.payee, date: $0.datePosted, amount: $0.amount) }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
-            AMLogging.always("loadRows fetched=\(fetched.count) mapped=\(mapped.count) in \(ms)ms for accountID=\(id)", component: "AccountTransactionsListView")
+            AMLogging.log("loadRows fetched=\(fetched.count) mapped=\(mapped.count) in \(ms)ms for accountID=\(id)", component: "AccountTransactionsListView")
             await MainActor.run { self.rows = mapped }
         } catch {
             let ms = Int(Date().timeIntervalSince(t0) * 1000)

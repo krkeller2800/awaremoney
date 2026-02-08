@@ -197,13 +197,13 @@ struct NetWorthView: View {
         do {
             // Fetch all accounts
             let accounts = try modelContext.fetch(FetchDescriptor<Account>())
-            AMLogging.always("NetWorth load — fetched accounts: \(accounts.count)", component: "NetWorthView")
+            AMLogging.log("NetWorth load — fetched accounts: \(accounts.count)", component: "NetWorthView")
             var perAccount: [AccountValue] = []
             var total: Decimal = 0
 
             for account in accounts {
                 let value: Decimal = try anchoredValue(for: account)
-                AMLogging.always("Account \(account.name) — type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)"), value: \(value), tx: \(account.transactions.count)", component: "NetWorthView")
+                AMLogging.log("Account \(account.name) — type: \(account.type.rawValue), inst: \(account.institutionName ?? "(nil)"), value: \(value), tx: \(account.transactions.count)", component: "NetWorthView")
                 perAccount.append(AccountValue(accountID: account.id, displayName: account.name, type: account.type, institutionName: account.institutionName, value: value))
                 total += value
             }

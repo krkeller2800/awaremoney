@@ -159,7 +159,7 @@ struct ReviewImportView: View {
                         // Use 'as of today' as a neutral default; users can adjust later
                         let sb = StagedBalance(asOfDate: Date(), balance: dec)
                         vm.staged?.balances.append(sb)
-                        AMLogging.always("ReviewImportView: User added ending balance fallback — value=\(dec)", component: "ReviewImportView")
+                        AMLogging.log("ReviewImportView: User added ending balance fallback — value=\(dec)", component: "ReviewImportView")
                     }
                 }
             }
@@ -288,7 +288,7 @@ struct ReviewImportView: View {
             }
         }
         .onChange(of: selectedAccountId) { 
-            AMLogging.always("ReviewImportView: selectedAccountId changed -> \(String(describing: selectedAccountId))", component: "ReviewImportView")
+            AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: selectedAccountId))", component: "ReviewImportView")
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
     }
@@ -318,10 +318,10 @@ struct ReviewImportView: View {
                     // Diagnostics: log institution state at approve time
                     let guess = vm.guessInstitutionName(from: staged.sourceFileName)
                     let selected = selectedAccountId.flatMap { id in accounts.first(where: { $0.id == id }) }
-                    AMLogging.always("ReviewImportView: Approve tapped — selectedAccount=\(selected?.name ?? "nil"), selectedInst=\(selected?.institutionName ?? "nil"), vm.userInstitutionName='\(vm.userInstitutionName)', filenameGuess=\(guess ?? "nil")", component: "ReviewImportView")
+                    AMLogging.log("ReviewImportView: Approve tapped — selectedAccount=\(selected?.name ?? "nil"), selectedInst=\(selected?.institutionName ?? "nil"), vm.userInstitutionName='\(vm.userInstitutionName)', filenameGuess=\(guess ?? "nil")", component: "ReviewImportView")
                     // NOTE: Typical payment entered here is currently not persisted; expose a VM API to pass it if needed.
                     vm.applyLiabilityLabelSafetyNetIfNeeded()
-                    AMLogging.always("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
+                    AMLogging.log("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
                     do { try vm.approveAndSave(context: modelContext) }
                     catch { vm.errorMessage = error.localizedDescription }
                 } label: {
@@ -357,17 +357,17 @@ struct ReviewImportView: View {
     private func handleAccountSelectionChange(_ newValue: UUID?) {
         selectedAccountId = newValue
         vm.selectedAccountID = newValue
-        AMLogging.always("ReviewImportView: Account selection changed -> \(String(describing: newValue))", component: "ReviewImportView")
+        AMLogging.log("ReviewImportView: Account selection changed -> \(String(describing: newValue))", component: "ReviewImportView")
         if let id = newValue {
             vm.newAccountName = ""
             if let acct = accounts.first(where: { $0.id == id }) {
                 let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
                 if current.isEmpty, let inst = acct.institutionName, !inst.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     vm.userInstitutionName = inst
-                    AMLogging.always("ReviewImportView: Prefilled institution from selected account — category=selectedAccount value=\(inst)", component: "ReviewImportView")
+                    AMLogging.log("ReviewImportView: Prefilled institution from selected account — category=selectedAccount value=\(inst)", component: "ReviewImportView")
                 } else {
                     let reason = current.isEmpty ? "noAccountInstitution" : "alreadySet"
-                    AMLogging.always("ReviewImportView: Did not prefill from selected account — category=none reason=\(reason)", component: "ReviewImportView")
+                    AMLogging.log("ReviewImportView: Did not prefill from selected account — category=none reason=\(reason)", component: "ReviewImportView")
                 }
             }
         } else {
@@ -375,7 +375,7 @@ struct ReviewImportView: View {
             let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
             if current.isEmpty, let inst = parsed, !inst.isEmpty {
                 vm.userInstitutionName = inst
-                AMLogging.always("ReviewImportView: Prefilled institution from parser on Create New — category=parser value=\(inst)", component: "ReviewImportView")
+                AMLogging.log("ReviewImportView: Prefilled institution from parser on Create New — category=parser value=\(inst)", component: "ReviewImportView")
             }
         }
     }
@@ -409,7 +409,7 @@ struct ReviewImportView: View {
     }
 
     private func onAccountSectionAppear() {
-        AMLogging.always("ReviewImportView.onAppear — file=\(staged.sourceFileName), initial userInstitutionName='\(vm.userInstitutionName)'", component: "ReviewImportView")
+        AMLogging.log("ReviewImportView.onAppear — file=\(staged.sourceFileName), initial userInstitutionName='\(vm.userInstitutionName)'", component: "ReviewImportView")
         selectedAccountId = nil
         vm.selectedAccountID = nil
         if let suggested = staged.suggestedAccountType {
@@ -417,14 +417,14 @@ struct ReviewImportView: View {
         }
         let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        AMLogging.always("ReviewImportView.onAppear — parsedInstitution=\(parsed ?? "nil") currentEmpty=\(current.isEmpty)", component: "ReviewImportView")
+        AMLogging.log("ReviewImportView.onAppear — parsedInstitution=\(parsed ?? "nil") currentEmpty=\(current.isEmpty)", component: "ReviewImportView")
         if current.isEmpty, let inst = parsed, !inst.isEmpty {
             vm.userInstitutionName = inst
-            AMLogging.always("ReviewImportView: Prefilled institution from parser — category=parser value=\(inst)", component: "ReviewImportView")
+            AMLogging.log("ReviewImportView: Prefilled institution from parser — category=parser value=\(inst)", component: "ReviewImportView")
         } else if current.isEmpty {
-            AMLogging.always("ReviewImportView: No prefill — category=none reason=noParsedInstitution", component: "ReviewImportView")
+            AMLogging.log("ReviewImportView: No prefill — category=none reason=noParsedInstitution", component: "ReviewImportView")
         } else {
-            AMLogging.always("ReviewImportView: No prefill — category=none reason=alreadySet", component: "ReviewImportView")
+            AMLogging.log("ReviewImportView: No prefill — category=none reason=alreadySet", component: "ReviewImportView")
         }
         if typicalPaymentInput.isEmpty {
             if vm.newAccountType == .loan, let hint = vm.typicalPaymentHint(for: .loan) {

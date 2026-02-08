@@ -143,12 +143,12 @@ struct ImportFlowView: View {
     private func autoApplyMappingIfPossible(headers: [String], rows: [[String]]) {
         do {
             let saved = try modelContext.fetch(FetchDescriptor<CSVColumnMapping>())
-            AMLogging.always("ImportFlowView: autoApplyMapping — savedMappings=\(saved.count), headers=\(headers), headerSet=\(Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }))", component: "Import")
+            AMLogging.log("ImportFlowView: autoApplyMapping — savedMappings=\(saved.count), headers=\(headers), headerSet=\(Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }))", component: "Import")
             let headerSet = Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
             for map in saved {
                 let values = map.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 let isSubset = Set(values).isSubset(of: headerSet)
-                AMLogging.always("ImportFlowView: autoApplyMapping — candidate='" + (map.label ?? "(unnamed)") + "' values=\(values) subset=\(isSubset)", component: "Import")
+                AMLogging.log("ImportFlowView: autoApplyMapping — candidate='" + (map.label ?? "(unnamed)") + "' values=\(values) subset=\(isSubset)", component: "Import")
             }
             if let mapping = saved.first(where: { map in
                 let values = map.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -159,12 +159,12 @@ struct ImportFlowView: View {
                     let staged = try parser.parse(rows: rows, headers: headers)
                     vm.staged = staged
                     vm.mappingSession = nil
-                    AMLogging.always("ImportFlowView: auto-applied saved CSV mapping '" + (mapping.label ?? "(unnamed)") + "'", component: "Import")
+                    AMLogging.log("ImportFlowView: auto-applied saved CSV mapping '" + (mapping.label ?? "(unnamed)") + "'", component: "Import")
                 } catch {
                     AMLogging.error("ImportFlowView: auto-apply mapping failed: \(error.localizedDescription)", component: "Import")
                 }
             } else {
-                AMLogging.always("ImportFlowView: autoApplyMapping — no matching saved mapping; presenting editor", component: "Import")
+                AMLogging.log("ImportFlowView: autoApplyMapping — no matching saved mapping; presenting editor", component: "Import")
             }
         } catch {
             AMLogging.error("ImportFlowView: fetch saved mappings failed: \(error.localizedDescription)", component: "Import")
@@ -267,22 +267,22 @@ struct ImportFlowView: View {
                     mapping: CSVColumnMapping(label: "New Mapping", mappings: Self.prefillMappings(from: session.headers, sampleRows: session.sampleRows)),
                     headers: session.headers,
                     onSave: { mapping in
-                        AMLogging.always("ImportFlowView: CSVMappingEditorView.onSave — label='" + (mapping.label ?? "(unnamed)") + "' mappings=\(mapping.mappings)", component: "Import")
-                        AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+                        AMLogging.log("ImportFlowView: CSVMappingEditorView.onSave — label='" + (mapping.label ?? "(unnamed)") + "' mappings=\(mapping.mappings)", component: "Import")
+                        AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
                         // Persist the mapping
                         modelContext.insert(mapping)
                         do {
                             try modelContext.save()
-                            AMLogging.always("ImportFlowView: save succeeded — mapping persistentID=\(String(describing: mapping.persistentModelID))", component: "Import")
+                            AMLogging.log("ImportFlowView: save succeeded — mapping persistentID=\(String(describing: mapping.persistentModelID))", component: "Import")
                         } catch {
                             AMLogging.error("ImportFlowView: failed to save mapping — \(error.localizedDescription)", component: "Import")
                         }
                         do {
                             let all = try modelContext.fetch(FetchDescriptor<CSVColumnMapping>())
-                            AMLogging.always("ImportFlowView: after save — total saved mappings=\(all.count)", component: "Import")
+                            AMLogging.log("ImportFlowView: after save — total saved mappings=\(all.count)", component: "Import")
                             for m in all {
                                 let vals = m.mappings.values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                                AMLogging.always("ImportFlowView: mapping catalog — label='" + (m.label ?? "(unnamed)") + "' values=\(vals)", component: "Import")
+                                AMLogging.log("ImportFlowView: mapping catalog — label='" + (m.label ?? "(unnamed)") + "' values=\(vals)", component: "Import")
                             }
                         } catch {
                             AMLogging.error("ImportFlowView: fetch after save failed — \(error.localizedDescription)", component: "Import")
@@ -306,12 +306,27 @@ struct ImportFlowView: View {
                     autoSaveWhenReady: false
                 )
                 .onAppear {
-                    AMLogging.always("ImportFlowView: CSVMappingEditorView appearing — staged=\(vm.staged != nil), mappingSession=\(vm.mappingSession != nil)", component: "Import")
+                    AMLogging.log("ImportFlowView: CSVMappingEditorView appearing — staged=\(vm.staged != nil), mappingSession=\(vm.mappingSession != nil)", component: "Import")
                 }
             }
         } else {
             EmptyView()
         }
+    }
+
+    // Proper binding for sheet presentation so it can be dismissed cleanly
+    private var isSheetPresentedBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { vm.staged != nil || vm.mappingSession != nil },
+            set: { presented in
+                if !presented {
+                    // When the sheet is dismissed (swipe down or programmatically),
+                    // clear both states to avoid falling back to another screen.
+                    vm.staged = nil
+                    vm.mappingSession = nil
+                }
+            }
+        )
     }
 
     private var phoneBody: some View {
@@ -328,7 +343,7 @@ struct ImportFlowView: View {
                 hintBar
             }
             .navigationTitle("Import")
-            .onAppear { AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
+            .onAppear { AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
             .task { await loadBatches() }
             .refreshable { await loadBatches() }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
@@ -338,23 +353,25 @@ struct ImportFlowView: View {
                 Task { await loadBatches() }
             }
             .onChange(of: pickerKind) {
-                AMLogging.always("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
+                AMLogging.log("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
             }
             .onReceive(vm.$staged) { staged in
                 if let staged {
-                    AMLogging.always("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
                 } else {
-                    AMLogging.always("ImportFlowView: staged import cleared", component: "Import")
+                    AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
+                    // Ensure mapping session is also cleared so the sheet dismisses
+                    vm.mappingSession = nil
                     suppressNextAutoNavigation = true
                 }
             }
             .onReceive(vm.$mappingSession) { session in
                 if let session {
-                    AMLogging.always("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
-                    AMLogging.always("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
                     autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
                 } else {
-                    AMLogging.always("ImportFlowView: mapping session cleared", component: "Import")
+                    AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
                 }
             }
             .fileImporter(
@@ -365,14 +382,14 @@ struct ImportFlowView: View {
                 switch result {
                 case .success(let urls):
                     if let url = urls.first {
-                        AMLogging.always("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
+                        AMLogging.log("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
                         vm.handlePickedURL(url)
                     }
                 case .failure:
                     break
                 }
             }
-            .sheet(isPresented: .constant(vm.staged != nil || vm.mappingSession != nil)) {
+            .sheet(isPresented: isSheetPresentedBinding) {
                 sheetContent()
             }
             .toolbar {
@@ -381,32 +398,32 @@ struct ImportFlowView: View {
                         Button("Loan Statement") {
                             pickerKind = .pdf
                             vm.userSelectedDocHint = .loan
-                            AMLogging.always("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Bank Statement") {
                             pickerKind = .pdf
                             vm.userSelectedDocHint = .checking
-                            AMLogging.always("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Brokerage Statement") {
                             pickerKind = .pdf
                             vm.userSelectedDocHint = .brokerage
-                            AMLogging.always("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Credit Card Statement") {
                             pickerKind = .pdf
                             vm.userSelectedDocHint = .creditCard
                             vm.newAccountType = .creditCard
-                            AMLogging.always("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Divider()
                         Button("User-defined…") {
                             vm.startManualImport(kind: .creditCard)
-                            AMLogging.always("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
+                            AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
                         }
                     }
                 }
@@ -415,25 +432,25 @@ struct ImportFlowView: View {
                         Button("Loan CSV") {
                             pickerKind = .csv
                             vm.userSelectedDocHint = .loan
-                            AMLogging.always("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Bank CSV") {
                             pickerKind = .csv
                             vm.userSelectedDocHint = .checking
-                            AMLogging.always("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Brokerage CSV") {
                             pickerKind = .csv
                             vm.userSelectedDocHint = .brokerage
-                            AMLogging.always("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
                             isFileImporterPresented = true
                         }
                         Button("Credit Card CSV") {
                             pickerKind = .csv
                             vm.userSelectedDocHint = .creditCard
-                            AMLogging.always("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                            AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                             isFileImporterPresented = true
                         }
                     }
@@ -474,32 +491,32 @@ struct ImportFlowView: View {
                             Button("Loan Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .loan
-                                AMLogging.always("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Bank Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .checking
-                                AMLogging.always("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Brokerage Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .brokerage
-                                AMLogging.always("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Credit Card Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .creditCard
                                 vm.newAccountType = .creditCard
-                                AMLogging.always("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Divider()
                             Button("User-defined…") {
                                 vm.startManualImport(kind: .creditCard)
-                                AMLogging.always("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
+                                AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
                             }
                         }
                     }
@@ -508,25 +525,25 @@ struct ImportFlowView: View {
                             Button("Loan CSV") {
                                 pickerKind = .csv
                                 vm.userSelectedDocHint = .loan
-                                AMLogging.always("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Bank CSV") {
                                 pickerKind = .csv
                                 vm.userSelectedDocHint = .checking
-                                AMLogging.always("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Brokerage CSV") {
                                 pickerKind = .csv
                                 vm.userSelectedDocHint = .brokerage
-                                AMLogging.always("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Credit Card CSV") {
                                 pickerKind = .csv
                                 vm.userSelectedDocHint = .creditCard
-                                AMLogging.always("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                 isFileImporterPresented = true
                             }
                         }
@@ -545,7 +562,7 @@ struct ImportFlowView: View {
                             .environment(\.modelContext, modelContext)
                             .id(batch.persistentModelID)
                             .onAppear {
-                                AMLogging.always("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "Import")
+                                AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "Import")
                             }
                     } else {
                         ContentUnavailableView(
@@ -560,7 +577,7 @@ struct ImportFlowView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         // Attach shared modifiers to the outer container so behavior remains the same
-        .onAppear { AMLogging.always("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
+        .onAppear { AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
             Task { await loadBatches() }
         }
@@ -568,23 +585,25 @@ struct ImportFlowView: View {
             Task { await loadBatches() }
         }
         .onChange(of: pickerKind) {
-            AMLogging.always("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
+            AMLogging.log("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
         }
         .onReceive(vm.$staged) { staged in
             if let staged {
-                AMLogging.always("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
             } else {
-                AMLogging.always("ImportFlowView: staged import cleared", component: "Import")
+                AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
+                // Ensure mapping session is also cleared so the sheet dismisses
+                vm.mappingSession = nil
                 suppressNextAutoNavigation = true
             }
         }
         .onReceive(vm.$mappingSession) { session in
             if let session {
-                AMLogging.always("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
-                AMLogging.always("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
+                AMLogging.log("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
+                AMLogging.log("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
                 autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
             } else {
-                AMLogging.always("ImportFlowView: mapping session cleared", component: "Import")
+                AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
             }
         }
         .onChange(of: batches) {
@@ -607,9 +626,9 @@ struct ImportFlowView: View {
         .onChange(of: selectedBatchID) {
             if let pid = selectedBatchID {
                 let resolved = batches.first(where: { $0.persistentModelID == pid })
-                AMLogging.always("ImportFlowView: selectedBatchID changed pid=\(pid) resolved=\(resolved != nil ? "yes" : "no")", component: "Import")
+                AMLogging.log("ImportFlowView: selectedBatchID changed pid=\(pid) resolved=\(resolved != nil ? "yes" : "no")", component: "Import")
             } else {
-                AMLogging.always("ImportFlowView: selectedBatchID cleared", component: "Import")
+                AMLogging.log("ImportFlowView: selectedBatchID cleared", component: "Import")
             }
         }
         .fileImporter(
@@ -620,14 +639,14 @@ struct ImportFlowView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    AMLogging.always("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
+                    AMLogging.log("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
                     vm.handlePickedURL(url)
                 }
             case .failure:
                 break
             }
         }
-        .sheet(isPresented: .constant(vm.staged != nil || vm.mappingSession != nil)) {
+        .sheet(isPresented: isSheetPresentedBinding) {
             sheetContent()
         }
         .task { await loadBatches() }
@@ -659,7 +678,7 @@ struct ImportFlowView: View {
                 let summary = fetched.map { batch in
                     "[label=\(batch.label), id=\(batch.id), pid=\(batch.persistentModelID)]"
                 }.joined(separator: ", ")
-                AMLogging.always("ImportFlowView: loaded batches count=\(fetched.count) details=\(summary)", component: "Import")
+                AMLogging.log("ImportFlowView: loaded batches count=\(fetched.count) details=\(summary)", component: "Import")
 
                 // On phone, if a new non-empty batch was added and we're not in a sheet, navigate to it
                 if !isPad && vm.staged == nil && vm.mappingSession == nil && !isInitialLoad && !self.suppressNextAutoNavigation {
@@ -668,7 +687,7 @@ struct ImportFlowView: View {
                         .sorted { $0.createdAt > $1.createdAt }
                     if let target = newNonEmpty.first {
                         self.phoneRoute = BatchRoute(id: target.id)
-                        AMLogging.always("ImportFlowView: auto-navigating to new non-empty batch id=\(target.id)", component: "Import")
+                        AMLogging.log("ImportFlowView: auto-navigating to new non-empty batch id=\(target.id)", component: "Import")
                     }
                 }
                 self.suppressNextAutoNavigation = false

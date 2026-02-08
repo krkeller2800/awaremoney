@@ -1,11 +1,15 @@
 import Foundation
 import OSLog
 
+extension Notification.Name {
+    static let loggingCategoriesDidChange = Notification.Name("AMLoggingCategoriesDidChange")
+}
+
 /// Unified logging for AwareMoney built on top of Apple's Unified Logging (OSLog/Logger).
 ///
 /// Usage:
 ///   - AMLogging.log("debug message", component: "ImportViewModel")   // gated by AMLogConfig.verbose
-///   - AMLogging.always("important message", component: "Importer")    // always-on notice level
+///   - AMLogging.log("important message", component: "Importer")    // always-on notice level
 ///   - AMLogging.error("error message", component: "Importer")         // error level
 ///
 /// You can toggle verbose debug logs at runtime by setting UserDefaults key `"verbose_logging"` to true.
@@ -87,6 +91,33 @@ enum AMLogConfig {
     static var subsystem: String {
         Bundle.main.bundleIdentifier ?? "com.awaremoney.app"
     }
+    
+    // MARK: - Known categories discovery
+    private static let knownCategoriesKey = "am_known_logging_categories"
+
+    /// Returns the list of known logging categories discovered at runtime.
+    static var knownCategories: [String] {
+        (UserDefaults.standard.array(forKey: knownCategoriesKey) as? [String]) ?? []
+    }
+
+    /// Records a category name into the known set; posts a notification if the set changes.
+    static func recordCategory(_ category: String) {
+        let trimmed = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var set = Set(knownCategories)
+        let (inserted, _) = set.insert(trimmed)
+        if inserted {
+            let arr = Array(set).sorted()
+            UserDefaults.standard.set(arr, forKey: knownCategoriesKey)
+            NotificationCenter.default.post(name: .loggingCategoriesDidChange, object: nil)
+        }
+    }
+
+    /// Clears the discovered categories list.
+    static func resetKnownCategories() {
+        UserDefaults.standard.removeObject(forKey: knownCategoriesKey)
+        NotificationCenter.default.post(name: .loggingCategoriesDidChange, object: nil)
+    }
 }
 
 enum AMLogging {
@@ -98,6 +129,7 @@ enum AMLogging {
         } else {
             category = "General"
         }
+        AMLogConfig.recordCategory(category)
         return Logger(subsystem: AMLogConfig.subsystem, category: category)
     }
 

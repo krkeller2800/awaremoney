@@ -19,7 +19,7 @@ struct PDFBankTransactionsParser: StatementParser {
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {
         let map = headerMap(headers)
-        AMLogging.always("Begin parse — rows: \(rows.count), headers: \(headers), headerMap: \(map)", component: LOG_COMPONENT)
+        AMLogging.log("Begin parse — rows: \(rows.count), headers: \(headers), headerMap: \(map)", component: LOG_COMPONENT)
         var txs: [StagedTransaction] = []
 
         // Parse all rows into a lightweight struct for optional balance-delta sign inference
@@ -40,13 +40,13 @@ struct PDFBankTransactionsParser: StatementParser {
 
         // First pass: parse as absolute amounts; keep optional running balance
         for (rowIndex, row) in rows.enumerated() {
-            AMLogging.always("Row \(rowIndex) raw: \(row)", component: LOG_COMPONENT)
+            AMLogging.log("Row \(rowIndex) raw: \(row)", component: LOG_COMPONENT)
             guard let dateStr = value(row, map, key: "date") else {
-                AMLogging.always("Row \(rowIndex) skipped — missing date cell", component: LOG_COMPONENT)
+                AMLogging.log("Row \(rowIndex) skipped — missing date cell", component: LOG_COMPONENT)
                 continue
             }
             guard let date = parseDate(dateStr) else {
-                AMLogging.always("Row \(rowIndex) skipped — date parse failed: \(dateStr)", component: LOG_COMPONENT)
+                AMLogging.log("Row \(rowIndex) skipped — date parse failed: \(dateStr)", component: LOG_COMPONENT)
                 continue
             }
             let descRaw = value(row, map, key: "description")
@@ -54,16 +54,16 @@ struct PDFBankTransactionsParser: StatementParser {
 
             // Skip section/page headers and totals that sometimes get captured as rows
             if isHeaderOrTotal(descRaw ?? "") || isHeaderOrTotal(rowForHeuristics) {
-                AMLogging.always("Row \(rowIndex) skipped — header/total detected. desc=\(descRaw ?? "<nil>"), row=\(rowForHeuristics)", component: LOG_COMPONENT)
+                AMLogging.log("Row \(rowIndex) skipped — header/total detected. desc=\(descRaw ?? "<nil>"), row=\(rowForHeuristics)", component: LOG_COMPONENT)
                 continue
             }
 
             guard let amountStr = value(row, map, key: "amount") else {
-                AMLogging.always("Row \(rowIndex) skipped — missing amount cell", component: LOG_COMPONENT)
+                AMLogging.log("Row \(rowIndex) skipped — missing amount cell", component: LOG_COMPONENT)
                 continue
             }
             guard let amountVal = Decimal(string: sanitize(amountStr)) else {
-                AMLogging.always("Row \(rowIndex) skipped — amount parse failed: \(amountStr)", component: LOG_COMPONENT)
+                AMLogging.log("Row \(rowIndex) skipped — amount parse failed: \(amountStr)", component: LOG_COMPONENT)
                 continue
             }
             let balStr = value(row, map, key: "balance")
@@ -72,10 +72,10 @@ struct PDFBankTransactionsParser: StatementParser {
             let accountLabel: String? = value(row, map, key: "account")
 
             items.append(RowItem(date: date, desc: desc, amount: amountVal, balance: balance, account: accountLabel))
-            AMLogging.always("Row \(rowIndex) included — date=\(dateStr), desc=\(desc), amount=\(amountVal), balance=\(balance?.description ?? "nil"), account=\(accountLabel ?? "(nil)")", component: LOG_COMPONENT)
+            AMLogging.log("Row \(rowIndex) included — date=\(dateStr), desc=\(desc), amount=\(amountVal), balance=\(balance?.description ?? "nil"), account=\(accountLabel ?? "(nil)")", component: LOG_COMPONENT)
         }
 
-        AMLogging.always("Parsed items count: \(items.count)", component: LOG_COMPONENT)
+        AMLogging.log("Parsed items count: \(items.count)", component: LOG_COMPONENT)
 
         // Determine a suggested account type from account labels in the PDF
         let accountLabels: Set<String> = Set(items.compactMap { $0.account?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
@@ -88,7 +88,7 @@ struct PDFBankTransactionsParser: StatementParser {
         // Optional: infer sign using balance deltas if balances are present on many rows
         func inferSigns(using items: [RowItem]) -> [Decimal] {
             guard items.count > 0 else { return [] }
-            AMLogging.always("inferSigns — items: \(items.count)", component: LOG_COMPONENT)
+            AMLogging.log("inferSigns — items: \(items.count)", component: LOG_COMPONENT)
             var signed: [Decimal] = Array(repeating: 0, count: items.count)
 
             // If we have at least two balances, attempt delta-based sign inference
@@ -96,7 +96,7 @@ struct PDFBankTransactionsParser: StatementParser {
                 guard let _ = it.balance else { return nil }
                 return (idx, it)
             }
-            AMLogging.always("inferSigns — withBalances indices: \(withBalances.map { $0.0 })", component: LOG_COMPONENT)
+            AMLogging.log("inferSigns — withBalances indices: \(withBalances.map { $0.0 })", component: LOG_COMPONENT)
             if withBalances.count >= 2 {
                 for i in 0..<items.count {
                     let amt = items[i].amount
@@ -106,26 +106,26 @@ struct PDFBankTransactionsParser: StatementParser {
                         // If delta magnitude matches amount magnitude within a small epsilon, use delta sign
                         let eps: Decimal = 0.01
                         if (delta.magnitude - amt.magnitude).magnitude <= eps {
-                            AMLogging.always("inferSigns — row \(i) delta match: prevIndex=\(prevIndex), prevBal=\(prevBal), currBal=\(currBal), delta=\(delta), amt=\(amt)", component: LOG_COMPONENT)
+                            AMLogging.log("inferSigns — row \(i) delta match: prevIndex=\(prevIndex), prevBal=\(prevBal), currBal=\(currBal), delta=\(delta), amt=\(amt)", component: LOG_COMPONENT)
                             signed[i] = delta
                             continue
                         }
                     }
-                    AMLogging.always("inferSigns — row \(i) fallback sign (no delta match), amt=\(amt)", component: LOG_COMPONENT)
+                    AMLogging.log("inferSigns — row \(i) fallback sign (no delta match), amt=\(amt)", component: LOG_COMPONENT)
                     // Fallback: leave as signed amount for now; later heuristics may flip
                     signed[i] = items[i].amount
                 }
                 return signed
             }
 
-            AMLogging.always("inferSigns — no reliable balances, defaulting to signed amounts", component: LOG_COMPONENT)
+            AMLogging.log("inferSigns — no reliable balances, defaulting to signed amounts", component: LOG_COMPONENT)
             // No reliable balances: default to signed amounts; later heuristics can adjust
             for i in 0..<items.count { signed[i] = items[i].amount }
             return signed
         }
 
         let signedAmounts = inferSigns(using: items)
-        AMLogging.always("Signed amounts: \(signedAmounts)", component: LOG_COMPONENT)
+        AMLogging.log("Signed amounts: \(signedAmounts)", component: LOG_COMPONENT)
 
         // Build staged transactions; default include=true, propagate sourceAccountLabel
         for i in 0..<items.count {
@@ -147,11 +147,11 @@ struct PDFBankTransactionsParser: StatementParser {
                 sourceAccountLabel: it.account,
                 include: true
             )
-            AMLogging.always("TX \(i) built — date=\(it.date), desc=\(it.desc), amount=\(amount), include=true, account=\(it.account ?? "(nil)")", component: LOG_COMPONENT)
+            AMLogging.log("TX \(i) built — date=\(it.date), desc=\(it.desc), amount=\(amount), include=true, account=\(it.account ?? "(nil)")", component: LOG_COMPONENT)
             txs.append(tx)
         }
 
-        AMLogging.always("PDFBankTransactionsParser — produced tx: \(txs.count)", component: LOG_COMPONENT)
+        AMLogging.log("PDFBankTransactionsParser — produced tx: \(txs.count)", component: LOG_COMPONENT)
         if txs.isEmpty {
             throw ImportError.parseFailure("We couldn't detect any transactions in this PDF. You can try Summary Only mode to capture balances, or export a CSV for best results.")
         }

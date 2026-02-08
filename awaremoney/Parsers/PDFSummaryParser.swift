@@ -42,27 +42,6 @@ struct PDFSummaryParser: StatementParser {
             return nil
         }
 
-        func extractAPR(from text: String) -> Decimal? {
-            // Look for "interest rate" or "apr" followed by a number with optional %
-            let patterns = [
-                #"(?:(?:interest\s*rate)|apr)[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*%?"#
-            ]
-            for pat in patterns {
-                if let regex = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) {
-                    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-                    if let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges >= 2,
-                       let r = Range(match.range(at: 1), in: text) {
-                        let raw = String(text[r])
-                        if var val = Decimal(string: raw) {
-                            if val > 1 { val /= 100 } // convert percent to fraction
-                            return val
-                        }
-                    }
-                }
-            }
-            return nil
-        }
-        
         func decimalPlaces(in token: String) -> Int {
             if let dot = token.firstIndex(of: ".") {
                 return token.distance(from: token.index(after: dot), to: token.endIndex)
@@ -70,31 +49,33 @@ struct PDFSummaryParser: StatementParser {
             return 0
         }
 
-        // Pre-scan all rows for a global APR/interest rate token present in summary blocks
-        let globalAPR: Decimal? = {
-            func extractAPRInline(from text: String) -> Decimal? {
-                let pattern = #"(?:(?:interest\s*rate)|apr)[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*%?"#
-                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                    let lower = text.lowercased()
-                    let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
-                    if let match = regex.firstMatch(in: lower, options: [], range: range), match.numberOfRanges >= 2,
-                       let r = Range(match.range(at: 1), in: lower) {
-                        let raw = String(lower[r])
-                        if var val = Decimal(string: raw) {
-                            if val > 1 { val /= 100 } // convert percent to fraction
-                            return val
-                        }
-                    }
-                }
-                return nil
+        func extractAPRAndScale(from text: String) -> (value: Decimal, scale: Int)? {
+            // Match patterns like "Interest Rate 8.250%" or "APR 6.99"
+            // Capture the numeric token so we can determine scale precisely
+            let pattern = #"(?:(?:interest\s*rate)|apr)[^0-9%]{0,64}([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%?"#
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+            let lower = text.lowercased()
+            let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+            if let match = regex.firstMatch(in: lower, options: [], range: range), match.numberOfRanges >= 2,
+               let r = Range(match.range(at: 1), in: lower) {
+                let token = String(lower[r])
+                guard var val = Decimal(string: token) else { return nil }
+                let scale = decimalPlaces(in: token)
+                if val > 1 { val /= 100 } // convert percent to fraction when given as percent number
+                return (val, scale)
             }
+            return nil
+        }
+
+        // Pre-scan all rows for a global APR/interest rate token present in summary blocks
+        let globalAPR: (value: Decimal, scale: Int)? = {
             for row in rows {
                 let joined = row.joined(separator: " ")
-                if let apr = extractAPRInline(from: joined) { return apr }
+                if let found = extractAPRAndScale(from: joined) { return found }
             }
             return nil
         }()
-        AMLogging.always("PDFSummaryParser: globalAPR=\(String(describing: globalAPR))", component: LOG_COMPONENT)
+        AMLogging.log("PDFSummaryParser: globalAPR=\(String(describing: globalAPR))", component: LOG_COMPONENT)
 
         // Pre-scan all rows for credit card context indicators
         let hasCreditCardIndicators: Bool = {
@@ -115,7 +96,7 @@ struct PDFSummaryParser: StatementParser {
             }
             return false
         }()
-        AMLogging.always("PDFSummaryParser: ccIndicators=\(hasCreditCardIndicators)", component: LOG_COMPONENT)
+        AMLogging.log("PDFSummaryParser: ccIndicators=\(hasCreditCardIndicators)", component: LOG_COMPONENT)
 
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
@@ -142,25 +123,16 @@ struct PDFSummaryParser: StatementParser {
             guard let dec = Decimal(string: cleaned) else { continue }
 
             var sb = StagedBalance(asOfDate: date, balance: dec)
-            if let apr = extractAPR(from: desc) {
-                sb.interestRateAPR = apr
-                // Derive scale from the raw token if possible
-                let pattern = #"(?:(?:interest\s*rate)|apr)[^0-9%]{0,32}([0-9]{1,2}(?:\.[0-9]{1,4})?)\s*%?"#
-                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                    let range = NSRange(desc.startIndex..<desc.endIndex, in: desc)
-                    if let match = regex.firstMatch(in: desc, options: [], range: range), match.numberOfRanges >= 2,
-                       let r = Range(match.range(at: 1), in: desc) {
-                        let token = String(desc[r])
-                        sb.interestRateScale = decimalPlaces(in: token)
-                    }
-                }
-                AMLogging.always("Row APR extracted from description: apr=\(apr) date=\(date)", component: LOG_COMPONENT)
+            if let aprInfo = extractAPRAndScale(from: desc) {
+                sb.interestRateAPR = aprInfo.value
+                sb.interestRateScale = aprInfo.scale
+                AMLogging.log("Row APR extracted from description: apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
             }
             // If we didn't pick up APR from the row description, fall back to global APR detected from the page
-            if sb.interestRateAPR == nil, let apr = globalAPR {
-                sb.interestRateAPR = apr
-                if sb.interestRateScale == nil { sb.interestRateScale = 2 }
-                AMLogging.always("Applied global APR to snapshot: apr=\(apr) date=\(date)", component: LOG_COMPONENT)
+            if sb.interestRateAPR == nil, let aprInfo = globalAPR {
+                sb.interestRateAPR = aprInfo.value
+                if sb.interestRateScale == nil { sb.interestRateScale = aprInfo.scale }
+                AMLogging.log("Applied global APR to snapshot: apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
             }
             // Prefer explicit Account column, fallback to description text; bias to credit card when CC context is present anywhere in the document
             if isCreditCardSummary || hasCreditCardIndicators {
@@ -179,11 +151,11 @@ struct PDFSummaryParser: StatementParser {
             balances.append(sb)
         }
 
-        AMLogging.always("PDFSummaryParser — parsed balances: \(balances.count)", component: LOG_COMPONENT)
+        AMLogging.log("PDFSummaryParser — parsed balances: \(balances.count)", component: LOG_COMPONENT)
 
         // Final coercion: if the document contains clear credit card indicators, treat all summary balances as credit card snapshots
         if hasCreditCardIndicators && !balances.isEmpty {
-            AMLogging.always("PDFSummaryParser: coercing \(balances.count) snapshot label(s) to creditcard due to document-level CC indicators", component: LOG_COMPONENT)
+            AMLogging.log("PDFSummaryParser: coercing \(balances.count) snapshot label(s) to creditcard due to document-level CC indicators", component: LOG_COMPONENT)
             for i in balances.indices {
                 balances[i].sourceAccountLabel = "creditcard"
             }

@@ -11,21 +11,21 @@ struct FidelityStatementCSVParser: StatementParser {
         // Expect something like: "Account Type,Account,Beginning mkt Value,Change in Investment,Ending mkt Value,Short Balance,Ending Net Value,..."
         let hasAccountType = lower.contains(where: { $0.contains("account type") })
         let hasEndingValue = lower.contains(where: { $0.contains("ending mkt value") || $0.contains("ending net value") })
-        AMLogging.always("canParse? headers: \(lower)", component: LOG_COMPONENT)
+        AMLogging.log("canParse? headers: \(lower)", component: LOG_COMPONENT)
         return hasAccountType && hasEndingValue
     }
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {
         // Map the top summary row to extract ending value
         let map = headerMap(headers)
-        AMLogging.always("parse() — rows: \(rows.count), headers: \(headers)", component: LOG_COMPONENT)
-        AMLogging.always("header map keys: \(Array(map.keys))", component: LOG_COMPONENT)
+        AMLogging.log("parse() — rows: \(rows.count), headers: \(headers)", component: LOG_COMPONENT)
+        AMLogging.log("header map keys: \(Array(map.keys))", component: LOG_COMPONENT)
         var balances: [StagedBalance] = []
         var holdings: [StagedHolding] = []
 
         // Use 'now' as the as-of date when statements don't include one in the CSV body
         let asOf = Date()
-        AMLogging.always("Using as-of date: \(asOf)", component: LOG_COMPONENT)
+        AMLogging.log("Using as-of date: \(asOf)", component: LOG_COMPONENT)
 
         // 1) Parse the first data row under the summary header (if present)
         if let summaryRow = rows.first, !summaryRow.isEmpty {
@@ -34,7 +34,7 @@ struct FidelityStatementCSVParser: StatementParser {
             } else if let endMkt = value(summaryRow, map, key: "ending mkt value"), let dec = Decimal(string: sanitize(endMkt)) {
                 balances.append(StagedBalance(asOfDate: asOf, balance: dec))
             }
-            AMLogging.always("After summary parse — balances: \(balances.count)", component: LOG_COMPONENT)
+            AMLogging.log("After summary parse — balances: \(balances.count)", component: LOG_COMPONENT)
         }
 
         // 2) Scan the remaining rows for a second header block indicating holdings
@@ -97,7 +97,7 @@ struct FidelityStatementCSVParser: StatementParser {
             i += 1
         }
 
-        AMLogging.always("parse() result — tx: 0, holdings: \(holdings.count), balances: \(balances.count)", component: LOG_COMPONENT)
+        AMLogging.log("parse() result — tx: 0, holdings: \(holdings.count), balances: \(balances.count)", component: LOG_COMPONENT)
         return StagedImport(
             parserId: Self.id,
             sourceFileName: "Unknown.csv",

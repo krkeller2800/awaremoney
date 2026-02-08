@@ -1,5 +1,7 @@
 import SwiftUI
 
+private let LOG_COMPONENT = "CSVMappingSheet"
+
 struct CSVMappingSheet: View {
     let headers: [String]
     let sampleRows: [[String]]
@@ -195,7 +197,7 @@ struct CSVMappingSheet_Previews: PreviewProvider {
             ],
             onCancel: {},
             onSave: { mapping, options in
-                print("Saved mapping: \(mapping.mappings), options: \(options)")
+                AMLogging.log("Saved mapping: \(mapping.mappings), options: \(options)", component: LOG_COMPONENT)
             }
         )
     }

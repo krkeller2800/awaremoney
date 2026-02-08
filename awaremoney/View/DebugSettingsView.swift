@@ -7,16 +7,11 @@ struct DebugSettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var verboseEnabled: Bool = AMLogConfig.verbose
     @State private var categoryStates: [String: Bool] = [:]
-    private let categoryKeys: [String] = [
-        "ImportViewModel",
-        "PDFStatementExtractor",
-        "PDFSummaryParser",
-        "PDFBankTransactionsParser",
-        "BrokerageCSVParser",
-        "FidelityStatementCSVParser",
-        "TransactionsListView",
-        "NetWorthView",
-        "AccountsListView"
+    @State private var dynamicCategories: [String] = []
+    private let seedCategories: [String] = [
+        "Import", "ImportViewModel", "PDFStatementExtractor", "PDFSummaryParser",
+        "PDFBankTransactionsParser", "BrokerageCSVParser", "FidelityStatementCSVParser",
+        "TransactionsListView", "NetWorthView", "AccountsListView"
     ]
 
     var body: some View {
@@ -38,16 +33,18 @@ struct DebugSettingsView: View {
                     Button("Reset to Default") {
                         UserDefaults.standard.removeObject(forKey: "verbose_logging")
                         AMLogConfig.resetCategoryOverrides()
+                        AMLogConfig.resetKnownCategories()
+                        dynamicCategories = seedCategories.sorted()
                         verboseEnabled = AMLogConfig.verbose
                         // Refresh local state for category toggles
-                        for key in categoryKeys {
+                        for key in dynamicCategories {
                             categoryStates[key] = AMLogConfig.isVerboseEnabled(for: key)
                         }
                     }
                 }
 
                 Section("Categories") {
-                    ForEach(categoryKeys, id: \.self) { key in
+                    ForEach(dynamicCategories, id: \.self) { key in
                         Toggle(isOn: Binding(get: {
                             categoryStates[key, default: AMLogConfig.isVerboseEnabled(for: key)]
                         }, set: { newValue in
@@ -93,11 +90,19 @@ struct DebugSettingsView: View {
             .navigationTitle("Debug Settings")
             .task {
                 verboseEnabled = AMLogConfig.verbose
+                let discovered = AMLogConfig.knownCategories
+                let merged = Array(Set(discovered + seedCategories)).sorted()
+                dynamicCategories = merged
                 var dict: [String: Bool] = [:]
-                for key in categoryKeys {
+                for key in merged {
                     dict[key] = AMLogConfig.isVerboseEnabled(for: key)
                 }
                 categoryStates = dict
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .loggingCategoriesDidChange)) { _ in
+                let discovered = AMLogConfig.knownCategories
+                let merged = Array(Set(discovered + seedCategories)).sorted()
+                dynamicCategories = merged
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

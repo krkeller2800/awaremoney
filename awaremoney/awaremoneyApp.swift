@@ -29,16 +29,16 @@ struct awaremoneyApp: App {
         do {
             try fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
         } catch {
-            AMLogging.always("Failed to create Application Support directory: \(error)", component: "App")
+            AMLogging.log("Failed to create Application Support directory: \(error)", component: "App")
         }
-        AMLogging.always("Application Support directory path: \(appSupport.path)", component: "App")
+        AMLogging.log("Application Support directory path: \(appSupport.path)", component: "App")
         if let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
-            AMLogging.always("Documents directory path: \(documents.path)", component: "App")
+            AMLogging.log("Documents directory path: \(documents.path)", component: "App")
         }
         let storeURL = appSupport.appendingPathComponent("awaremoney.store")
 
         container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
-        AMLogging.always("SwiftData store URL: \(storeURL.path)", component: "App")
+        AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")
         runInstitutionMigrationIfNeeded()
     }
 
@@ -55,7 +55,7 @@ struct awaremoneyApp: App {
             let configuration = ModelConfiguration(url: storeURL)
             return try ModelContainer(for: schema, configurations: configuration)
         } catch {
-            AMLogging.always("Initial ModelContainer creation failed: \(error). Removing store and retrying.", component: "App")
+            AMLogging.log("Initial ModelContainer creation failed: \(error). Removing store and retrying.", component: "App")
             Self.removeStoreFiles(at: storeURL)
             do {
                 let configuration = ModelConfiguration(url: storeURL)
@@ -76,9 +76,9 @@ struct awaremoneyApp: App {
             if fm.fileExists(atPath: candidate.path) {
                 do {
                     try fm.removeItem(at: candidate)
-                    AMLogging.always("Removed store file: \(candidate.path)", component: "App")
+                    AMLogging.log("Removed store file: \(candidate.path)", component: "App")
                 } catch {
-                    AMLogging.always("Failed to remove store file: \(candidate.path) — \(error)", component: "App")
+                    AMLogging.log("Failed to remove store file: \(candidate.path) — \(error)", component: "App")
                 }
             }
         }
@@ -91,7 +91,7 @@ struct awaremoneyApp: App {
         guard defaults.bool(forKey: defaultsKey) == false else {
             return
         }
-        AMLogging.always("Running institution migration V1", component: "App")
+        AMLogging.log("Running institution migration V1", component: "App")
 
         let context = ModelContext(container)
         do {
@@ -149,14 +149,14 @@ struct awaremoneyApp: App {
 
             if updatedCount > 0 {
                 try context.save()
-                AMLogging.always("Institution migration updated \(updatedCount) account(s)", component: "App")
+                AMLogging.log("Institution migration updated \(updatedCount) account(s)", component: "App")
             } else {
-                AMLogging.always("Institution migration found no accounts to update", component: "App")
+                AMLogging.log("Institution migration found no accounts to update", component: "App")
             }
 
             defaults.set(true, forKey: defaultsKey)
         } catch {
-            AMLogging.always("Institution migration failed: \(error)", component: "App")
+            AMLogging.log("Institution migration failed: \(error)", component: "App")
         }
     }
 

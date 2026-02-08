@@ -3,7 +3,7 @@ import Foundation
 extension ImportViewModel {
     public func applyLiabilityLabelSafetyNetIfNeeded() {
         guard var staged = self.staged else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded skipped: no staged data")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded skipped: no staged data")
             return
         }
         
@@ -11,12 +11,12 @@ extension ImportViewModel {
         let suggestedLiability = (staged.suggestedAccountType == .loan || staged.suggestedAccountType == .creditCard)
         
         guard userHintIsCreditCard || suggestedLiability else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded skipped: no credit card hint or suggested liability")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded skipped: no credit card hint or suggested liability")
             return
         }
         
         guard !staged.balances.isEmpty else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded skipped: no balances in staged")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded skipped: no balances in staged")
             return
         }
         
@@ -35,9 +35,9 @@ extension ImportViewModel {
             }
             self.staged = staged
             self.infoMessage = "Mapped statement balances to a credit card based on your selection."
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded applied: all balances relabeled as creditcard")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded applied: all balances relabeled as creditcard")
         } else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded skipped: not all balances non-liability")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded skipped: not all balances non-liability")
         }
     }
 }
@@ -46,11 +46,11 @@ extension ImportViewModel {
         let userHintIsCreditCard = (self.userSelectedDocHint == .creditCard)
         let suggestedLiability = (staged.suggestedAccountType == .loan || staged.suggestedAccountType == .creditCard)
         guard userHintIsCreditCard || suggestedLiability else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: no credit card hint or suggested liability", component: "ImportViewModel")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: no credit card hint or suggested liability", component: "ImportViewModel")
             return
         }
         guard !staged.balances.isEmpty else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: no balances in staged", component: "ImportViewModel")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: no balances in staged", component: "ImportViewModel")
             return
         }
         let nonLiabilityLabels: Set<String> = ["checking", "savings", "brokerage", "investment"]
@@ -63,9 +63,9 @@ extension ImportViewModel {
                 staged.balances[i].sourceAccountLabel = "credit card"
             }
             self.infoMessage = "Mapped statement balances to a credit card based on your selection."
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded(to:) applied: all balances relabeled as credit card", component: "ImportViewModel")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:) applied: all balances relabeled as credit card", component: "ImportViewModel")
         } else {
-            AMLogging.always("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: not all balances non-liability", component: "ImportViewModel")
+            AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:) skipped: not all balances non-liability", component: "ImportViewModel")
         }
     }
 }

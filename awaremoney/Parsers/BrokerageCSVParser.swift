@@ -15,7 +15,7 @@ struct BrokerageCSVParser: StatementParser {
 
     func canParse(headers: [String]) -> Bool {
         let lower = headers.map { $0.lowercased() }
-        AMLogging.always("canParse? headers: \(lower)", component: LOG_COMPONENT)
+        AMLogging.log("canParse? headers: \(lower)", component: LOG_COMPONENT)
         return lower.contains(where: { $0.contains("action") }) &&
                lower.contains(where: { $0.contains("symbol") }) &&
                lower.contains(where: { $0.contains("date") })
@@ -23,8 +23,8 @@ struct BrokerageCSVParser: StatementParser {
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {
         let map = headerMap(headers)
-        AMLogging.always("parse() — rows: \(rows.count), headers: \(headers)", component: LOG_COMPONENT)
-        AMLogging.always("header map keys: \(Array(map.keys))", component: LOG_COMPONENT)
+        AMLogging.log("parse() — rows: \(rows.count), headers: \(headers)", component: LOG_COMPONENT)
+        AMLogging.log("header map keys: \(Array(map.keys))", component: LOG_COMPONENT)
         var txs: [StagedTransaction] = []
         let holdings: [StagedHolding] = [] // Optional snapshot rows if present
 
@@ -91,7 +91,7 @@ struct BrokerageCSVParser: StatementParser {
             // Optional: detect snapshot rows (broker-specific). For MVP, skip unless explicit.
         }
 
-        AMLogging.always("parse() result — tx: \(txs.count), holdings: 0, balances: 0", component: LOG_COMPONENT)
+        AMLogging.log("parse() result — tx: \(txs.count), holdings: 0, balances: 0", component: LOG_COMPONENT)
         return StagedImport(
             parserId: Self.id,
             sourceFileName: "Unknown.csv",

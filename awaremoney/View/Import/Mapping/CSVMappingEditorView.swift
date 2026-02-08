@@ -171,7 +171,7 @@ struct CSVMappingEditorView: View {
             }
         }
         .onAppear {
-            AMLogging.always("CSVMappingEditorView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+            AMLogging.log("CSVMappingEditorView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
             guard !autoHandled else { return }
             if autoSaveWhenReady && isImportFallback && !needsUserInput {
                 autoHandled = true
@@ -233,7 +233,7 @@ struct CSVMappingEditorView: View {
     private func saveAndDismiss() {
         do {
             try modelContext.save()
-            AMLogging.always("CSVMappingEditorView: save succeeded", component: "Import")
+            AMLogging.log("CSVMappingEditorView: save succeeded", component: "Import")
         } catch {
             AMLogging.error("CSVMappingEditorView: failed to save mapping — \(error.localizedDescription)", component: "Import")
         }

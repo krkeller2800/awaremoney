@@ -7,10 +7,22 @@
 
 import SwiftUI
 import SwiftData
+import Foundation
+// Uses DebtPayoffEngine
+
+// Lightweight model used for planning
+fileprivate struct Debt: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let balance: Decimal
+    let apr: Decimal?
+    let minPayment: Decimal
+}
 
 struct DebtSummaryView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @Environment(\.dismiss) private var dismiss
     @State private var accounts: [Account] = []
     @State private var showPlanSheet = false
     @State private var tempPlanDate: Date = {
@@ -18,11 +30,20 @@ struct DebtSummaryView: View {
     }()
     @State private var appliedPlanDate: Date? = nil
     private enum PlanMode: String, CaseIterable {
-        case currentInputs = "Use current inputs"
-        case projectedAtDate = "Use projected at date"
+        case currentInputs = "Current inputs"
+        case projectedAtDate = "Projected at date"
     }
     @State private var tempPlanMode: PlanMode = .currentInputs
     @State private var appliedPlanMode: PlanMode = .currentInputs
+    
+    @State private var tempStrategy: PayoffStrategy = .minimumsOnly
+    @State private var tempMonthlyBudget: String = ""
+    @State private var appliedStrategy: PayoffStrategy = .minimumsOnly
+    @State private var appliedBudget: Decimal? = nil
+    @State private var currentPlan: DebtPlanResult? = nil
+    @State private var budgetValidationError: String? = nil
+    @State private var showPlanErrorAlert = false
+    @State private var planErrorMessage: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -34,41 +55,38 @@ struct DebtSummaryView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if isPortrait && proxy.size.width < 844 {
                             ScrollView(.horizontal, showsIndicators: false) {
-                                VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-                                    planHeader(compact: compact)
-                                    headerRow(compact: compact)
-                                    Divider()
-                                    ForEach(accounts, id: \.id) { acct in
-                                        row(for: acct, compact: compact)
-                                        Divider()
-                                    }
-                                    totalRow(compact: compact)
-                                }
-                                .padding(.horizontal, compact ? 6 : 12)
-                                .frame(width: 844, alignment: .topLeading)
+                                summaryStack(compact: compact)
+                                    .padding(.horizontal, compact ? 6 : 12)
+                                    .frame(width: 844, alignment: .topLeading)
                             }
                         } else {
-                            VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-                                planHeader(compact: compact)
-                                headerRow(compact: compact)
-                                Divider()
-                                ForEach(accounts, id: \.id) { acct in
-                                    row(for: acct, compact: compact)
-                                    Divider()
-                                }
-                                totalRow(compact: compact)
-                            }
-                            .padding(.horizontal, compact ? 6 : 12)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            summaryStack(compact: compact)
+                                .padding(.horizontal, compact ? 6 : 12)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .top)
                     .padding(.vertical, 8)
                 }
                 .navigationTitle("Debt Summary")
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        VStack(spacing: 0) {
+                            Text("Debt Summary")
+                                .font(.headline)
+                            Text(planSubtitleText)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .layoutPriority(1)
+                        }
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
+                            AMLogging.log("Project tapped; presenting plan sheet", component: "DebtSummaryView")
                             showPlanSheet = true
                         } label: {
                             Text("Project")
@@ -79,66 +97,239 @@ struct DebtSummaryView: View {
                 }
                 .task { await load() }
                 .sheet(isPresented: $showPlanSheet) {
-                    NavigationStack {
-                        List {
-                            Section {
-                                DatePicker("Target date", selection: $tempPlanDate, displayedComponents: .date)
-                                    .datePickerStyle(.compact)
-                                    .onChange(of: tempPlanDate) { newValue in
-                                        let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
-                                        tempPlanMode = isToday ? .currentInputs : .projectedAtDate
-                                    }
-                            } footer: {
-                                Text("Choose a target date to plan against. The selected date will appear above the summary headers.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Section("Mode") {
-                                Picker("Summary mode", selection: $tempPlanMode) {
-                                    Text("Use current inputs").tag(PlanMode.currentInputs)
-                                    Text("Use projected at date").tag(PlanMode.projectedAtDate)
-                                }
-                                .pickerStyle(.segmented)
-                                .onChange(of: tempPlanMode) { newValue in
-                                    if newValue == .currentInputs {
-                                        tempPlanDate = Date()
-                                    }
-                                }
-                            }
+                    planSheetView()
+                }
+                .onChange(of: showPlanSheet) { _, newValue in
+                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
+                }
+            }
+        }
+    }
 
-                            Section("Current Plan") {
-                                if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
-                                    Text("Plan as of \(date.formatted(date: .abbreviated, time: .omitted))")
-                                } else {
-                                    Text("Using current inputs")
-                                }
-                            }
+    // MARK: - View Builders
+
+    private func payoffOrderString() -> String? {
+        guard let plan = currentPlan, !plan.payoffOrder.isEmpty else { return nil }
+        let names = plan.payoffOrder.compactMap { id in accounts.first(where: { $0.id == id })?.name }
+        let order = names.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "  •  ")
+        return "Payoff order: " + order
+    }
+
+    private func summaryStack(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
+            // Removed planHeader(compact: compact) as per instructions
+            if let s = payoffOrderString() {
+                Text(s)
+                    .font(compact ? .caption2 : .caption)
+                    .foregroundStyle(.secondary)
+            }
+            headerRow(compact: compact)
+            Divider()
+            ForEach(accounts, id: \.id) { acct in
+                row(for: acct, compact: compact)
+                Divider()
+            }
+            totalRow(compact: compact)
+        }
+    }
+
+    private func planSheetView() -> some View {
+        NavigationStack {
+            List {
+                Section {
+                    DatePicker("Target date", selection: $tempPlanDate, displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .onChange(of: tempPlanDate) { _, newValue in
+                            let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
+                            tempPlanMode = isToday ? .currentInputs : .projectedAtDate
                         }
-                        .navigationTitle("Adjust Date")
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Apply") {
-                                    appliedPlanDate = tempPlanDate
-                                    appliedPlanMode = tempPlanMode
-                                    showPlanSheet = false
-                                }
-                            }
-                            ToolbarItem(placement: .navigationBarLeading) {
-                                Button("Clear") {
-                                    appliedPlanDate = nil
-                                    appliedPlanMode = .currentInputs
-                                    // Also reset the in-sheet controls so the UI reflects a cleared state
-                                    tempPlanDate = Date()
-                                    tempPlanMode = .currentInputs
-                                }
-                                .disabled(appliedPlanDate == nil)
-                            }
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showPlanSheet = false }
-                            }
+                } footer: {
+                    Text("Choose a target date to plan against. The selected date will appear above the summary headers.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Mode") {
+                    Picker("Summary mode", selection: $tempPlanMode) {
+                        Text("Current inputs").tag(PlanMode.currentInputs)
+                        Text("Projected at date").tag(PlanMode.projectedAtDate)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: tempPlanMode) { _, newValue in
+                        if newValue == .currentInputs {
+                            tempPlanDate = Date()
                         }
                     }
                 }
+                Section {
+                    LabeledContent("Monthly budget") {
+                        TextField("", text: $tempMonthlyBudget)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                    }
+                } header: {
+                    Text("Payoff Plan")
+                } footer: {
+                    Group {
+                        Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if let error = budgetValidationError {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+                Section("Strategy") {
+                    Picker("Strategy", selection: $tempStrategy) {
+                        Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
+                        Text("Snowball").tag(PayoffStrategy.snowball)
+                        Text("Avalanche").tag(PayoffStrategy.avalanche)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Section("Current Plan") {
+                    if tempPlanMode == .projectedAtDate {
+                        HStack(spacing: 4) {
+                            Text("Plan as of \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
+                            Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 4) {
+                            Text("Current inputs")
+                            Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Adjust Date")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Set Plan") {
+                        AMLogging.log("Set Plan tapped with mode=\(tempPlanMode.rawValue), date=\(String(describing: tempPlanDate)), strategy=\(tempStrategyDisplay), budgetField='\(tempMonthlyBudget)'", component: "DebtSummaryView")
+                        budgetValidationError = nil
+                        let parsedBudget: Decimal? = {
+                            if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                return nil
+                            } else {
+                                return parseCurrencyInput(tempMonthlyBudget)
+                            }
+                        }()
+                        AMLogging.log("Parsed budget: \(String(describing: parsedBudget)) for strategy=\(tempStrategyDisplay)", component: "DebtSummaryView")
+                        if tempStrategy != .minimumsOnly && parsedBudget == nil {
+                            AMLogging.error("Validation failed: Non-minimums strategy with invalid budget", component: "DebtSummaryView")
+                            budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
+                            planErrorMessage = "Please enter a valid budget amount or select the Minimums Only strategy."
+                            showPlanErrorAlert = true
+                            return
+                        }
+                        appliedPlanDate = tempPlanDate
+                        appliedPlanMode = tempPlanMode
+                        appliedStrategy = tempStrategy
+                        appliedBudget = parsedBudget
+                        AMLogging.log("Applied plan selections: mode=\(appliedPlanMode.rawValue), date=\(String(describing: appliedPlanDate)), strategy=\(appliedStrategyDisplay), budget=\(String(describing: appliedBudget))", component: "DebtSummaryView")
+                        
+                        let filteredAccounts = accounts.filter { acct in
+                            let baseBal = absDecimal(latestBalance(acct))
+                            let bal: Decimal = {
+                                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                                    return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
+                                } else {
+                                    return baseBal
+                                }
+                            }()
+                            return bal > 0
+                        }
+                        AMLogging.log("Filtered accounts count: \(filteredAccounts.count)", component: "DebtSummaryView")
+                        
+                        let debts: [Debt] = filteredAccounts.map { acct in
+                            let baseBal = absDecimal(latestBalance(acct))
+                            let bal: Decimal = {
+                                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                                    return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
+                                } else {
+                                    return baseBal
+                                }
+                            }()
+                            let minPayment = monthlyPayment(for: acct, balance: bal)
+                            return Debt(
+                                id: acct.id,
+                                name: acct.name,
+                                balance: bal,
+                                apr: acct.loanTerms?.apr,
+                                minPayment: minPayment
+                            )
+                        }
+                        AMLogging.log("Prepared debts count: \(debts.count)", component: "DebtSummaryView")
+
+                        let budgetToUse: Decimal
+                        if appliedStrategy == .minimumsOnly {
+                            budgetToUse = debts.reduce(0) { $0 + $1.minPayment }
+                        } else {
+                            budgetToUse = appliedBudget ?? 0
+                        }
+                        AMLogging.log("Planning with budget: \(budgetToUse) and strategy=\(appliedStrategyDisplay)", component: "DebtSummaryView")
+
+                        AMLogging.log("Invoking DebtPayoffEngine.plan ...", component: "DebtSummaryView")
+                        let debtInputs: [DebtInput] = debts.map { d in
+                            DebtInput(
+                                id: d.id,
+                                name: d.name,
+                                apr: d.apr,
+                                balance: d.balance,
+                                minPayment: d.minPayment
+                            )
+                        }
+                        do {
+                            let planResult = try DebtPayoffEngine.plan(
+                                debts: debtInputs,
+                                monthlyBudget: budgetToUse,
+                                strategy: appliedStrategy,
+                                startDate: normalizeToMonth(appliedPlanDate ?? Date())
+                            )
+                            currentPlan = planResult
+                            AMLogging.log("Plan computed successfully; closing plan sheet", component: "DebtSummaryView")
+                            showPlanSheet = false
+                        } catch DebtPlanError.infeasibleBudget {
+                            AMLogging.error("Infeasible budget error from planner", component: "DebtSummaryView")
+                            budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
+                            planErrorMessage = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
+                            showPlanErrorAlert = true
+                        } catch {
+                            AMLogging.error("Unexpected error during planning: \(error.localizedDescription)", component: "DebtSummaryView")
+                            budgetValidationError = "An unexpected error occurred."
+                            planErrorMessage = "An unexpected error occurred."
+                            showPlanErrorAlert = true
+                        }
+                    }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        AMLogging.log("Cancel tapped; resetting selections and dismissing sheet", component: "DebtSummaryView")
+                        appliedPlanDate = nil
+                        appliedPlanMode = .currentInputs
+                        appliedStrategy = .minimumsOnly
+                        appliedBudget = nil
+                        tempPlanDate = Date()
+                        tempPlanMode = .currentInputs
+                        tempStrategy = .minimumsOnly
+                        tempMonthlyBudget = ""
+                        budgetValidationError = nil
+                        currentPlan = nil
+                        showPlanSheet = false
+                        showPlanErrorAlert = false
+                        planErrorMessage = nil
+                    }
+                }
+            }
+            .alert("Can't set plan", isPresented: $showPlanErrorAlert, presenting: planErrorMessage) { _ in
+                Button("OK", role: .cancel) { }
+            } message: { msg in
+                Text(msg)
             }
         }
     }
@@ -146,19 +337,66 @@ struct DebtSummaryView: View {
     // MARK: - Rows
 
     private func planHeader(compact: Bool) -> some View {
-        Group {
-            HStack {
-                Spacer()
-                if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
+        HStack {
+            Spacer()
+            if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
+                HStack(spacing: 4) {
                     Text("Plan as of \(date.formatted(date: .abbreviated, time: .omitted))")
                         .font(compact ? .caption2 : .caption)
                         .foregroundStyle(.secondary)
-                } else {
-                    Text("Using current inputs")
+                    Text("• \(appliedStrategyDisplay)\(appliedBudgetText)")
+                        .font(compact ? .caption2 : .caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 4) {
+                    Text("Current inputs")
+                        .font(compact ? .caption2 : .caption)
+                        .foregroundStyle(.secondary)
+                    Text("• \(appliedStrategyDisplay)\(appliedBudgetText)")
                         .font(compact ? .caption2 : .caption)
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+    
+    private var appliedStrategyDisplay: String {
+        switch appliedStrategy {
+        case .minimumsOnly: return "Minimums"
+        case .snowball: return "Snowball"
+        case .avalanche: return "Avalanche"
+        }
+    }
+    private var appliedBudgetText: String {
+        guard let b = appliedBudget, appliedStrategy != .minimumsOnly else { return "" }
+        return " • Budget: \(formatAmount(b))"
+    }
+    
+    private var planSubtitleText: String {
+        if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
+            return "Plan as of \(date.formatted(date: .abbreviated, time: .omitted)) • \(appliedStrategyDisplay)\(appliedBudgetText)"
+        } else {
+            return "Current inputs • \(appliedStrategyDisplay)\(appliedBudgetText)"
+        }
+    }
+
+    private var tempStrategyDisplay: String {
+        switch tempStrategy {
+        case .minimumsOnly: return "Minimums"
+        case .snowball: return "Snowball"
+        case .avalanche: return "Avalanche"
+        }
+    }
+
+    private var tempBudgetText: String {
+        guard tempStrategy != .minimumsOnly else { return "" }
+        let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if let d = parseCurrencyInput(trimmed) {
+            return " • Budget: \(formatAmount(d))"
+        } else {
+            return " • Budget: —"
         }
     }
 
@@ -218,16 +456,26 @@ struct DebtSummaryView: View {
     private func row(for account: Account, compact: Bool) -> some View {
         let baseBal = absDecimal(latestBalance(account))
         let usedBal: Decimal = {
-            if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate, let proj = try? projectedBalance(for: account, on: plan) {
-                return absDecimal(proj)
+            if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                return absProjectedOrBase(for: account, planDate: plan, base: baseBal)
             } else {
                 return baseBal
             }
         }()
         let apr = account.loanTerms?.apr
-        let payment = monthlyPayment(for: account, balance: usedBal)
-        let step = monthStep(for: account, balance: usedBal)
+        let planMonth = currentPlan?.months.first
+        let payment = planMonth?.payments[account.id] ?? monthlyPayment(for: account, balance: usedBal)
+        let step: (interest: Decimal, afterPaymentBalance: Decimal) = {
+            if let m = planMonth, let i = m.interest[account.id], let after = m.balances[account.id] {
+                return (i, after)
+            } else {
+                return monthStep(for: account, balance: usedBal, payment: payment)
+            }
+        }()
         let payoff: Date? = {
+            if let plan = currentPlan, let d = plan.payoffDates[account.id] {
+                return d
+            }
             if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
                 return payoffDate(startingBalance: usedBal, startFrom: plan, for: account)
             } else {
@@ -280,7 +528,7 @@ struct DebtSummaryView: View {
                 .minimumScaleFactor(0.75)
 
             Group {
-                if let payoff {
+                if let payoff = payoff {
                     Text(payoff.formatted(date: .abbreviated, time: .omitted))
                 } else {
                     Text("—").foregroundStyle(.secondary)
@@ -371,17 +619,15 @@ struct DebtSummaryView: View {
         let apr = account.loanTerms?.apr
         let payment = account.loanTerms?.paymentAmount ?? monthlyPayment(for: account, balance: startingBalance)
 
-        if let anchor = latestSnapshotDate(account), payment > 0 {
+        if let apr = apr, apr > 0 {
             // Statement-anchored monthly simulation
-            let sDay = Calendar.current.component(.day, from: anchor)
+            let sDay = Calendar.current.component(.day, from: latestSnapshotDate(account) ?? Date())
             var bal = startingBalance
-            var stmt = nextStatementDate(after: statementDate(onOrBefore: anchor, day: sDay), day: sDay)
+            var stmt = nextStatementDate(after: statementDate(onOrBefore: latestSnapshotDate(account) ?? Date(), day: sDay), day: sDay)
             for _ in 0..<600 {
                 bal -= payment
                 if bal <= 0 { return stmt }
-                if let apr, apr > 0 {
-                    bal += bal * (apr / 12)
-                }
+                bal += bal * (apr / 12)
                 stmt = nextStatementDate(after: stmt, day: sDay)
             }
             return nil
@@ -422,6 +668,15 @@ struct DebtSummaryView: View {
         let after = (interestBase + interest).rounded(2)
         return (interest, after)
     }
+    
+    private func monthStep(for account: Account, balance: Decimal, payment: Decimal) -> (interest: Decimal, afterPaymentBalance: Decimal) {
+        let apr = account.loanTerms?.apr ?? 0
+        let effectivePayment = min(payment, balance)
+        let interestBase = balance - effectivePayment
+        let interest = (apr * interestBase / 12).rounded(2)
+        let after = (interestBase + interest).rounded(2)
+        return (interest, after)
+    }
 
     private func isCompactLayout(_ size: CGSize) -> Bool {
         return size.width < 1000
@@ -433,7 +688,7 @@ struct DebtSummaryView: View {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
         nf.currencyCode = "USD"
-        guard let amount else { return "—" }
+        guard let amount = amount else { return "—" }
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
@@ -546,29 +801,56 @@ struct DebtSummaryView: View {
 
     private func absDecimal(_ d: Decimal) -> Decimal { d < 0 ? -d : d }
 
+    private func absProjectedOrBase(for account: Account, planDate: Date, base: Decimal) -> Decimal {
+        do {
+            if let projected = try projectedBalance(for: account, on: planDate) {
+                return absDecimal(projected)
+            }
+        } catch {
+            // If projection fails, fall back to base
+        }
+        return base
+    }
+
     private func totalsForAccounts(_ accts: [Account]) -> (balance: Decimal, payment: Decimal, interest: Decimal, afterPayment: Decimal) {
         var totalBalance: Decimal = 0
         var totalPayment: Decimal = 0
         var totalInterest: Decimal = 0
         var totalAfter: Decimal = 0
+        
+        let planMonth = currentPlan?.months.first
 
         for acct in accts {
             let base = absDecimal(latestBalance(acct))
             let bal: Decimal = {
-                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate, let proj = try? projectedBalance(for: acct, on: plan) {
-                    return absDecimal(proj)
+                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                    return absProjectedOrBase(for: acct, planDate: plan, base: base)
                 } else {
                     return base
                 }
             }()
             totalBalance += bal
-            let pay = monthlyPayment(for: acct, balance: bal)
+            
+            let pay: Decimal = planMonth?.payments[acct.id] ?? monthlyPayment(for: acct, balance: bal)
             totalPayment += pay
-            let step = monthStep(for: acct, balance: bal)
-            totalInterest += step.interest
-            totalAfter += step.afterPaymentBalance
+            
+            if let m = planMonth, let i = m.interest[acct.id], let after = m.balances[acct.id] {
+                totalInterest += i
+                totalAfter += after
+            } else {
+                let step = monthStep(for: acct, balance: bal, payment: pay)
+                totalInterest += step.interest
+                totalAfter += step.afterPaymentBalance
+            }
         }
         return (totalBalance, totalPayment, totalInterest, totalAfter)
+    }
+    
+    private func parseCurrencyInput(_ input: String) -> Decimal? {
+        let filtered = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+        return Decimal(string: filtered)
     }
 }
 

@@ -49,7 +49,7 @@ struct GenericCSVParser: StatementParser {
                 let amountHeader = mapping.amountColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let payeeHeader = mapping.payeeColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let memoHeader = mapping.memoColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let categoryHeader = mapping.categoryColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                _ = mapping.categoryColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let accountHeader = mapping.accountColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let kindHeader = mapping.kindColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
@@ -64,7 +64,7 @@ struct GenericCSVParser: StatementParser {
 
                 let payee = payeeHeader.flatMap { lowerValuesByKey[$0] }
                 let memo = memoHeader.flatMap { lowerValuesByKey[$0] }
-                let category = categoryHeader.flatMap { lowerValuesByKey[$0] }
+//                let category = categoryHeader.flatMap { lowerValuesByKey[$0] }
                 let account = accountHeader.flatMap { lowerValuesByKey[$0] }
 
                 // Derive kind from mapping or fall back to a reasonable default
