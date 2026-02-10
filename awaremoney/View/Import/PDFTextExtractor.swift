@@ -55,10 +55,19 @@ enum PDFTextExtractor {
     static func extractInterestChargesSection(from fullText: String) -> String? {
         let text = fullText
         let lower = text.lowercased()
-        guard let anchor = lower.range(of: "interest charges") else { return nil }
+        let anchors = ["interest charges", "interest charge calculation", "interest charge", "annual percentage rate"]
+        var foundRanges: [(String, Range<String.Index>)] = []
+        for anchor in anchors {
+            if let range = lower.range(of: anchor) {
+                foundRanges.append((anchor, range))
+            }
+        }
+        guard !foundRanges.isEmpty else { return nil }
+        // Find the earliest occurrence among all anchors
+        let earliest = foundRanges.min { $0.1.lowerBound < $1.1.lowerBound }!
+        let start = earliest.1.lowerBound
 
         // Take a window after the anchor; 2500 chars is usually enough to include table + footnotes
-        let start = anchor.lowerBound
         let end = lower.index(start, offsetBy: min(2500, lower.distance(from: start, to: lower.endIndex)), limitedBy: lower.endIndex) ?? lower.endIndex
         let startOffset = lower.distance(from: lower.startIndex, to: start)
         let endOffset = lower.distance(from: lower.startIndex, to: end)
@@ -73,7 +82,8 @@ enum PDFTextExtractor {
         var hitNextHeader = false
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if isAllCapsHeader(trimmed) && !trimmed.lowercased().contains("interest charges") && !trimmed.lowercased().contains("annual percentage rate") {
+            let ltrim = trimmed.lowercased()
+            if isAllCapsHeader(trimmed) && !(ltrim.contains("interest charges") || ltrim.contains("interest charge") || ltrim.contains("interest charge calculation") || ltrim.contains("annual percentage rate") || ltrim.contains("apr")) {
                 hitNextHeader = true
                 break
             }

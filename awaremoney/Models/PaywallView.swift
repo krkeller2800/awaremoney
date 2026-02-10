@@ -90,10 +90,14 @@ struct PaywallView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
             Text("Purchases are tied to your Apple ID and can be restored on new devices.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 8)
     }
@@ -116,3 +120,4 @@ extension View {
             }
     }
 }
+

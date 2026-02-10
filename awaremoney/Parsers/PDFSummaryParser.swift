@@ -80,7 +80,7 @@ struct PDFSummaryParser: StatementParser {
             let demoteWords = ["cash advance", "balance transfer"]
             let priorWords = ["prior to", "previous"]
 
-            let headerWords = ["annual percentage rate", "interest charges", "balance type", "interest rate", "annual interest rate"]
+            let headerWords = ["annual percentage rate", "interest charges", "balance type", "interest rate", "annual interest rate", "interest charge calculation", "interest charge"]
 
             // Banking/deposit contexts that should not be treated as credit-card APRs
             let bankingWords = [
@@ -149,8 +149,9 @@ struct PDFSummaryParser: StatementParser {
 
                 // Reject clear banking/deposit contexts unless APR/purchases cues exist,
                 // or we have a liability context (loan/mortgage) where 'interest rate' is expected.
-                if hasBankingContext && !hasPurchaseContext && !hasAprToken && !hasLiabilityContext {
-                    AMLogging.log("extractAPRAndScale: rejecting candidate due to banking context without APR/purchases/liability: token=\(token)", component: LOG_COMPONENT)
+                // Modified per instructions to allow header context to exempt rejection
+                if hasBankingContext && !hasPurchaseContext && !hasAprToken && !hasLiabilityContext && !hasHeaderContext {
+                    AMLogging.log("extractAPRAndScale: rejecting candidate due to banking context without APR/purchases/liability/header: token=\(token)", component: LOG_COMPONENT)
                     return
                 }
 
@@ -279,94 +280,116 @@ struct PDFSummaryParser: StatementParser {
         func extractPurchasesAPRFromDocument(_ rows: [[String]]) -> (value: Decimal, scale: Int)? {
             // Build a single lowercase document string
             let doc = rows.flatMap { $0 }.joined(separator: " ").lowercased()
-            let anchorRange = doc.range(of: "interest charges")
-            // Take a window after the Interest Charges header; if missing, scan from document start
-            let startIdx = anchorRange?.upperBound ?? doc.startIndex
 
-            if anchorRange == nil {
-                AMLogging.log("PurchasesAPR: 'interest charges' anchor not found — scanning full document", component: LOG_COMPONENT)
-            } else {
-                AMLogging.log("PurchasesAPR: found 'interest charges' anchor — scanning from anchor", component: LOG_COMPONENT)
+            // Prefer stronger anchors first; keep generic last
+            let anchorTokensInPriority = [
+                "interest charges",
+                "interest charge calculation",
+                "annual percentage rate",
+                "apr",
+                "interest rate"
+            ]
+
+            // Helper: scan a window for Purchases APR
+            func bestPurchasesAPR(in window: String) -> (value: Decimal, scale: Int, score: Int)? {
+                let purchaseRegex = try? NSRegularExpression(pattern: #"purchases?"#, options: [.caseInsensitive])
+                let percentRegex = try? NSRegularExpression(pattern: #"([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%"#, options: [.caseInsensitive])
+                guard let pRx = purchaseRegex, let pctRx = percentRegex else { return nil }
+                let wRange = NSRange(window.startIndex..<window.endIndex, in: window)
+                let pMatches = pRx.matches(in: window, options: [], range: wRange)
+                AMLogging.log("PurchasesAPR: purchases matches=\(pMatches.count)", component: LOG_COMPONENT)
+
+                struct PCandidate { let value: Decimal; let scale: Int; let score: Int }
+                var pcands: [PCandidate] = []
+
+                for pm in pMatches {
+                    // Build a local context around the 'purchases' token (both sides)
+                    let ctxStart = max(0, pm.range.location - 220)
+                    let ctxEnd = min(wRange.length, pm.range.location + pm.range.length + 320)
+                    let ctxRange = NSRange(location: ctxStart, length: ctxEnd - ctxStart)
+                    guard let swiftRange = Range(ctxRange, in: window) else { continue }
+                    let ctx = String(window[swiftRange])
+                    let ctxLower = ctx.lowercased()
+                    let ctxPreview = String(ctxLower.prefix(220))
+                    AMLogging.log("PurchasesAPR: context around 'purchases' token: '" + ctxPreview + "'", component: LOG_COMPONENT)
+
+                    // Skip rewards/marketing and FX/fee contexts
+                    let rewardWords = ["cash back", "cashback", "rewards", "points", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
+                    let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
+                    let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
+                    if rewardWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to rewards context", component: LOG_COMPONENT); continue }
+                    if fxWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to FX context", component: LOG_COMPONENT); continue }
+                    if feeWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to fee context", component: LOG_COMPONENT); continue }
+                    if ctxLower.contains("no interest") { AMLogging.log("PurchasesAPR: skip due to 'no interest' context", component: LOG_COMPONENT); continue }
+
+                    let ctxNS = ctx as NSString
+                    let localRange = NSRange(location: 0, length: ctxNS.length)
+                    let allPctMatches = pctRx.matches(in: ctx, options: [], range: localRange)
+                    AMLogging.log("PurchasesAPR: % matches in ctx=\(allPctMatches.count)", component: LOG_COMPONENT)
+
+                    if let m = pctRx.firstMatch(in: ctx, options: [], range: localRange), m.numberOfRanges >= 2,
+                       let r = Range(m.range(at: 1), in: ctx) {
+                        let token = String(ctx[r])
+                        if var val = Decimal(string: token) {
+                            let scale = token.contains(".") ? (token.split(separator: ".").last?.count ?? 0) : 0
+                            if val > 1 { val /= 100 }
+                            // Score: penalize contexts containing prior/previous; otherwise boost
+                            var score = 0
+                            if ctxLower.contains("prior") || ctxLower.contains("previous") { score -= 2 } else { score += 3 }
+                            AMLogging.log("PurchasesAPR: candidate token=\(token) value=\(val) scale=\(scale) score=\(score)", component: LOG_COMPONENT)
+                            pcands.append(PCandidate(value: val, scale: scale, score: score))
+                        }
+                    } else {
+                        AMLogging.log("PurchasesAPR: no % following 'purchases' in ctx", component: LOG_COMPONENT)
+                    }
+                }
+
+                if let best = pcands.max(by: { (l, r) in
+                    if l.score != r.score { return l.score < r.score }
+                    return l.value > r.value
+                }) {
+                    return (best.value, best.scale, best.score)
+                }
+                return nil
             }
 
-            let windowEnd = doc.index(startIdx, offsetBy: min(1800, doc.distance(from: startIdx, to: doc.endIndex)), limitedBy: doc.endIndex) ?? doc.endIndex
-            let window = String(doc[startIdx..<windowEnd])
+            // Try each anchor in priority order; for each, try all occurrences in the doc
+            var triedAnyAnchor = false
+            for token in anchorTokensInPriority {
+                var searchStart = doc.startIndex
+                while let range = doc.range(of: token, range: searchStart..<doc.endIndex) {
+                    triedAnyAnchor = true
+                    // Build a window that includes some text before and after the anchor
+                    let pre = 500
+                    let post = 3000
+                    let startIdx = doc.index(range.lowerBound, offsetBy: -min(pre, doc.distance(from: doc.startIndex, to: range.lowerBound)), limitedBy: doc.startIndex) ?? doc.startIndex
+                    let endIdx = doc.index(range.upperBound, offsetBy: min(post, doc.distance(from: range.upperBound, to: doc.endIndex)), limitedBy: doc.endIndex) ?? doc.endIndex
+                    let window = String(doc[startIdx..<endIdx])
+                    let preview = String(window.prefix(320))
+                    AMLogging.log("PurchasesAPR: trying anchor '\(token)' — scanning around anchor; window length=\(window.count) preview='" + preview + "'", component: LOG_COMPONENT)
 
-            let windowPreview = String(window.prefix(320))
-            AMLogging.log("PurchasesAPR: window length=\(window.count) preview='" + windowPreview + "'", component: LOG_COMPONENT)
-
-            // Find occurrences of "purchases" and pick the nearest percentage that follows
-            // Prefer a row that does NOT include "prior" or "previous"
-            let purchaseRegex = try? NSRegularExpression(pattern: #"purchases?"#, options: [.caseInsensitive])
-            let percentRegex = try? NSRegularExpression(pattern: #"([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%"#, options: [.caseInsensitive])
-
-            guard let pRx = purchaseRegex, let pctRx = percentRegex else { return nil }
-            let wRange = NSRange(window.startIndex..<window.endIndex, in: window)
-            let pMatches = pRx.matches(in: window, options: [], range: wRange)
-
-            AMLogging.log("PurchasesAPR: purchases matches=\(pMatches.count)", component: LOG_COMPONENT)
-
-            struct PCandidate { let value: Decimal; let scale: Int; let score: Int }
-            var pcands: [PCandidate] = []
-
-            for pm in pMatches {
-                // Build a local context after the purchases token
-                let ctxStart = pm.range.location
-                let ctxEnd = min(wRange.length, pm.range.location + pm.range.length + 220)
-                let ctxRange = NSRange(location: ctxStart, length: ctxEnd - ctxStart)
-                guard let swiftRange = Range(ctxRange, in: window) else { continue }
-                let ctx = String(window[swiftRange])
-                let ctxLower = ctx.lowercased()
-                let ctxPreview2 = String(ctxLower.prefix(220))
-                AMLogging.log("PurchasesAPR: context around 'purchases' token: '" + ctxPreview2 + "'", component: LOG_COMPONENT)
-
-                // Skip rewards/marketing and FX/fee contexts
-                let rewardWords = ["cash back", "cashback", "rewards", "points", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
-                let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
-                let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
-                if rewardWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to rewards context", component: LOG_COMPONENT); continue }
-                if fxWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to FX context", component: LOG_COMPONENT); continue }
-                if feeWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to fee context", component: LOG_COMPONENT); continue }
-                if ctxLower.contains("no interest") { AMLogging.log("PurchasesAPR: skip due to 'no interest' context", component: LOG_COMPONENT); continue }
-
-                let ctxNS = ctx as NSString
-                let localRange = NSRange(location: 0, length: ctxNS.length)
-                let allPctMatches = pctRx.matches(in: ctx, options: [], range: localRange)
-                AMLogging.log("PurchasesAPR: % matches in ctx=\(allPctMatches.count)", component: LOG_COMPONENT)
-
-                if let m = pctRx.firstMatch(in: ctx, options: [], range: localRange), m.numberOfRanges >= 2,
-                   let r = Range(m.range(at: 1), in: ctx) {
-                    let token = String(ctx[r])
-                    if var val = Decimal(string: token) {
-                        let scale = token.contains(".") ? (token.split(separator: ".").last?.count ?? 0) : 0
-                        if val > 1 { val /= 100 }
-                        // Score: penalize contexts containing prior/previous; otherwise boost
-                        var score = 0
-                        if ctxLower.contains("prior") || ctxLower.contains("previous") { score -= 2 } else { score += 3 }
-                        AMLogging.log("PurchasesAPR: candidate token=\(token) value=\(val) scale=\(scale) score=\(score)", component: LOG_COMPONENT)
-                        pcands.append(PCandidate(value: val, scale: scale, score: score))
+                    if let best = bestPurchasesAPR(in: window) {
+                        AMLogging.log("PurchasesAPR: selected value=\(best.value) scale=\(best.scale) from anchor '\(token)'", component: LOG_COMPONENT)
+                        return (best.value, best.scale)
                     }
-                } else {
-                    AMLogging.log("PurchasesAPR: no % following 'purchases' in ctx", component: LOG_COMPONENT)
+
+                    // Advance search start to find subsequent occurrences
+                    searchStart = range.upperBound
                 }
             }
 
-            if !pcands.isEmpty {
-                let sum = pcands.enumerated().map { idx, c in
-                    "#\(idx) val=\(c.value) scale=\(c.scale) score=\(c.score)"
-                }.joined(separator: "; ")
-                AMLogging.log("PurchasesAPR: candidates summary [\(sum)]", component: LOG_COMPONENT)
+            // Fallback: if anchors were unhelpful (or none found), scan the full document once
+            if !triedAnyAnchor {
+                AMLogging.log("PurchasesAPR: no anchor found — scanning full document", component: LOG_COMPONENT)
             } else {
-                AMLogging.log("PurchasesAPR: no candidates after filtering", component: LOG_COMPONENT)
+                AMLogging.log("PurchasesAPR: anchors yielded no candidates — scanning full document as fallback", component: LOG_COMPONENT)
             }
-
-            if let best = pcands.max(by: { (l, r) in
-                if l.score != r.score { return l.score < r.score }
-                return l.value > r.value
-            }) {
-                AMLogging.log("PurchasesAPR: selected value=\(best.value) scale=\(best.scale)", component: LOG_COMPONENT)
+            if let best = bestPurchasesAPR(in: doc) {
+                AMLogging.log("PurchasesAPR: selected value=\(best.value) scale=\(best.scale) from full document fallback", component: LOG_COMPONENT)
                 return (best.value, best.scale)
             }
+
+            AMLogging.log("PurchasesAPR: no candidates after filtering", component: LOG_COMPONENT)
             return nil
         }
 
@@ -557,22 +580,58 @@ struct PDFSummaryParser: StatementParser {
             if let aprInfo = extractAPRAndScale(from: desc) {
                 let hasPurchase = lower.contains("purchase") || lower.contains("purchases") || lower.contains("purchase apr")
                 let hasPenalty = lower.contains("penalty") || lower.contains("late payment") || lower.contains("late payment warning")
-                if hasPenalty || (!hasPurchase && aprInfo.value >= 0.28) {
-                    AMLogging.log("Row APR rejected due to context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
+                // Consider this row in a credit card context if the row itself looks like a CC summary
+                // OR if the document has CC indicators OR if the rolling section context indicates creditcard.
+                let rowIsCreditCardContext = isCreditCardSummary || hasCreditCardIndicators || (currentAccountContext == "creditcard")
+
+                if hasPenalty {
+                    AMLogging.log("Row APR rejected due to penalty context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
+                } else if rowIsCreditCardContext && aprInfo.value >= 0.30 && !hasPurchase {
+                    // Enforce purchases context for high APRs (>= 30%) in credit-card context
+                    AMLogging.log("Row APR rejected due to high APR (>= 30%) without purchases context in credit card row: value=\(aprInfo.value) desc='\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
+                } else if aprInfo.value >= 0.28 && !hasPurchase && !rowIsCreditCardContext {
+                    // Keep the high-APR guard for non-CC contexts unless explicitly tied to purchases
+                    AMLogging.log("Row APR rejected due to high APR without purchases/CC context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
                 } else {
-                    sb.interestRateAPR = aprInfo.value
-                    sb.interestRateScale = aprInfo.scale
-                    AMLogging.log("Row APR extracted from description: apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
+                    var sbApr = aprInfo.value
+                    var sbScale = aprInfo.scale
+                    // Sanity clamp for mis-OCR (e.g., '37' where '3.7' was intended) — only when not CC context
+                    if !rowIsCreditCardContext && sbApr > 0.6 {
+                        AMLogging.log("Row APR clamped/rejected due to implausible value outside CC context: value=\(sbApr)", component: LOG_COMPONENT)
+                    } else {
+                        sb.interestRateAPR = sbApr
+                        sb.interestRateScale = sbScale
+                        AMLogging.log("Row APR extracted from description: apr=\(sbApr) scale=\(sbScale) date=\(date)", component: LOG_COMPONENT)
+                    }
                 }
             }
             // If we didn't pick up APR from the row description, fall back to global APR detected from the page
             if sb.interestRateAPR == nil, let aprInfo = globalAPR {
-                if (aprInfo.value >= 0.28 && docHasPenaltyDoc) || (aprInfo.value >= 0.28 && !docHasPurchaseDoc) {
-                    AMLogging.log("Skipping global APR due to penalty-like value without purchases context: value=\(aprInfo.value)", component: LOG_COMPONENT)
+                let highAPR = aprInfo.value >= 0.28
+                let highAPR30 = aprInfo.value >= 0.30
+                let rowIsCreditCardContext = isCreditCardSummary || hasCreditCardIndicators || (currentAccountContext == "creditcard")
+                let hasPurchaseRow = lower.contains("purchase") || lower.contains("purchases") || lower.contains("purchase apr")
+
+                if rowIsCreditCardContext {
+                    // Enforce purchases context for high APRs (>= 30%) in credit-card rows
+                    if highAPR30 && !hasPurchaseRow {
+                        AMLogging.log("Skipping global APR (>= 30%) without purchases context in credit card row: value=\(aprInfo.value)", component: LOG_COMPONENT)
+                    } else if docHasPenaltyDoc && highAPR {
+                        AMLogging.log("Skipping global APR due to penalty-like value in penalty document context: value=\(aprInfo.value)", component: LOG_COMPONENT)
+                    } else {
+                        sb.interestRateAPR = aprInfo.value
+                        if sb.interestRateScale == nil { sb.interestRateScale = aprInfo.scale }
+                        AMLogging.log("Applied global APR to snapshot (CC context): apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
+                    }
                 } else {
-                    sb.interestRateAPR = aprInfo.value
-                    if sb.interestRateScale == nil { sb.interestRateScale = aprInfo.scale }
-                    AMLogging.log("Applied global APR to snapshot: apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
+                    // Preserve previous strict behavior for non-CC contexts
+                    if (highAPR && docHasPenaltyDoc) || (highAPR && !docHasPurchaseDoc) {
+                        AMLogging.log("Skipping global APR due to penalty-like value without purchases context: value=\(aprInfo.value)", component: LOG_COMPONENT)
+                    } else {
+                        sb.interestRateAPR = aprInfo.value
+                        if sb.interestRateScale == nil { sb.interestRateScale = aprInfo.scale }
+                        AMLogging.log("Applied global APR to snapshot: apr=\(aprInfo.value) scale=\(aprInfo.scale) date=\(date)", component: LOG_COMPONENT)
+                    }
                 }
             }
             // Prefer explicit Account column, fallback to description text; bias to credit card when CC context is present anywhere in the document

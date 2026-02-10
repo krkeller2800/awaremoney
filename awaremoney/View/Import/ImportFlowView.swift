@@ -175,6 +175,99 @@ struct ImportFlowView: View {
         }
     }
 
+    private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {
+        if snaps.isEmpty { return snaps }
+        var chosen: [Int: StagedBalance] = [:]
+        var order: [Int] = []
+        let cal = Calendar.current
+        for snap in snaps {
+            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = Int(dayStart)
+            if let existing = chosen[key] {
+                if existing.balance == .zero && snap.balance != .zero {
+                    chosen[key] = snap
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        return order.compactMap { chosen[$0] }
+    }
+    
+    private func handlePDFSnapshotImport(url: URL) {
+        guard let hint = vm.userSelectedDocHint else {
+            AMLogging.log("ImportFlowView: handlePDFSnapshotImport called without a userSelectedDocHint; falling back to default handler", component: "Import")
+            vm.handlePickedURL(url)
+            return
+        }
+        AMLogging.log("ImportFlowView: handlePDFSnapshotImport hint=\(hint) file=\(url.lastPathComponent)", component: "Import")
+        do {
+            let importer = StatementImporter()
+            // Prefer Transactions mode for PDF snapshot flows
+            let result = try importer.importStatement(from: url, prefer: .transactions)
+            AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
+
+            // Try PDFSummaryParser first for snapshot-style parsing
+            var staged: StagedImport
+            do {
+                let summaryParser = PDFSummaryParser()
+                staged = try summaryParser.parse(rows: result.rows, headers: result.headers)
+                AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+            } catch {
+                AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
+                let parsers = ImportViewModel.defaultParsers()
+                let matching = parsers.filter { $0.canParse(headers: result.headers) }
+                if let parser = matching.first {
+                    staged = try parser.parse(rows: result.rows, headers: result.headers)
+                    AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+                } else {
+                    AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
+                    vm.handlePickedURL(url)
+                    return
+                }
+            }
+
+            staged.sourceFileName = url.lastPathComponent
+
+            // Prefer non-zero snapshots when multiple exist for the same day
+            let before = staged.balances.count
+            staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+            AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
+
+            // Surface any importer warnings as an info message
+            if !result.warnings.isEmpty {
+                vm.infoMessage = result.warnings.joined(separator: "\n")
+            }
+
+            // Set the default account type based on the user hint
+            switch hint {
+            case .loan:
+                vm.newAccountType = .loan
+            case .creditCard:
+                vm.newAccountType = .creditCard
+            case .brokerage:
+                vm.newAccountType = .brokerage
+            case .checking:
+                vm.newAccountType = .checking
+            default:
+                break
+            }
+
+            // Apply liability safety net in credit-card context to relabel ambiguous balances
+            if hint == .creditCard {
+                vm.applyLiabilityLabelSafetyNetIfNeeded(to: &staged)
+            }
+
+            vm.staged = staged
+            vm.mappingSession = nil
+            AMLogging.log("ImportFlowView: staged import prepared (PDF snapshot) — balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+        } catch {
+            AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Falling back to default handler.", component: "Import")
+            vm.handlePickedURL(url)
+        }
+    }
+
     private static func prefillMappings(from rawHeaders: [String], sampleRows: [[String]]) -> [CSVColumnMapping.Field: String] {
         let normalized = rawHeaders.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
@@ -351,18 +444,21 @@ struct ImportFlowView: View {
                             Button("Loan Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .loan
+                                vm.newAccountType = .loan
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Bank Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .checking
+                                vm.newAccountType = .checking
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Brokerage Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .brokerage
+                                vm.newAccountType = .brokerage
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
@@ -459,7 +555,12 @@ struct ImportFlowView: View {
                 case .success(let urls):
                     if let url = urls.first {
                         AMLogging.log("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
-                        vm.handlePickedURL(url)
+                        let isPDF = url.pathExtension.lowercased() == "pdf"
+                        if isPDF {
+                            handlePDFSnapshotImport(url: url)
+                        } else {
+                            vm.handlePickedURL(url)
+                        }
                     }
                 case .failure:
                     break
@@ -530,18 +631,21 @@ struct ImportFlowView: View {
                             Button("Loan Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .loan
+                                vm.newAccountType = .loan
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Bank Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .checking
+                                vm.newAccountType = .checking
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
                             Button("Brokerage Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .brokerage
+                                vm.newAccountType = .brokerage
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
                                 isFileImporterPresented = true
                             }
@@ -592,71 +696,14 @@ struct ImportFlowView: View {
         } detail: {
             ipadDetailContent
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu("PDF") {
-                            Button("Loan Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .loan
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Bank Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .checking
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Brokerage Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .brokerage
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Credit Card Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .creditCard
-                                vm.newAccountType = .creditCard
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Divider()
-                            Button("User-defined…") {
-                                vm.startManualImport(kind: .creditCard)
-                                AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
-                            }
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu("CSV") {
-                            Button("Loan CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .loan
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Bank CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .checking
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Brokerage CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .brokerage
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                            Button("Credit Card CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .creditCard
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
-                                isFileImporterPresented = true
-                            }
-                        }
+                    ToolbarItem(placement: .principal) {
+                        Text(selectedBatchID == nil ? "" : "Update Transactions")
+                            .font(.largeTitle).bold()
                     }
                 }
-                .navigationTitle(selectedBatchID == nil ? "" : "Update Transactions")
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+//                .navigationTitle(selectedBatchID == nil ? "" : "Update Transactions")
+                .navigationBarTitleDisplayMode(.inline)
+                .frame(maxWidth: 640, maxHeight: .infinity, alignment: .topLeading)
         }
         // Shared modifiers remain attached to the container so behavior remains the same
         .onAppear {
@@ -727,7 +774,12 @@ struct ImportFlowView: View {
             case .success(let urls):
                 if let url = urls.first {
                     AMLogging.log("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
-                    vm.handlePickedURL(url)
+                    let isPDF = url.pathExtension.lowercased() == "pdf"
+                    if isPDF {
+                        handlePDFSnapshotImport(url: url)
+                    } else {
+                        vm.handlePickedURL(url)
+                    }
                 }
             case .failure:
                 break
