@@ -663,6 +663,200 @@ final class ImportViewModel: ObservableObject {
         return nil
     }
 
+    // Inserted static helper function here per instruction:
+    private static func extractConsolidatedBalancesFromPDF(at url: URL) -> [String: (beginning: Decimal?, ending: Decimal?)]? {
+        AMLogging.log("ImportViewModel: extractConsolidatedBalancesFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        guard let doc = PDFDocument(url: url) else { return nil }
+        let pageCount = doc.pageCount
+        let pagesToScan = min(3, pageCount)
+        var combined = ""
+        for i in 0..<pagesToScan {
+            if let page = doc.page(at: i), let s = page.string {
+                combined.append("\n"); combined.append(s)
+            }
+        }
+        let text = combined
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
+//        let lower = text.lowercased()
+
+        // Narrow search to the Consolidated Balance Summary section if present
+        let lines = text.components(separatedBy: CharacterSet.newlines)
+        let lowerLines = lines.map { $0.lowercased() }
+        let headerIdx = lowerLines.firstIndex(where: { $0.contains("consolidated balance summary") })
+        let windowStart = headerIdx ?? 0
+        let windowEnd = min(lines.count, (headerIdx ?? 0) + 120)
+
+        // Regex for currency with optional negative sign and optional currency symbol
+        let currencyToken = #"(\$?\s*[\-−]?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\$?\s*[\-−]?\s*[0-9]+(?:\.[0-9]{2})?)"#
+        let amountRegex = try? NSRegularExpression(pattern: currencyToken, options: [])
+
+        func parseAmount(_ s: String) -> Decimal? {
+            let cleaned = s
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "−", with: "-")
+                .replacingOccurrences(of: "\u{00A0}", with: "")
+                .replacingOccurrences(of: "\u{202F}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Decimal(string: cleaned)
+        }
+
+        var result: [String: (beginning: Decimal?, ending: Decimal?)] = [:]
+        let targets: [(needle: String, key: String)] = [("checking", "checking"), ("savings", "savings")]
+
+        for (needle, key) in targets {
+            // Find the first occurrence of label within the window
+            if let idx = (windowStart..<windowEnd).first(where: { lowerLines[$0].contains(needle) }) {
+                // Build a small window (this line + next 3) to capture amounts on same/adjacent lines
+                let subEnd = min(lines.count, idx + 4)
+                let windowText = lines[idx..<subEnd].joined(separator: " ")
+                if let re = amountRegex {
+                    let ns = windowText as NSString
+                    let range = NSRange(location: 0, length: ns.length)
+                    let matches = re.matches(in: windowText, options: [], range: range)
+                    // Extract the first two amount tokens as (begin, end)
+                    var tokens: [String] = []
+                    for m in matches {
+                        if m.numberOfRanges >= 2 {
+                            let r = m.range(at: 1)
+                            if r.location != NSNotFound { tokens.append(ns.substring(with: r)) }
+                        }
+                        if tokens.count >= 2 { break }
+                    }
+                    if !tokens.isEmpty {
+                        let begin = tokens.indices.contains(0) ? parseAmount(tokens[0]) : nil
+                        let end = tokens.indices.contains(1) ? parseAmount(tokens[1]) : nil
+                        // Only record if we found at least one amount
+                        if begin != nil || end != nil {
+                            result[key] = (beginning: begin, ending: end)
+                            AMLogging.log("ImportViewModel: consolidated row — label=\(key), begin=\(String(describing: begin)), end=\(String(describing: end))", component: "ImportViewModel")
+                        }
+                    }
+                }
+            }
+        }
+
+        if result.isEmpty {
+            AMLogging.log("ImportViewModel: extractConsolidatedBalancesFromPDF — no matches found", component: "ImportViewModel")
+            return nil
+        }
+        return result
+    }
+
+    // NEW static helper inserted here per instruction:
+    private static func extractSectionedBankBalancesFromPDF(at url: URL) -> [String: (beginning: Decimal?, ending: Decimal?)]? {
+        AMLogging.log("ImportViewModel: extractSectionedBankBalancesFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
+        guard let doc = PDFDocument(url: url) else { return nil }
+        let pageCount = doc.pageCount
+        let pagesToScan = min(3, pageCount)
+        var combined = ""
+        for i in 0..<pagesToScan {
+            if let page = doc.page(at: i), let s = page.string {
+                combined.append("\n"); combined.append(s)
+            }
+        }
+        let text = combined
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
+        let lines = text.components(separatedBy: CharacterSet.newlines)
+        let lowerLines = lines.map { $0.lowercased() }
+
+        // Amount pattern: require cents to avoid account numbers; support optional currency symbol and negative sign/parentheses
+        let amountToken = #"(\$?\s*[\-−]?\s*[0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}|\$?\s*[\-−]?\s*[0-9]+\.[0-9]{2})"#
+        let amountRegex = try? NSRegularExpression(pattern: amountToken, options: [])
+
+        func parseAmount(_ s: String) -> Decimal? {
+            var cleaned = s
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "−", with: "-")
+                .replacingOccurrences(of: "\u{00A0}", with: "")
+                .replacingOccurrences(of: "\u{202F}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            var isParenNegative = false
+            if cleaned.hasPrefix("(") && cleaned.hasSuffix(")") {
+                isParenNegative = true
+                cleaned = String(cleaned.dropFirst().dropLast())
+            }
+            guard var val = Decimal(string: cleaned) else { return nil }
+            if isParenNegative { val *= -1 }
+            return val
+        }
+
+        // Find sections for checking and savings; within each, locate beginning/ending balance amounts
+        var result: [String: (beginning: Decimal?, ending: Decimal?)] = [:]
+        let labels = ["checking", "savings"]
+        for label in labels {
+            // Prefer headings like "Checking Summary", but also accept a line that contains the label alone
+            let headingIdx = lowerLines.firstIndex(where: { $0.contains(label) && ($0.contains("summary") || true) })
+            guard let startIdx = headingIdx else { continue }
+            let searchEnd = min(lines.count, startIdx + 40)
+
+            var beginAmt: Decimal? = nil
+            var endAmt: Decimal? = nil
+
+            // Search for "Beginning Balance" and "Ending Balance" in the next ~40 lines
+            for i in startIdx..<searchEnd {
+                let l = lowerLines[i]
+                if l.contains("beginning balance") {
+                    // Amount on same line or next line
+                    if let re = amountRegex {
+                        let ns = lines[i] as NSString
+                        let r = NSRange(location: 0, length: ns.length)
+                        if let m = re.firstMatch(in: lines[i], options: [], range: r), m.numberOfRanges >= 2 {
+                            let gr = m.range(at: 1)
+                            if gr.location != NSNotFound { beginAmt = parseAmount(ns.substring(with: gr)) }
+                        } else if i + 1 < searchEnd {
+                            let ns2 = lines[i+1] as NSString
+                            let r2 = NSRange(location: 0, length: ns2.length)
+                            if let m2 = re.firstMatch(in: lines[i+1], options: [], range: r2), m2.numberOfRanges >= 2 {
+                                let gr2 = m2.range(at: 1)
+                                if gr2.location != NSNotFound { beginAmt = parseAmount(ns2.substring(with: gr2)) }
+                            }
+                        }
+                    }
+                }
+                if l.contains("ending balance") {
+                    if let re = amountRegex {
+                        let ns = lines[i] as NSString
+                        let r = NSRange(location: 0, length: ns.length)
+                        if let m = re.firstMatch(in: lines[i], options: [], range: r), m.numberOfRanges >= 2 {
+                            let gr = m.range(at: 1)
+                            if gr.location != NSNotFound { endAmt = parseAmount(ns.substring(with: gr)) }
+                        } else if i + 1 < searchEnd {
+                            let ns2 = lines[i+1] as NSString
+                            let r2 = NSRange(location: 0, length: ns2.length)
+                            if let m2 = re.firstMatch(in: lines[i+1], options: [], range: r2), m2.numberOfRanges >= 2 {
+                                let gr2 = m2.range(at: 1)
+                                if gr2.location != NSNotFound { endAmt = parseAmount(ns2.substring(with: gr2)) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if beginAmt != nil || endAmt != nil {
+                result[label] = (beginning: beginAmt, ending: endAmt)
+                AMLogging.log("ImportViewModel: sectioned row — label=\(label), begin=\(String(describing: beginAmt)), end=\(String(describing: endAmt))", component: "ImportViewModel")
+            }
+        }
+
+        if result.isEmpty {
+            AMLogging.log("ImportViewModel: extractSectionedBankBalancesFromPDF — no matches found", component: "ImportViewModel")
+            return nil
+        }
+        return result
+    }
+
     private static func extractLoanPaymentFromPDF(at url: URL) -> (amount: Decimal, dueDate: Date)? {
         AMLogging.log("ImportViewModel: extractLoanPaymentFromPDF start url=\(url.lastPathComponent)", component: "ImportViewModel")
         guard let doc = PDFDocument(url: url) else { return nil }
@@ -873,11 +1067,106 @@ final class ImportViewModel: ObservableObject {
 
                     let matchingParsers = self.parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
                     AMLogging.log("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
+
+                    let sampleForGuess = Array(rows.prefix(50))
+                    AMLogging.log("Guessing account type — file: \(url.lastPathComponent), headers: \(headers)", component: "ImportViewModel")
                     if let parser = self.parsers.first(where: { $0.canParse(headers: headers) }) {
                         AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
                         do {
                             var stagedImport = try parser.parse(rows: rows, headers: headers)
                             stagedImport.sourceFileName = url.lastPathComponent
+
+                            // Augment consolidated bank statements: add missing account rows (e.g., Savings) from PDF header table
+                            if ext == "pdf" {
+                                let probeURL = self.lastPickedLocalURL ?? url
+                                if let consolidated = Self.extractConsolidatedBalancesFromPDF(at: probeURL) {
+                                    // Determine existing labels and dates from staged balances
+                                    let existingLabels: Set<String> = Set(stagedImport.balances.compactMap { self.normalizeSourceLabel($0.sourceAccountLabel) ?? "default" })
+                                    let datesSorted = stagedImport.balances.map { $0.asOfDate }.sorted()
+                                    let beginDate = datesSorted.first
+                                    let endDate = datesSorted.last
+
+                                    var addedCount = 0
+                                    for (rawLabel, pair) in consolidated {
+                                        let norm = self.normalizeSourceLabel(rawLabel) ?? rawLabel
+                                        // Only add if we don't already have balances for this label
+                                        if existingLabels.contains(norm) { continue }
+
+                                        // Add beginning balance snapshot if available and we have a begin date
+                                        if let b = pair.beginning, let d = beginDate {
+                                            let snap = StagedBalance(
+                                                asOfDate: d,
+                                                balance: b,
+                                                interestRateAPR: nil,
+                                                interestRateScale: nil,
+                                                include: true,
+                                                sourceAccountLabel: norm
+                                            )
+                                            stagedImport.balances.append(snap)
+                                            addedCount &+= 1
+                                        }
+                                        // Add ending balance snapshot if available and we have an end date
+                                        if let e = pair.ending, let d = endDate {
+                                            let snap = StagedBalance(
+                                                asOfDate: d,
+                                                balance: e,
+                                                interestRateAPR: nil,
+                                                interestRateScale: nil,
+                                                include: true,
+                                                sourceAccountLabel: norm
+                                            )
+                                            stagedImport.balances.append(snap)
+                                            addedCount &+= 1
+                                        }
+                                    }
+                                    if addedCount > 0 {
+                                        AMLogging.log("ImportViewModel: augmented consolidated balances — added \(addedCount) snapshots from PDF summary table", component: "ImportViewModel")
+                                    }
+                                }
+                            }
+
+                            // Augment sectioned bank statements (no consolidated table): detect Checking/Savings sections
+                            if ext == "pdf" {
+                                let probeURL = self.lastPickedLocalURL ?? url
+                                if let sectioned = Self.extractSectionedBankBalancesFromPDF(at: probeURL) {
+                                    let existingLabels: Set<String> = Set(stagedImport.balances.compactMap { self.normalizeSourceLabel($0.sourceAccountLabel) ?? "default" })
+                                    let datesSorted = stagedImport.balances.map { $0.asOfDate }.sorted()
+                                    let beginDate = datesSorted.first
+                                    let endDate = datesSorted.last
+
+                                    var addedOrLabeled = 0
+
+                                    func labelOrAdd(label norm: String, amount: Decimal?, at date: Date?) {
+                                        guard let amt = amount, let d = date else { return }
+                                        // Try to find an existing snapshot with same date and amount but missing/default label
+                                        if let idx = stagedImport.balances.firstIndex(where: { $0.asOfDate == d && $0.balance == amt && ((self.normalizeSourceLabel($0.sourceAccountLabel) ?? "default") == "default") }) {
+                                            stagedImport.balances[idx].sourceAccountLabel = norm
+                                            addedOrLabeled &+= 1
+                                        } else if !existingLabels.contains(norm) {
+                                            let snap = StagedBalance(
+                                                asOfDate: d,
+                                                balance: amt,
+                                                interestRateAPR: nil,
+                                                interestRateScale: nil,
+                                                include: true,
+                                                sourceAccountLabel: norm
+                                            )
+                                            stagedImport.balances.append(snap)
+                                            addedOrLabeled &+= 1
+                                        }
+                                    }
+
+                                    for (raw, pair) in sectioned {
+                                        let norm = self.normalizeSourceLabel(raw) ?? raw
+                                        labelOrAdd(label: norm, amount: pair.beginning, at: beginDate)
+                                        labelOrAdd(label: norm, amount: pair.ending, at: endDate)
+                                    }
+
+                                    if addedOrLabeled > 0 {
+                                        AMLogging.log("ImportViewModel: augmented sectioned balances — labeled/added \(addedOrLabeled) snapshots from section headers", component: "ImportViewModel")
+                                    }
+                                }
+                            }
 
                             // Fallback: If this is a PDF and we didn't get a usable balance snapshot, try extracting the header summary (New Balance / Minimum Payment / Due Date)
                             if ext == "pdf" {
@@ -933,94 +1222,26 @@ final class ImportViewModel: ObservableObject {
                                     }
                                 }
                             }
-
-                            // After summary fallback, attempt APR extraction if still missing
-                            if ext == "pdf" {
-                                let allMissingAPR = stagedImport.balances.allSatisfy { $0.interestRateAPR == nil }
-                                AMLogging.log("ImportViewModel: allMissingAPR=\(allMissingAPR)", component: "ImportViewModel")
-                                if allMissingAPR {
-                                    if let localURL = self.lastPickedLocalURL, let (apr, scale) = Self.extractAPRFromPDF(at: localURL) {
-                                        for idx in stagedImport.balances.indices {
-                                            if stagedImport.balances[idx].interestRateAPR == nil {
-                                                stagedImport.balances[idx].interestRateAPR = apr
-                                                stagedImport.balances[idx].interestRateScale = scale
-                                            }
-                                        }
-                                        AMLogging.log("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (local)", component: "ImportViewModel")
-                                    } else if let (apr, scale) = Self.extractAPRFromPDF(at: url) {
-                                        for idx in stagedImport.balances.indices {
-                                            if stagedImport.balances[idx].interestRateAPR == nil {
-                                                stagedImport.balances[idx].interestRateAPR = apr
-                                                stagedImport.balances[idx].interestRateScale = scale
-                                            }
-                                        }
-                                        AMLogging.log("ImportViewModel: applied APR=\(apr) scale=\(scale) to \(stagedImport.balances.count) snapshots (original)", component: "ImportViewModel")
-                                    }
-                                }
-                            }
-
-                            // Attempt to extract loan payment amount and due date for loan statements
-                            if ext == "pdf" {
-                                let probeURL = self.lastPickedLocalURL ?? url
-                                if let loan = Self.extractLoanPaymentFromPDF(at: probeURL) {
-                                    self.detectedTypicalPaymentByLabel["loan"] = loan.amount
-                                    if self.detectedTypicalPaymentByLabel["default"] == nil { self.detectedTypicalPaymentByLabel["default"] = loan.amount }
-                                    self.detectedDueDateByLabel["loan"] = loan.dueDate
-                                    AMLogging.log("ImportViewModel: captured loan payment from PDF — amount=\(loan.amount), dueDate=\(loan.dueDate)", component: "ImportViewModel")
-                                }
-                            }
-
-                            AMLogging.log("Parser '\(String(describing: type(of: parser)))' produced — tx: \(stagedImport.transactions.count), holdings: \(stagedImport.holdings.count), balances: \(stagedImport.balances.count)", component: "ImportViewModel")
-
-                            if !stagedImport.balances.isEmpty {
-                                AMLogging.log("Staged balances detail (pre-save):", component: "ImportViewModel")
-                                for b in stagedImport.balances {
-                                    let raw = b.sourceAccountLabel ?? "(nil)"
-                                    let norm = self.normalizeSourceLabel(b.sourceAccountLabel) ?? "default"
-                                    AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
-                                }
-                            }
-
-                             do {
-                                 let paymentLike = stagedImport.transactions.filter {
-                                     let p = $0.payee.lowercased()
-                                     let m = ($0.memo ?? "").lowercased()
-                                     let keywords = [
-                                         "estimated monthly payment (loan)",
-                                         "typical payment (loan)",
-                                         "minimum payment",
-                                         "minimum payment due",
-                                         "minimum amount due",
-                                         "min payment",
-                                         "min. payment",
-                                         "payment due",
-                                         "amount due",
-                                         "current amount due"
-                                     ]
-                                     return keywords.contains { k in p.contains(k) || m.contains(k) }
-                                 }
-                                 if paymentLike.isEmpty {
-                                     AMLogging.log("ImportViewModel: no payment-like transactions found post-parse", component: "ImportViewModel")
-                                 } else {
-                                     for t in paymentLike {
-                                         AMLogging.log("ImportViewModel: payment-like transaction post-parse — date: \(t.datePosted), amount: \(t.amount), payee: \(t.payee), memo: \(t.memo ?? "")", component: "ImportViewModel")
-                                     }
-                                 }
-                             }
-
-                            if stagedImport.transactions.isEmpty && (!stagedImport.holdings.isEmpty || !stagedImport.balances.isEmpty) {
-                                AMLogging.log("Note: Parser produced no transactions but did produce holdings/balances. This is expected for statement-summary files.", component: "ImportViewModel")
-                            }
-
-                            // Guess account type
-                            let sampleForGuess = Array(rows.prefix(50))
+                            
                             AMLogging.log("Guessing account type — file: \(stagedImport.sourceFileName), headers: \(headers)", component: "ImportViewModel")
                             let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
                             AMLogging.log("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
-                            // Use userSelectedDocHint to prevent override of user choice
-                            if stagedImport.suggestedAccountType == nil, let guessedType = guessedType {
-                                stagedImport.suggestedAccountType = guessedType
+
+                            // Force the suggested type to match the user's selection when provided; never override the user's tap
+                            if let userHint = self.userSelectedDocHint {
+                                stagedImport.suggestedAccountType = userHint
+                                self.newAccountType = userHint
+                                AMLogging.log("Forcing suggested account type to user-selected hint: \(userHint.rawValue)", component: "ImportViewModel")
+                            } else if let currentSuggested = stagedImport.suggestedAccountType, currentSuggested != self.newAccountType {
+                                // If the user has already chosen a type in the UI, prefer it over any parser/guess suggestion
+                                AMLogging.log("Overriding suggested account type '\(currentSuggested.rawValue)' with current selection '\(self.newAccountType.rawValue)'", component: "ImportViewModel")
+                                stagedImport.suggestedAccountType = self.newAccountType
+                            } else if stagedImport.suggestedAccountType == nil {
+                                // Default the suggestion to the current selection so the batch reflects what the user chose
+                                stagedImport.suggestedAccountType = self.newAccountType
+                                AMLogging.log("Defaulting suggested account type to current selection '\(self.newAccountType.rawValue)'", component: "ImportViewModel")
                             }
+
                             if let suggested = stagedImport.suggestedAccountType {
                                 if self.userSelectedDocHint == nil {
                                     self.newAccountType = suggested
@@ -1051,7 +1272,7 @@ final class ImportViewModel: ObservableObject {
                                 }
                                 let dropped = before - filtered.count
                                 if dropped > 0 {
-                                    let keptLabels = filtered.map { self.normalizeSourceLabel($0.sourceAccountLabel) ?? "default" }
+                                    let keptLabels = filtered.map { balance in self.normalizeSourceLabel(balance.sourceAccountLabel) ?? "default" }
                                     AMLogging.log("Staging filter: liability import — dropped \(dropped) of \(before) non-liability balances. Kept labels: \(keptLabels)", component: "ImportViewModel")
                                 } else {
                                     AMLogging.log("Staging filter: liability import — no non-liability balances to drop", component: "ImportViewModel")
@@ -1219,7 +1440,7 @@ final class ImportViewModel: ObservableObject {
     }
 
     // Normalize a raw source account label or description into a canonical key used in import grouping
-     func normalizeSourceLabel(_ raw: String?) -> String? {
+    nonisolated func normalizeSourceLabel(_ raw: String?) -> String? {
         guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
         if s.contains("checking") { return "checking" }
         if s.contains("savings") { return "savings" }
@@ -2008,6 +2229,28 @@ final class ImportViewModel: ObservableObject {
             return .brokerage
         }
 
+        // 1.5) Bank signals (checking/savings, beginning/ending balances, deposits/withdrawals)
+        let bankHeaderSignals = ["checking", "savings", "beginning balance", "ending balance", "deposits", "withdrawals", "account"]
+        let hasBankHeader = lowerHeaders.contains { h in bankHeaderSignals.contains { sig in h == sig || h.contains(sig) } }
+        let bankRowSignals = ["checking account", "savings account", "beginning balance", "ending balance", "deposits", "withdrawals"]
+        var bankHits = 0
+        let descIdx = probableDescriptionIndex()
+        AMLogging.log("GuessAccountType: probable description index=\(String(describing: descIdx))", component: "ImportViewModel")
+        for row in sampleRows {
+            let text: String = {
+                if let i = descIdx, row.indices.contains(i) { return row[i] } else { return row.joined(separator: " ") }
+            }().lowercased()
+            if bankRowSignals.contains(where: { text.contains($0) }) {
+                bankHits += 1
+                if bankHits >= 1 { break }
+            }
+        }
+        AMLogging.log("GuessAccountType: hasBankHeader=\(hasBankHeader), bank keyword hits=\(bankHits)", component: "ImportViewModel")
+        if hasBankHeader || bankHits >= 1 {
+            AMLogging.log("GuessAccountType: returning .checking due to bank signals", component: "ImportViewModel")
+            return .checking
+        }
+
         // 2) Brokerage signals in row descriptions (buy/sell/dividend/options, etc.)
         // Try to find a likely description column
         func probableDescriptionIndex() -> Int? {
@@ -2017,8 +2260,6 @@ final class ImportViewModel: ObservableObject {
             }
             return nil
         }
-        let descIdx = probableDescriptionIndex()
-        AMLogging.log("GuessAccountType: probable description index=\(String(describing: descIdx))", component: "ImportViewModel")
         let brokerageKeywords = [
             "buy", "bought", "sell", "sold", "dividend", "reinvest", "reinvestment", "interest", "cap gain", "capital gain",
             "distribution", "split", "spinoff", "spin-off", "option", "call", "put", "exercise", "assign", "assignment", "expiration",
@@ -2035,7 +2276,7 @@ final class ImportViewModel: ObservableObject {
             }
         }
         AMLogging.log("GuessAccountType: brokerage keyword hits=\(brokerageHits)", component: "ImportViewModel")
-        if brokerageHits >= 2 || (brokerageHits == 1 && sampleRows.count <= 5) {
+        if brokerageHits >= 2 {
             AMLogging.log("GuessAccountType: returning .brokerage due to keyword hits", component: "ImportViewModel")
             return .brokerage
         }

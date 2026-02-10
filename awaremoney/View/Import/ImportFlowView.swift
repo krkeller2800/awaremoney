@@ -3,6 +3,7 @@ import SwiftData
 import UniformTypeIdentifiers
 import Combine
 import UIKit
+import StoreKit
 
 struct ImportFlowView: View {
     @Environment(\.modelContext) private var modelContext
@@ -16,6 +17,9 @@ struct ImportFlowView: View {
     @State private var lastKnownBatchIDs: Set<UUID> = []
     @State private var hasLoadedBatchesOnce: Bool = false
     @State private var suppressNextAutoNavigation: Bool = false
+
+    @EnvironmentObject private var purchases: PurchaseManager
+    @State private var showPaywall = false
 
     private enum PickerKind { case csv, pdf }
 
@@ -339,11 +343,78 @@ struct ImportFlowView: View {
                         Text("Imports")
                     }
                 }
-
+                .navigationTitle("Import")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu("Import PDF") {
+                            Button("Loan Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .loan
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Bank Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .checking
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Brokerage Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .brokerage
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Credit Card Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .creditCard
+                                vm.newAccountType = .creditCard
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Divider()
+                            Button("User-defined…") {
+                                vm.startManualImport(kind: .creditCard)
+                                AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu("Import CSV") {
+                            Button("Loan CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .loan
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Bank CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .checking
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Brokerage CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .brokerage
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Credit Card CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .creditCard
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                        }
+                    }
+                }
                 hintBar
             }
-            .navigationTitle("Import")
-            .onAppear { AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
+            .onAppear {
+                AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+                showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+            }
             .task { await loadBatches() }
             .refreshable { await loadBatches() }
             .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
@@ -374,6 +445,11 @@ struct ImportFlowView: View {
                     AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
                 }
             }
+            .onChange(of: purchases.isPremiumUnlocked) { newValue in
+                if newValue {
+                    showPaywall = false
+                }
+            }
             .fileImporter(
                 isPresented: $isFileImporterPresented,
                 allowedContentTypes: allowedTypesForCurrentPicker(),
@@ -392,101 +468,64 @@ struct ImportFlowView: View {
             .sheet(isPresented: isSheetPresentedBinding) {
                 sheetContent()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu("Import PDF") {
-                        Button("Loan Statement") {
-                            pickerKind = .pdf
-                            vm.userSelectedDocHint = .loan
-                            AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Bank Statement") {
-                            pickerKind = .pdf
-                            vm.userSelectedDocHint = .checking
-                            AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Brokerage Statement") {
-                            pickerKind = .pdf
-                            vm.userSelectedDocHint = .brokerage
-                            AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Credit Card Statement") {
-                            pickerKind = .pdf
-                            vm.userSelectedDocHint = .creditCard
-                            vm.newAccountType = .creditCard
-                            AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Divider()
-                        Button("User-defined…") {
-                            vm.startManualImport(kind: .creditCard)
-                            AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
-                        }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
+                    .environmentObject(purchases)
+            }
+        }
+        .navigationDestination(item: $phoneRoute) { route in
+            ImportBatchDetailView(batchID: route.id)
+        }
+    }
+
+    @ViewBuilder
+    private var ipadSidebar: some View {
+        if batches.isEmpty {
+            emptyStateView
+        } else {
+            List(selection: $selectedBatchID) {
+                Section {
+                    ForEach(orderedBatches, id: \.persistentModelID) { batch in
+                        BatchRowContent(batch: batch)
+                            .tag(batch.persistentModelID)
                     }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu("Import CSV") {
-                        Button("Loan CSV") {
-                            pickerKind = .csv
-                            vm.userSelectedDocHint = .loan
-                            AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Bank CSV") {
-                            pickerKind = .csv
-                            vm.userSelectedDocHint = .checking
-                            AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Brokerage CSV") {
-                            pickerKind = .csv
-                            vm.userSelectedDocHint = .brokerage
-                            AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                        Button("Credit Card CSV") {
-                            pickerKind = .csv
-                            vm.userSelectedDocHint = .creditCard
-                            AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
-                            isFileImporterPresented = true
-                        }
-                    }
+                } header: {
+                    Text("Imports")
+                } footer: {
+                    hintListFooter
                 }
             }
-            .navigationDestination(item: $phoneRoute) { route in
-                ImportBatchDetailView(batchID: route.id)
+            .refreshable { await loadBatches() }
+            .listStyle(.sidebar)
+        }
+    }
+
+    @ViewBuilder
+    private var ipadDetailContent: some View {
+        Group {
+            if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
+                ImportBatchDetailView(batch: batch)
+                    .environment(\.modelContext, modelContext)
+                    .id(batch.persistentModelID)
+                    .onAppear {
+                        AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "Import")
+                    }
+            } else {
+                ContentUnavailableView(
+                    "Select an Import",
+                    systemImage: "tray",
+                    description: Text("Choose an import from the sidebar.")
+                )
             }
         }
     }
 
     private var ipadBody: some View {
-        HStack(spacing: 0) {
-            // LEFT: Sidebar NavigationStack with toolbar and title
-            NavigationStack {
-                List(selection: $selectedBatchID) {
-                    Section {
-                        if batches.isEmpty {
-                            emptyStateView
-                        } else {
-                            ForEach(orderedBatches, id: \.persistentModelID) { batch in
-                                BatchRowContent(batch: batch)
-                                    .tag(batch.persistentModelID)
-                            }
-                        }
-                    } header: {
-                        Text("Imports")
-                    } footer: {
-                        hintListFooter
-                    }
-                }
-                .refreshable { await loadBatches() }
-                .listStyle(.sidebar)
+        NavigationSplitView {
+            ipadSidebar
                 .navigationTitle("Import")
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
+                    ToolbarItem(placement: .topBarLeading) {
                         Menu("PDF") {
                             Button("Loan Statement") {
                                 pickerKind = .pdf
@@ -520,7 +559,7 @@ struct ImportFlowView: View {
                             }
                         }
                     }
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Menu("CSV") {
                             Button("Loan CSV") {
                                 pickerKind = .csv
@@ -549,35 +588,81 @@ struct ImportFlowView: View {
                         }
                     }
                 }
-            }
-            .frame(minWidth: 300, idealWidth: 340, maxWidth: 400)
-
-            Divider()
-
-            // RIGHT: Detail NavigationStack so it has its own title
-            NavigationStack {
-                Group {
-                    if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
-                        ImportBatchDetailView(batch: batch)
-                            .environment(\.modelContext, modelContext)
-                            .id(batch.persistentModelID)
-                            .onAppear {
-                                AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "Import")
+                .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
+        } detail: {
+            ipadDetailContent
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu("PDF") {
+                            Button("Loan Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .loan
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                                isFileImporterPresented = true
                             }
-                    } else {
-                        ContentUnavailableView(
-                            "Select an Import",
-                            systemImage: "tray",
-                            description: Text("Choose an import from the sidebar.")
-                        )
+                            Button("Bank Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .checking
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Brokerage Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .brokerage
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Credit Card Statement") {
+                                pickerKind = .pdf
+                                vm.userSelectedDocHint = .creditCard
+                                vm.newAccountType = .creditCard
+                                AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Divider()
+                            Button("User-defined…") {
+                                vm.startManualImport(kind: .creditCard)
+                                AMLogging.log("ImportFlowView: started manual user-defined import (credit card)", component: "Import")
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu("CSV") {
+                            Button("Loan CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .loan
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Bank CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .checking
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Brokerage CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .brokerage
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                            Button("Credit Card CSV") {
+                                pickerKind = .csv
+                                vm.userSelectedDocHint = .creditCard
+                                AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                isFileImporterPresented = true
+                            }
+                        }
                     }
                 }
                 .navigationTitle(selectedBatchID == nil ? "" : "Update Transactions")
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        // Attach shared modifiers to the outer container so behavior remains the same
-        .onAppear { AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import") }
+        // Shared modifiers remain attached to the container so behavior remains the same
+        .onAppear {
+            AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+            showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
             Task { await loadBatches() }
         }
@@ -592,7 +677,6 @@ struct ImportFlowView: View {
                 AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
             } else {
                 AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
-                // Ensure mapping session is also cleared so the sheet dismisses
                 vm.mappingSession = nil
                 suppressNextAutoNavigation = true
             }
@@ -609,7 +693,6 @@ struct ImportFlowView: View {
         .onChange(of: batches) {
             if isPad {
                 let preferred = preferredSelectionID(in: batches)
-                // If the current selection disappeared, or is nil, select the preferred batch
                 if let sel = selectedBatchID, !batches.contains(where: { $0.persistentModelID == sel }) {
                     selectedBatchID = preferred
                 } else if selectedBatchID == nil {
@@ -618,7 +701,6 @@ struct ImportFlowView: View {
                           let current = batches.first(where: { $0.persistentModelID == sel }),
                           current.transactions.isEmpty && current.balances.isEmpty && current.holdings.isEmpty,
                           let pref = preferred, pref != sel {
-                    // If a non-empty batch exists, prefer it over an empty selection
                     selectedBatchID = pref
                 }
             }
@@ -629,6 +711,11 @@ struct ImportFlowView: View {
                 AMLogging.log("ImportFlowView: selectedBatchID changed pid=\(pid) resolved=\(resolved != nil ? "yes" : "no")", component: "Import")
             } else {
                 AMLogging.log("ImportFlowView: selectedBatchID cleared", component: "Import")
+            }
+        }
+        .onChange(of: purchases.isPremiumUnlocked) { newValue in
+            if newValue {
+                showPaywall = false
             }
         }
         .fileImporter(
@@ -648,6 +735,10 @@ struct ImportFlowView: View {
         }
         .sheet(isPresented: isSheetPresentedBinding) {
             sheetContent()
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(purchases)
         }
         .task { await loadBatches() }
     }
@@ -700,5 +791,6 @@ struct ImportFlowView: View {
 
 #Preview {
     ImportFlowView()
+        .environmentObject(PurchaseManager.shared)
 }
 

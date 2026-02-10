@@ -33,7 +33,7 @@ struct awaremoneyApp: App {
         }
         AMLogging.log("Application Support directory path: \(appSupport.path)", component: "App")
         if let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
-            AMLogging.log("Documents directory path: \(documents.path)", component: "App")
+            AMLogging.always("Documents directory path: \(documents.path)", component: "App")
         }
         let storeURL = appSupport.appendingPathComponent("awaremoney.store")
 
@@ -45,6 +45,7 @@ struct awaremoneyApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environmentObject(PurchaseManager.shared)
         }
         .modelContainer(container)
     }

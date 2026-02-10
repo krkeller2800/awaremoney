@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var purchases: PurchaseManager
+    @State private var showPaywall: Bool = false
 
     private let appIconName = "AppIcon"
     private let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
@@ -32,46 +34,68 @@ struct AboutView: View {
 
     private let supportURL = URL(string: "mailto:support@komakode.com?subject=Aware%20Money%20support")!
     private let privacyPolicyURL = URL(string: "https://komakode.com/Privacy%20Policy")!
-    private let acknowledgementsURL = URL(string: "https://acknowledgements.example.com")!
+    private let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Image(uiImage: UIImage(named: "aware") ?? UIImage())
-                    .resizable()
-                    .frame(width: 100, height: 100)
-                    .cornerRadius(20)
-                    .shadow(radius: 5)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 10) {
+                    Image(uiImage: UIImage(named: "aware") ?? UIImage())
+                        .resizable()
+                        .frame(width: 100, height: 100)
+                        .cornerRadius(20)
+                        .shadow(radius: 5)
 
-                Text(appName)
-                    .font(.title)
-                    .fontWeight(.bold)
+                    Text(appName)
+                        .font(.title)
+                        .fontWeight(.bold)
 
-                Text(versionBuild)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    Text(versionBuild)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
 
-                Text(compileDate)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
+                    Text(compileDate)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
 
-                VStack(spacing: 16) {
-                    LinkButton(title: "Support", url: supportURL)
-                    LinkButton(title: "Privacy Policy", url: privacyPolicyURL)
-                    LinkButton(title: "Acknowledgements", url: acknowledgementsURL)
+                    TrialBanner()
+
+                    VStack(spacing: 10) {
+                        LinkButton(title: "Support", url: supportURL)
+                        LinkButton(title: "Privacy Policy", url: privacyPolicyURL)
+                        LinkButton(title: "Terms of Use", url: termsOfUseURL)
+
+                        Button {
+                            showPaywall = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "star.fill")
+                                Text("Upgrade to Premium")
+                                    .font(.headline)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.top, 10)
+
+                    Spacer()
+
+                    Button("Dismiss") {
+                        dismiss()
+                    }
+                    .padding(.vertical)
                 }
-                .padding(.top, 20)
-
-                Spacer()
-
-                Button("Dismiss") {
-                    dismiss()
-                }
-                .padding(.vertical)
+                .padding(.horizontal)
+//                .padding(.top, 8)
             }
-            .padding()
             .navigationTitle("About")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(purchases)
         }
     }
 
@@ -101,3 +125,4 @@ struct AboutView: View {
 #Preview {
     AboutView()
 }
+

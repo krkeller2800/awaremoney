@@ -47,6 +47,7 @@ struct AccountsListView: View {
                             }
                         }
                     }
+                    .safeAreaInset(edge: .top) { TrialBanner() }
                     .navigationTitle("Accounts")
                     .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 420)
                     .toolbar {
@@ -132,6 +133,7 @@ struct AccountsListView: View {
                             }
                         }
                     }
+                    .safeAreaInset(edge: .top) { TrialBanner() }
                     .navigationTitle("Accounts")
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {

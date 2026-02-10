@@ -15,134 +15,176 @@ struct DebtDashboardView: View {
 
     var body: some View {
         Group {
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                NavigationSplitView {
-                    Group {
-                        if liabilities.isEmpty {
-                            ContentUnavailableView("No debts yet", systemImage: "creditcard")
-                        } else {
-                            List(selection: $selection) {
-                                Section("Institutions") {
-                                    ForEach(liabilities, id: \.id) { acct in
-                                        HStack(alignment: .firstTextBaseline) {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(acct.name)
-                                                    .font(.headline)
-                                                Text(acct.type == .loan ? "Loan" : "Credit Card")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            VStack(alignment: .trailing, spacing: 4) {
-                                                Text(currentBalance(for: acct))
-                                                    .font(.headline)
-                                                    .foregroundStyle(.red)
-                                                if let payoff = payoffDate(for: acct) {
-                                                    Text("Payoff: \(payoff, style: .date)")
-                                                        .font(.caption)
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                            }
-                                        }
-                                        .tag(acct.id)
-                                    }
-                                }
-                            }
-                            .refreshable { await load() }
-                        }
-                    }
-                    .navigationTitle("Debt")
-                    .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 340)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Menu("Plan") {
-                                NavigationLink(destination: DebtPlannerView()) {
-                                    Text("Planning")
-                                }
-                                NavigationLink(destination: DebtSummaryView()) {
-                                    Text("Summary")
-                                }
-                            }
-                        }
-                    }
-                } detail: {
-                    if let sel = selection, let acct = liabilities.first(where: { $0.id == sel }) {
-                        HStack {
-                            Spacer(minLength: 0)
-                            DebtDetailView(account: acct)
-                                .frame(maxWidth: 700)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 16)
-                        .safeAreaPadding()
-                        .toolbar {
-                            ToolbarItem(placement: .principal) {
-                                Text(acct.name)
-                                    .font(.largeTitle).bold()
-                            }
-                        }
-                        .navigationBarTitleDisplayMode(.inline)
-                    } else if liabilities.isEmpty {
-                        ContentUnavailableView("No debts yet", systemImage: "creditcard")
-                    } else {
-                        ContentUnavailableView("Select a debt", systemImage: "creditcard")
-                    }
-                }
-                .task { await load() }
+            if isPad {
+                iPadBody
             } else {
-                NavigationStack {
-                    Group {
-                        if liabilities.isEmpty {
-                            ContentUnavailableView("No debts yet", systemImage: "creditcard")
-                        } else {
-                            List {
-                                Section("Institutions") {
-                                    ForEach(liabilities, id: \.id) { acct in
-                                        NavigationLink(destination: DebtDetailView(account: acct)) {
-                                            HStack(alignment: .firstTextBaseline) {
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    Text(acct.name)
-                                                        .font(.headline)
-                                                    Text(acct.type == .loan ? "Loan" : "Credit Card")
-                                                        .font(.caption)
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                                Spacer()
-                                                VStack(alignment: .trailing, spacing: 4) {
-                                                    Text(currentBalance(for: acct))
-                                                        .font(.headline)
-                                                        .foregroundStyle(.red)
-                                                    if let payoff = payoffDate(for: acct) {
-                                                        Text("Payoff: \(payoff, style: .date)")
-                                                            .font(.caption)
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            .refreshable { await load() }
-                        }
-                    }
-                    .navigationTitle("Debt")
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Menu("Plan") {
-                                NavigationLink(destination: DebtPlannerView()) {
-                                    Text("Planning")
-                                }
-                                NavigationLink(destination: DebtSummaryView()) {
-                                    Text("Summary")
-                                }
-                            }
-                        }
-                    }
-                }
-                .task { await load() }
+                iPhoneBody
             }
         }
+    }
+
+    private var isPad: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
+
+    @ViewBuilder
+    private var iPadBody: some View {
+        NavigationSplitView {
+            iPadSidebar
+        } detail: {
+            iPadDetail
+        }
+//        .safeAreaInset(edge: .top) { TrialBanner() }
+        .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 340)
+//        .toolbar {
+//            ToolbarItem(placement: .navigationBarLeading) {
+//                Menu("Plan") {
+//                    NavigationLink(destination: DebtPlannerView()) {
+//                        Text("Planning")
+//                    }
+//                    NavigationLink(destination: DebtSummaryView()) {
+//                        Text("Summary")
+//                    }
+//                }
+//            }
+//        }
+        .task { await load() }
+    }
+
+    @ViewBuilder
+    private var iPadDetail: some View {
+        if let sel = selection, let acct = liabilities.first(where: { $0.id == sel }) {
+            HStack {
+                Spacer(minLength: 0)
+                DebtDetailView(account: acct)
+                    .frame(maxWidth: 700)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .safeAreaPadding()
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(acct.name)
+                        .font(.largeTitle).bold()
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+        } else if liabilities.isEmpty {
+            ContentUnavailableView("No debts yet", systemImage: "creditcard")
+        } else {
+            ContentUnavailableView("Select a debt", systemImage: "creditcard")
+        }
+    }
+
+    @ViewBuilder
+    private var iPadSidebar: some View {
+        if liabilities.isEmpty {
+            ContentUnavailableView("No debts yet", systemImage: "creditcard")
+//                .safeAreaInset(edge: .top) { TrialBanner() }
+                .navigationTitle("Debt")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Menu("Plan") {
+                            NavigationLink(destination: DebtPlannerView()) {
+                                Text("Planning")
+                            }
+                            NavigationLink(destination: DebtSummaryView()) {
+                                Text("Summary")
+                            }
+                        }
+                    }
+                }
+        } else {
+            List(selection: $selection) {
+                Section("Institutions") {
+                    ForEach(liabilities, id: \.id) { acct in
+                        debtRowContent(for: acct)
+                            .tag(acct.id)
+                    }
+                }
+            }
+            .refreshable { await load() }
+            .navigationTitle("Debt")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu("Plan") {
+                        NavigationLink(destination: DebtPlannerView()) {
+                            Text("Planning")
+                        }
+                        NavigationLink(destination: DebtSummaryView()) {
+                            Text("Summary")
+                        }
+                    }
+                }
+            }
+//            .safeAreaInset(edge: .top) { TrialBanner() }
+        }
+    }
+
+    @ViewBuilder
+    private func debtRowContent(for acct: Account) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(acct.name)
+                    .font(.headline)
+                Text(acct.type == .loan ? "Loan" : "Credit Card")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(currentBalance(for: acct))
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                if let payoff = payoffDate(for: acct) {
+                    Text("Payoff: \(payoff, style: .date)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var iPhoneBody: some View {
+        NavigationStack {
+            Group {
+                if liabilities.isEmpty {
+                    ContentUnavailableView("No debts yet", systemImage: "creditcard")
+//                        .safeAreaInset(edge: .top) { TrialBanner() }
+                } else {
+                    List {
+                        Section("Institutions") {
+                            ForEach(liabilities, id: \.id) { acct in
+                                NavigationLink(destination: DebtDetailView(account: acct)) {
+                                    debtRowContent(for: acct)
+                                }
+                            }
+                        }
+                    }
+                    .refreshable { await load() }
+//                    .safeAreaInset(edge: .top) { TrialBanner() }
+                }
+            }
+            .navigationTitle("Debt")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Menu("Plan") {
+                        NavigationLink(destination: DebtPlannerView()) {
+                            Text("Planning")
+                        }
+                        NavigationLink(destination: DebtSummaryView()) {
+                            Text("Summary")
+                        }
+                    }
+                }
+            }
+        }
+        .task { await load() }
     }
 
     @Sendable private func load() async {
@@ -334,6 +376,13 @@ struct DebtDetailView: View {
             }
         }
         .navigationTitle(account.name)
+        .task(id: account.id) {
+            AMLogging.log("DebtDetailView: account changed to \(account.id) — reinitializing state", component: "DebtDetailView")
+            initializeState()
+            // Reset transient UI state when switching accounts
+            focusedField = nil
+            showProjection = false
+        }
         .onAppear { initializeState() }
         .onChange(of: aprInput) { saveTerms() }
         .onChange(of: paymentInput) { saveTerms() }

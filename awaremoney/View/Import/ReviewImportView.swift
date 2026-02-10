@@ -131,8 +131,8 @@ struct ReviewImportView: View {
                             .keyboardType(.decimalPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .onChange(of: typicalPaymentInput) {
-                                typicalPaymentParsed = parseCurrencyInput(typicalPaymentInput)
+                            .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
+                                typicalPaymentParsed = parseCurrencyInput(newValue)
                             }
                     }
                     Text("Used for payoff estimates and budget projections.")
@@ -231,6 +231,7 @@ struct ReviewImportView: View {
             if let balances = vm.staged?.balances, !balances.isEmpty {
                 Section("Balance Snapshots") {
                     ForEach(balances.indices, id: \.self) { idx in
+                        let b = balances[idx]
                         HStack(alignment: .top) {
                             Toggle("", isOn: balanceIncludeBinding(for: idx))
                                 .labelsHidden()
@@ -246,7 +247,7 @@ struct ReviewImportView: View {
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
                                 }
-                                if let label = vm.staged?.balances[idx].sourceAccountLabel, !label.isEmpty {
+                                if let label = b.sourceAccountLabel, !label.isEmpty {
                                     Text(label.capitalized)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -255,8 +256,8 @@ struct ReviewImportView: View {
                                         .background(Color.secondary.opacity(0.12))
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                 }
-                                if let apr = vm.staged?.balances[idx].interestRateAPR {
-                                    Text("APR: \(formatAPR(apr, scale: vm.staged?.balances[idx].interestRateScale))")
+                                if let apr = b.interestRateAPR {
+                                    Text("APR: \(formatAPR(apr, scale: b.interestRateScale))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -287,8 +288,8 @@ struct ReviewImportView: View {
                 }
             }
         }
-        .onChange(of: selectedAccountId) { 
-            AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: selectedAccountId))", component: "ReviewImportView")
+        .onChange(of: selectedAccountId, initial: false) { _, newValue in
+            AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
     }
@@ -389,22 +390,43 @@ struct ReviewImportView: View {
 
     private func transactionIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
-            get: { vm.staged?.transactions[index].include ?? true },
-            set: { vm.staged?.transactions[index].include = $0 }
+            get: {
+                guard let txs = vm.staged?.transactions, index < txs.count else { return true }
+                return txs[index].include
+            },
+            set: { newValue in
+                guard var staged = vm.staged, index < staged.transactions.count else { return }
+                staged.transactions[index].include = newValue
+                vm.staged = staged
+            }
         )
     }
 
     private func holdingIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
-            get: { vm.staged?.holdings[index].include ?? true },
-            set: { vm.staged?.holdings[index].include = $0 }
+            get: {
+                guard let holds = vm.staged?.holdings, index < holds.count else { return true }
+                return holds[index].include
+            },
+            set: { newValue in
+                guard var staged = vm.staged, index < staged.holdings.count else { return }
+                staged.holdings[index].include = newValue
+                vm.staged = staged
+            }
         )
     }
 
     private func balanceIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
-            get: { vm.staged?.balances[index].include ?? true },
-            set: { vm.staged?.balances[index].include = $0 }
+            get: {
+                guard let balances = vm.staged?.balances, index < balances.count else { return true }
+                return balances[index].include
+            },
+            set: { newValue in
+                guard var staged = vm.staged, index < staged.balances.count else { return }
+                staged.balances[index].include = newValue
+                vm.staged = staged
+            }
         )
     }
 
@@ -469,7 +491,9 @@ struct ReviewImportView: View {
     private func balanceDateBinding(for index: Int) -> Binding<Date> {
         Binding(
             get: {
-                if let d = vm.staged?.balances[index].asOfDate { return d }
+                if let balances = vm.staged?.balances, index < balances.count {
+                    return balances[index].asOfDate
+                }
                 return Date()
             },
             set: { newVal in
@@ -483,7 +507,8 @@ struct ReviewImportView: View {
     private func balanceAmountTextBinding(for index: Int) -> Binding<String> {
         Binding(
             get: {
-                guard let amount = vm.staged?.balances[index].balance else { return "" }
+                guard let balances = vm.staged?.balances, index < balances.count else { return "" }
+                let amount = balances[index].balance
                 let nf = NumberFormatter()
                 nf.numberStyle = .decimal
                 nf.minimumFractionDigits = 0

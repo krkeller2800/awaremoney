@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import PDFKit
 
 struct ImportBatchDetailView: View {
     let batchID: UUID
@@ -146,15 +147,14 @@ struct ImportBatchDetailView: View {
     @ViewBuilder private func balancesSection(for batch: ImportBatch) -> some View {
         if !balances.isEmpty {
             Section("Balances") {
-                ForEach(balances.indices, id: \.self) { idx in
-                    let snap = balances[idx]
+                ForEach(balances, id: \.id) { snap in
                     HStack(alignment: .top) {
                         Toggle("", isOn: Binding(get: {
                             !(snap.isExcluded)
                         }, set: { newVal in
-                            balances[idx].isExcluded = !newVal
-                            AMLogging.log("BalanceSnapshot toggle changed id=\(balances[idx].id) excluded=\(balances[idx].isExcluded)", component: "ImportBatchDetailView")
-                            balances[idx].isUserModified = true
+                            snap.isExcluded = !newVal
+                            AMLogging.log("BalanceSnapshot toggle changed id=\(snap.id) excluded=\(snap.isExcluded)", component: "ImportBatchDetailView")
+                            snap.isUserModified = true
                             try? modelContext.save()
                             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
                         }))
@@ -163,11 +163,11 @@ struct ImportBatchDetailView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 12) {
                                 DatePicker("As of", selection: Binding(get: {
-                                    balances[idx].asOfDate
+                                    snap.asOfDate
                                 }, set: { newDate in
-                                    balances[idx].asOfDate = newDate
-                                    AMLogging.log("BalanceSnapshot date changed id=\(balances[idx].id) newDate=\(newDate)", component: "ImportBatchDetailView")
-                                    balances[idx].isUserModified = true
+                                    snap.asOfDate = newDate
+                                    AMLogging.log("BalanceSnapshot date changed id=\(snap.id) newDate=\(newDate)", component: "ImportBatchDetailView")
+                                    snap.isUserModified = true
                                     try? modelContext.save()
                                 }), displayedComponents: .date)
                                 .labelsHidden()
@@ -177,13 +177,13 @@ struct ImportBatchDetailView: View {
                                     nf.numberStyle = .decimal
                                     nf.minimumFractionDigits = 0
                                     nf.maximumFractionDigits = 2
-                                    return nf.string(from: NSDecimalNumber(decimal: balances[idx].balance)) ?? "\(balances[idx].balance)"
+                                    return nf.string(from: NSDecimalNumber(decimal: snap.balance)) ?? "\(snap.balance)"
                                 }, set: { newText in
                                     let cleaned = newText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
                                     if let dec = Decimal(string: cleaned) {
-                                        balances[idx].balance = dec
-                                        AMLogging.log("BalanceSnapshot amount changed id=\(balances[idx].id) newBalance=\(balances[idx].balance)", component: "ImportBatchDetailView")
-                                        balances[idx].isUserModified = true
+                                        snap.balance = dec
+                                        AMLogging.log("BalanceSnapshot amount changed id=\(snap.id) newBalance=\(snap.balance)", component: "ImportBatchDetailView")
+                                        snap.isUserModified = true
                                         try? modelContext.save()
                                     }
                                 }))
@@ -192,8 +192,8 @@ struct ImportBatchDetailView: View {
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                             }
-                            if let apr = balances[idx].interestRateAPR {
-                                Text("APR: \(formatAPR(apr, scale: balances[idx].interestRateScale))")
+                            if let apr = snap.interestRateAPR {
+                                Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -201,10 +201,10 @@ struct ImportBatchDetailView: View {
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
-                            AMLogging.log("Deleting BalanceSnapshot id=\(balances[idx].id)", component: "ImportBatchDetailView")
-                            let toDelete = balances[idx]
+                            AMLogging.log("Deleting BalanceSnapshot id=\(snap.id)", component: "ImportBatchDetailView")
+                            let toDelete = snap
                             modelContext.delete(toDelete)
-                            balances.remove(at: idx)
+                            balances.removeAll { $0.id == toDelete.id }
                             try? modelContext.save()
                             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
                         } label: {
@@ -434,6 +434,59 @@ struct ImportBatchDetailView: View {
         )
     }
 
+    // When multiple BalanceSnapshot entries exist for the same account and calendar day,
+    // prefer a non-zero balance over a zero value. This helps avoid persisting spurious $0
+    // balances that sometimes appear alongside the real statement balance in parsed PDFs.
+    private func deduplicateBalancesPreferringNonZeroSameDay(_ snaps: [BalanceSnapshot]) -> [BalanceSnapshot] {
+        if snaps.isEmpty { return snaps }
+        var chosen: [String: BalanceSnapshot] = [:]
+        var order: [String] = []
+        let cal = Calendar.current
+        for snap in snaps {
+            let accountKey = snap.account?.id.uuidString ?? "nil"
+            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = "\(accountKey)|\(Int(dayStart))"
+            if let existing = chosen[key] {
+                if existing.balance == .zero && snap.balance != .zero {
+                    // Replace a zero-valued pick with a non-zero one
+                    chosen[key] = snap
+                } else {
+                    // Keep the existing choice (either both zero or both non-zero)
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        // Preserve the first-seen order of keys
+        return order.compactMap { chosen[$0] }
+    }
+
+    // When multiple staged balance entries exist for the same calendar day,
+    // prefer a non-zero balance over a zero value. We dedupe by day only here
+    // because staged balances may not yet be tied to a persisted Account.
+    private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {
+        if snaps.isEmpty { return snaps }
+        var chosen: [Int: StagedBalance] = [:]
+        var order: [Int] = []
+        let cal = Calendar.current
+        for snap in snaps {
+            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = Int(dayStart)
+            if let existing = chosen[key] {
+                if existing.balance == .zero && snap.balance != .zero {
+                    chosen[key] = snap
+                } else {
+                    // keep existing
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        return order.compactMap { chosen[$0] }
+    }
+
     private func onFileImportResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
@@ -443,74 +496,6 @@ struct ImportBatchDetailView: View {
         case .failure(let error):
             AMLogging.error("fileImporter failed — \(error.localizedDescription)", component: "ImportBatchDetailView")
         }
-    }
-
-    @MainActor private func load() async {
-        do {
-            let batchDesc = FetchDescriptor<ImportBatch>(predicate: #Predicate { $0.id == batchID })
-            let batches = try modelContext.fetch(batchDesc)
-            let found = batches.first
-            AMLogging.log("ImportBatchDetailView.load: fetch batch found=\(found != nil ? "yes" : "no") for id=\(batchID)", component: "ImportBatchDetailView")
-            self.batch = found
-            guard found != nil else { return }
-
-            // Fetch related items
-            let txPred = #Predicate<Transaction> { $0.importBatch?.id == batchID }
-            var txDesc = FetchDescriptor<Transaction>(predicate: txPred)
-            txDesc.sortBy = [SortDescriptor(\Transaction.datePosted, order: .reverse)]
-            let txs = try modelContext.fetch(txDesc)
-
-            let balPred = #Predicate<BalanceSnapshot> { $0.importBatch?.id == batchID }
-            var balDesc = FetchDescriptor<BalanceSnapshot>(predicate: balPred)
-            balDesc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
-            let bals = try modelContext.fetch(balDesc)
-
-            let holdPred = #Predicate<HoldingSnapshot> { $0.importBatch?.id == batchID }
-            let holdDesc = FetchDescriptor<HoldingSnapshot>(predicate: holdPred)
-            let holds = try modelContext.fetch(holdDesc)
-
-            AMLogging.log("ImportBatchDetailView.load: tx=\(txs.count) balances=\(bals.count) holdings=\(holds.count)", component: "ImportBatchDetailView")
-            self.transactions = txs
-            self.balances = bals
-            self.holdings = holds
-        } catch {
-            self.transactions = []
-            self.balances = []
-            self.holdings = []
-        }
-    }
-
-    @MainActor
-    private func deleteBatch() {
-        guard let batch else { return }
-        AMLogging.log("Hard delete initiated for batchID=\(batch.id) label=\(batch.label)", component: "ImportBatchDetailView")
-        do {
-            // Clear lists immediately to prevent the UI from touching deleted objects
-            self.transactions = []
-            self.balances = []
-            self.holdings = []
-            self.batch = nil
-
-            try ImportViewModel.hardDelete(batch: batch, context: modelContext)
-            dismiss()
-        } catch {
-            AMLogging.error("Hard delete failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
-        }
-    }
-
-    private func format(amount: Decimal) -> String {
-        let nf = NumberFormatter()
-        nf.numberStyle = .currency
-        nf.currencyCode = "USD"
-        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
-    }
-
-    private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
-        let nf = NumberFormatter()
-        nf.numberStyle = .percent
-        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s }
-        else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
-        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
     }
 
     @MainActor
@@ -531,13 +516,46 @@ struct ImportBatchDetailView: View {
                 // Prefer Summary mode for PDFs so we can capture balances and APR/interest details from statements
                 rowsAndHeaders = try PDFStatementExtractor.parse(url: url)
                 AMLogging.log("PDF extractor returned rows=\(rowsAndHeaders.0.count) headers=\(rowsAndHeaders.1)", component: "ImportBatchDetailView")
+
+                // Long-term APR reliability: also extract raw text and append the Interest Charges section as a synthetic row
+                if let fullText = PDFTextExtractor.extractText(from: url) {
+                    AMLogging.log("PDF raw text length=\(fullText.count)", component: "ImportBatchDetailView")
+                    var augmentedRows = rowsAndHeaders.0
+
+                    if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: fullText) {
+                        AMLogging.log("Interest Charges section found — length=\(interestSection.count)", component: "ImportBatchDetailView")
+                        augmentedRows.append([interestSection])
+                    } else {
+                        AMLogging.log("Interest Charges section not found in raw text", component: "ImportBatchDetailView")
+                    }
+
+                    if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
+                        AMLogging.log("Balance Summary section found — length=\(balanceSection.count)", component: "ImportBatchDetailView")
+                        augmentedRows.append([balanceSection])
+                    } else {
+                        AMLogging.log("Balance Summary section not found in raw text", component: "ImportBatchDetailView")
+                    }
+
+                    parsedRows = augmentedRows
+                    parsedHeaders = rowsAndHeaders.1
+                } else {
+                    AMLogging.log("PDF raw text unavailable — proceeding without synthetic sections", component: "ImportBatchDetailView")
+                    parsedRows = rowsAndHeaders.0
+                    parsedHeaders = rowsAndHeaders.1
+                }
             } else {
                 let data = try Data(contentsOf: url)
                 rowsAndHeaders = try CSV.read(data: data)
                 AMLogging.log("CSV read returned rows=\(rowsAndHeaders.0.count) headers=\(rowsAndHeaders.1)", component: "ImportBatchDetailView")
+                parsedRows = rowsAndHeaders.0
+                parsedHeaders = rowsAndHeaders.1
             }
-            let (rows, headers) = rowsAndHeaders
-            AMLogging.log("replaceBatch parsed — rows=\(rows.count) headers=\(headers)", component: "ImportBatchDetailView")
+
+            AMLogging.log("replaceBatch parsed — rows=\(parsedRows.count) headers=\(parsedHeaders)", component: "ImportBatchDetailView")
+
+            let rows = parsedRows
+            let headers = parsedHeaders
+            AMLogging.log("replaceBatch using augmented inputs — rows=\(rows.count) headers=\(headers)", component: "ImportBatchDetailView")
 
             // Attempt to find parser using default parsers first
             let parsers: [StatementParser] = ImportViewModel.defaultParsers()
@@ -573,6 +591,12 @@ struct ImportBatchDetailView: View {
                             try? modelContext.save()
                         }
                     }
+
+                    // Normalize balances: if multiple snapshots exist for the same account and day,
+                    // prefer the non-zero balance over a zero-valued duplicate.
+                    let beforeBalanceCount = staged.balances.count
+                    staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+                    AMLogging.log("Balance de-duplication (default parser): before=\(beforeBalanceCount) after=\(staged.balances.count)", component: "ImportBatchDetailView")
 
                     // Conflict detection (transactions): user-modified items whose staged values differ
                     var conflicts: [TxConflict] = []
@@ -660,6 +684,12 @@ struct ImportBatchDetailView: View {
                         }
                     }
 
+                    // Normalize balances: if multiple snapshots exist for the same account and day,
+                    // prefer the non-zero balance over a zero-valued duplicate.
+                    let beforeBalanceCount = staged.balances.count
+                    staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+                    AMLogging.log("Balance de-duplication (mapped CSV): before=\(beforeBalanceCount) after=\(staged.balances.count)", component: "ImportBatchDetailView")
+
                     // Conflict detection (transactions): user-modified items whose staged values differ
                     var conflicts: [TxConflict] = []
                     let existingMap: [String: Transaction] = (self.batch?.transactions ?? []).reduce(into: [:]) { acc, tx in
@@ -713,8 +743,8 @@ struct ImportBatchDetailView: View {
 
             // No default parser and no mapping matched - require user mapping
             AMLogging.log("No parser or mapping matched — presenting mapping editor", component: "ImportBatchDetailView")
-            self.pendingCSVHeaders = headers
-            self.pendingCSVRows = rows
+            self.pendingCSVHeaders = parsedHeaders
+            self.pendingCSVRows = parsedRows
             self.showMappingSheet = true
         } catch {
             AMLogging.error("Replace Batch failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
@@ -730,6 +760,75 @@ struct ImportBatchDetailView: View {
                 self.showSummaryAlert = true
             }
         }
+    }
+
+    @MainActor
+    private func load() async {
+        do {
+            let batchDesc = FetchDescriptor<ImportBatch>(predicate: #Predicate { $0.id == batchID })
+            let batches = try modelContext.fetch(batchDesc)
+            let found = batches.first
+            AMLogging.log("ImportBatchDetailView.load: fetch batch found=\(found != nil ? "yes" : "no") for id=\(batchID)", component: "ImportBatchDetailView")
+            self.batch = found
+            guard found != nil else { return }
+
+            // Fetch related items
+            let txPred = #Predicate<Transaction> { $0.importBatch?.id == batchID }
+            var txDesc = FetchDescriptor<Transaction>(predicate: txPred)
+            txDesc.sortBy = [SortDescriptor(\Transaction.datePosted, order: .reverse)]
+            let txs = try modelContext.fetch(txDesc)
+
+            let balPred = #Predicate<BalanceSnapshot> { $0.importBatch?.id == batchID }
+            var balDesc = FetchDescriptor<BalanceSnapshot>(predicate: balPred)
+            balDesc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
+            let bals = try modelContext.fetch(balDesc)
+
+            let holdPred = #Predicate<HoldingSnapshot> { $0.importBatch?.id == batchID }
+            let holdDesc = FetchDescriptor<HoldingSnapshot>(predicate: holdPred)
+            let holds = try modelContext.fetch(holdDesc)
+
+            AMLogging.log("ImportBatchDetailView.load: tx=\(txs.count) balances=\(bals.count) holdings=\(holds.count)", component: "ImportBatchDetailView")
+            self.transactions = txs
+            self.balances = bals
+            self.holdings = holds
+        } catch {
+            self.transactions = []
+            self.balances = []
+            self.holdings = []
+        }
+    }
+
+    @MainActor
+    private func deleteBatch() {
+        guard let batch else { return }
+        AMLogging.log("Hard delete initiated for batchID=\(batch.id) label=\(batch.label)", component: "ImportBatchDetailView")
+        do {
+            // Clear lists immediately to prevent the UI from touching deleted objects
+            self.transactions = []
+            self.balances = []
+            self.holdings = []
+            self.batch = nil
+
+            try ImportViewModel.hardDelete(batch: batch, context: modelContext)
+            dismiss()
+        } catch {
+            AMLogging.error("Hard delete failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
+        }
+    }
+
+    private func format(amount: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.currencyCode = "USD"
+        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
+    private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .percent
+        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s }
+        else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
     }
 }
 

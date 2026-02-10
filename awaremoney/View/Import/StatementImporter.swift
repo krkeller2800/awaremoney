@@ -11,7 +11,30 @@ struct StatementImporter {
 
         case .pdf:
             let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: mode)
-            return gatePDF(rows: rows, headers: headers, mode: mode)
+            var augmentedRows = rows
+
+            if let fullText = PDFTextExtractor.extractText(from: url) {
+                AMLogging.log("StatementImporter: PDF raw text length=\(fullText.count)", component: "StatementImporter")
+
+                if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: fullText) {
+                    AMLogging.log("StatementImporter: Interest Charges section found — length=\(interestSection.count)", component: "StatementImporter")
+                    augmentedRows.append([interestSection])
+                } else {
+                    AMLogging.log("StatementImporter: Interest Charges section not found in raw text", component: "StatementImporter")
+                }
+
+                if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
+                    AMLogging.log("StatementImporter: Balance Summary section found — length=\(balanceSection.count)", component: "StatementImporter")
+                    augmentedRows.append([balanceSection])
+                } else {
+                    AMLogging.log("StatementImporter: Balance Summary section not found — appending full text fallback", component: "StatementImporter")
+                    augmentedRows.append([fullText])
+                }
+            } else {
+                AMLogging.log("StatementImporter: PDF raw text unavailable — proceeding without synthetic sections", component: "StatementImporter")
+            }
+
+            return gatePDF(rows: augmentedRows, headers: headers, mode: mode)
 
         case .unknown:
             throw ImportError.unknownFormat

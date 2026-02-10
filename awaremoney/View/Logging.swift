@@ -147,7 +147,7 @@ enum AMLogging {
         logger.debug("\(message()) — \(function, privacy: .public):\(line)")
     }
 
-    /// Always-on informational logs at notice level. Not gated by `AMLogConfig.verbose`.
+    /// Always-on informational logs at notice level. Not gated by `AMLogConfig.verbose` or per-category overrides.
     static func always(
         _ message: @autoclosure @escaping () -> String,
         component: String? = nil,
@@ -156,7 +156,6 @@ enum AMLogging {
         line: Int = #line
     ) {
         let comp = component ?? (file as NSString).lastPathComponent
-        guard AMLogConfig.isCategoryEnabled(for: comp) else { return }
         let logger = logger(for: comp)
         logger.notice("\(message()) — \(function, privacy: .public):\(line)")
     }
