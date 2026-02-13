@@ -30,7 +30,13 @@ extension ImportViewModel {
         }
         
         if areAllNonLiability {
+            let sentinel = "__typical_payment__"
             for i in staged.balances.indices {
+                let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lbl == sentinel {
+                    AMLogging.log("SafetyNet: skipping relabel for typical payment sentinel at index=\(i)")
+                    continue
+                }
                 staged.balances[i].sourceAccountLabel = "creditcard"
             }
             self.staged = staged
@@ -59,8 +65,19 @@ extension ImportViewModel {
             return nonLiabilityLabels.contains(norm) || norm == "default"
         }
         if areAllNonLiability {
+            let sentinel = "__typical_payment__"
             for i in staged.balances.indices {
-                staged.balances[i].sourceAccountLabel = "credit card"
+                let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lbl == sentinel {
+                    AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:): skipping relabel for typical payment sentinel at index=\(i)", component: "ImportViewModel")
+                    continue
+                }
+                // Normalize liability labels to a consistent token
+                if self.userSelectedDocHint == .loan {
+                    staged.balances[i].sourceAccountLabel = "loan"
+                } else {
+                    staged.balances[i].sourceAccountLabel = "creditcard"
+                }
             }
             self.infoMessage = "Mapped statement balances to a credit card based on your selection."
             AMLogging.log("applyLiabilityLabelSafetyNetIfNeeded(to:) applied: all balances relabeled as credit card", component: "ImportViewModel")

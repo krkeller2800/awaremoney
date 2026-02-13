@@ -177,15 +177,18 @@ struct ImportFlowView: View {
 
     private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {
         if snaps.isEmpty { return snaps }
-        var chosen: [Int: StagedBalance] = [:]
-        var order: [Int] = []
+        var chosen: [String: StagedBalance] = [:]
+        var order: [String] = []
         let cal = Calendar.current
         for snap in snaps {
+            let label = (snap.sourceAccountLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
-            let key = Int(dayStart)
+            let key = "\(label)|\(Int(dayStart))"
             if let existing = chosen[key] {
                 if existing.balance == .zero && snap.balance != .zero {
                     chosen[key] = snap
+                } else {
+                    // keep existing (either both zero or both non-zero)
                 }
             } else {
                 chosen[key] = snap
@@ -760,8 +763,8 @@ struct ImportFlowView: View {
                 AMLogging.log("ImportFlowView: selectedBatchID cleared", component: "Import")
             }
         }
-        .onChange(of: purchases.isPremiumUnlocked) { newValue in
-            if newValue {
+        .onChange(of: purchases.isPremiumUnlocked) {
+            if purchases.isPremiumUnlocked {
                 showPaywall = false
             }
         }

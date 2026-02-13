@@ -39,6 +39,7 @@ struct StagedBalance: Identifiable, Hashable {
     var balance: Decimal
     var interestRateAPR: Decimal? = nil
     var interestRateScale: Int? = nil
+    var typicalPaymentAmount: Decimal? = nil
     var include: Bool = true
     var sourceAccountLabel: String? = nil
 }

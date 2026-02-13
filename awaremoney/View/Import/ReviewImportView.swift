@@ -58,6 +58,13 @@ struct ReviewImportView: View {
                 }
             }
         }
+        .onAppear {
+            let hasStaged = (vm.staged != nil)
+            let balancesCount = vm.staged?.balances.count ?? 0
+            let hasSentinel = vm.staged?.balances.contains(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "__typical_payment__" }) ?? false
+            AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
+            seedTypicalPaymentFromSentinelIfNeeded()
+        }
     }
     
     private var mainList: some View {
@@ -316,6 +323,7 @@ struct ReviewImportView: View {
                 .frame(maxWidth: .infinity)
 
                 Button {
+                    AMLogging.log("ReviewImportView: Approve tapped — typicalPaymentInput='\(typicalPaymentInput)' parsedField=\(String(describing: parseCurrencyInput(typicalPaymentInput))) typicalPaymentParsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                     // Diagnostics: log institution state at approve time
                     let guess = vm.guessInstitutionName(from: staged.sourceFileName)
                     let selected = selectedAccountId.flatMap { id in accounts.first(where: { $0.id == id }) }
@@ -323,8 +331,44 @@ struct ReviewImportView: View {
                     // NOTE: Typical payment entered here is currently not persisted; expose a VM API to pass it if needed.
                     vm.applyLiabilityLabelSafetyNetIfNeeded()
                     AMLogging.log("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
-                    do { try vm.approveAndSave(context: modelContext) }
-                    catch { vm.errorMessage = error.localizedDescription }
+                    do {
+                        try vm.approveAndSave(context: modelContext)
+                        AMLogging.log("ReviewImportView: post-save, attempting to persist Typical Payment — candidate=\(String(describing: (typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput))))", component: "ReviewImportView")
+                        // Persist Typical Payment to the chosen account if available
+                        if let pay = typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput), pay > 0 {
+                            // Resolve target account: selected existing or best-effort newly created
+                            let targetAccount: Account? = {
+                                if let sel = selectedAccountId {
+                                    return accounts.first(where: { $0.id == sel })
+                                } else {
+                                    // Best effort: find the most recently created liability account matching selection
+                                    let all = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+                                    let liabilities = all.filter { $0.type == .creditCard || $0.type == .loan }
+                                    // Prefer matching institution name when available
+                                    let inst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let candidates: [Account] = liabilities.sorted { $0.createdAt > $1.createdAt }
+                                    if let byInst = candidates.first(where: { ($0.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(inst) == .orderedSame && $0.type == vm.newAccountType }) {
+                                        return byInst
+                                    }
+                                    return candidates.first
+                                }
+                            }()
+                            if let acct = targetAccount {
+                                var terms = acct.loanTerms ?? LoanTerms()
+                                terms.paymentAmount = pay
+                                acct.loanTerms = terms
+                                try? modelContext.save()
+                                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                AMLogging.log("ReviewImportView: Persisted Typical Payment to account id=\(acct.id) amount=\(pay)", component: "ReviewImportView")
+                            } else {
+                                AMLogging.log("ReviewImportView: Unable to resolve account to persist Typical Payment", component: "ReviewImportView")
+                            }
+                        } else {
+                            AMLogging.log("ReviewImportView: Not persisting Typical Payment — value is nil or non-positive", component: "ReviewImportView")
+                        }
+                    } catch {
+                        vm.errorMessage = error.localizedDescription
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "checkmark.circle.fill")
@@ -456,6 +500,35 @@ struct ReviewImportView: View {
                 typicalPaymentInput = formatAmountForInput(hint)
                 typicalPaymentParsed = hint
             }
+        }
+
+        // Seed Typical Payment from a sentinel balance embedded by PDFSummaryParser (top-level init and fallback here)
+        seedTypicalPaymentFromSentinelIfNeeded()
+    }
+    
+    private func seedTypicalPaymentFromSentinelIfNeeded() {
+        AMLogging.log("ReviewImportView: seedTypicalPaymentFromSentinelIfNeeded start — input='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed)) hasStaged=\(vm.staged != nil)", component: "ReviewImportView")
+        guard typicalPaymentInput.isEmpty || typicalPaymentParsed == nil else {
+            AMLogging.log("ReviewImportView: skipping seeding — input already present or parsed value exists", component: "ReviewImportView")
+            return
+        }
+        guard var staged = vm.staged else {
+            AMLogging.log("ReviewImportView: no staged import available; cannot seed typical payment", component: "ReviewImportView")
+            return
+        }
+        let sentinelLabel = "__typical_payment__"
+        if let idx = staged.balances.firstIndex(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sentinelLabel }) {
+            let amt = staged.balances[idx].balance
+            AMLogging.log("ReviewImportView: sentinel found at index=\(idx) amount=\(amt)", component: "ReviewImportView")
+            // Remove the sentinel so it doesn't show as a balance
+            staged.balances.remove(at: idx)
+            vm.staged = staged
+            // Apply to UI fields
+            typicalPaymentInput = formatAmountForInput(amt)
+            typicalPaymentParsed = amt
+            AMLogging.log("ReviewImportView: Seeded Typical Payment from sentinel — amount=\(amt)", component: "ReviewImportView")
+        } else {
+            AMLogging.log("ReviewImportView: sentinel not found in staged balances; no seeding performed", component: "ReviewImportView")
         }
     }
 

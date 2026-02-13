@@ -21,6 +21,7 @@ struct PDFSummaryParser: StatementParser {
         // Build a header map for robust access
         let map = headerMap(headers)
         var balances: [StagedBalance] = []
+        var typicalPaymentSentinelInserted = false
 
         AMLogging.log("PDFSummaryParser.parse: rows=\(rows.count) headers=\(headers)", component: LOG_COMPONENT)
         let docProbe = rows.flatMap { $0 }.joined(separator: " ").lowercased()
@@ -43,6 +44,10 @@ struct PDFSummaryParser: StatementParser {
             // Recognize brokerage/investment-related labels
             if s.contains("brokerage") || s.contains("investment") || s.contains("ira") || s.contains("roth") || s.contains("401k") || s.contains("stock") || s.contains("options") || s.contains("portfolio") {
                 return "brokerage"
+            }
+            // Recognize loan-related labels
+            if s.contains("loan") || s.contains("mortgage") || s.contains("home equity") || s.contains("principal balance") || s.contains("outstanding principal") {
+                return "loan"
             }
             return nil
         }
@@ -140,7 +145,6 @@ struct PDFSummaryParser: StatementParser {
                 let hasBankingContext = bankingWords.contains(where: { ctx.contains($0) })
                 let hasLiabilityContext = liabilityWords.contains(where: { ctx.contains($0) })
                 let hasAprToken = ctx.contains("apr") || ctx.contains("annual percentage rate")
-//                let hasInterestRateToken = ctx.contains("interest rate")
 
                 AMLogging.log(
                     "APR eval: token=\(token) val=\(val) scale=\(scale) source=\(source) hdr=\(hasHeaderContext) purch=\(hasPurchaseContext) rewards=\(hasRewardContext) fx=\(hasFXContext) fee=\(hasFeeContext) bank=\(hasBankingContext) penaltyDoc=\(docHasPenalty) ctx='\(ctxPreview)'",
@@ -570,13 +574,28 @@ struct PDFSummaryParser: StatementParser {
             guard isStatementSummary || isLoanSummary || isCreditCardSummary else { continue }
             guard let dateStr = value(row, map, key: "date"), let date = parseDate(dateStr) else { continue }
 
-            // Prefer the explicit balance column if present; otherwise fall back to amount (should be 0)
+            // If this summary row describes an amount due or auto debit, capture it as a typical payment
             let balStr = value(row, map, key: "balance") ?? value(row, map, key: "amount")
             guard let balRaw = balStr else { continue }
             let cleaned = balRaw.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
             guard let dec = Decimal(string: cleaned) else { continue }
-
             var sb = StagedBalance(asOfDate: date, balance: dec)
+            if sb.typicalPaymentAmount == nil {
+                let descForPayment = descRawOriginal ?? ""
+                if let p = extractTypicalPayment(from: descForPayment) {
+                    sb.typicalPaymentAmount = p
+                    AMLogging.log("RowSummary: captured typical payment=\(p) from description '" + descForPayment + "'", component: LOG_COMPONENT)
+                    if !typicalPaymentSentinelInserted {
+                        var sentinel = StagedBalance(asOfDate: date, balance: p)
+                        sentinel.sourceAccountLabel = "__typical_payment__"
+                        balances.append(sentinel)
+                        typicalPaymentSentinelInserted = true
+                        AMLogging.log("RowSummary: inserted typical payment sentinel — amount=\(p) date=\(date)", component: LOG_COMPONENT)
+                    }
+                }
+            }
+            // Prefer the explicit balance column if present; otherwise fall back to amount (should be 0)
+
             if let aprInfo = extractAPRAndScale(from: desc) {
                 let hasPurchase = lower.contains("purchase") || lower.contains("purchases") || lower.contains("purchase apr")
                 let hasPenalty = lower.contains("penalty") || lower.contains("late payment") || lower.contains("late payment warning")
@@ -653,6 +672,108 @@ struct PDFSummaryParser: StatementParser {
             balances.append(sb)
             AMLogging.log("RowSummary: added snapshot date=\(date) amount=\(dec) label=\(sb.sourceAccountLabel ?? "nil") desc='" + (descRawOriginal ?? "") + "'", component: LOG_COMPONENT)
         }
+        // Detect typical/regular monthly payment amount from free-form summary lines
+        func extractTypicalPayment(from text: String) -> Decimal? {
+            let lower = text.lowercased()
+
+            // Find trigger occurrences
+            let triggers = [
+                "current amount due",
+                "next auto debit",
+                "regular monthly payment amount",
+                "regular monthly payment",
+                "monthly payment",
+                "payment due",
+            ]
+
+            var triggerRanges: [NSRange] = []
+            let ns = lower as NSString
+            let fullRange = NSRange(location: 0, length: ns.length)
+
+            for t in triggers {
+                var searchRange = fullRange
+                while true {
+                    let r = ns.range(of: t, options: [.caseInsensitive], range: searchRange)
+                    if r.location == NSNotFound { break }
+                    triggerRanges.append(r)
+                    let nextLoc = r.location + r.length
+                    if nextLoc >= ns.length { break }
+                    searchRange = NSRange(location: nextLoc, length: ns.length - nextLoc)
+                }
+            }
+
+            // If we didn’t find any trigger at all, bail early.
+            guard !triggerRanges.isEmpty else { return nil }
+
+            // Currency regex (keeps your handling of parentheses/negatives)
+            let pattern = #"\(\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?\s*\)|[-+]?\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?(?:-)?"#
+            guard let rx = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+
+            struct Candidate {
+                let value: Decimal
+                let score: Int
+            }
+            var candidates: [Candidate] = []
+
+            // Search a small window around each trigger
+            for tr in triggerRanges {
+                // Window: a little before and after the trigger; bias after the trigger
+                let pre = 80
+                let post = 160
+                let start = max(0, tr.location - pre)
+                let end = min(ns.length, tr.location + tr.length + post)
+                let window = NSRange(location: start, length: end - start)
+
+                rx.enumerateMatches(in: lower, options: [], range: window) { m, _, _ in
+                    guard let m, m.range.location != NSNotFound else { return }
+
+                    // Normalize token to Decimal (respecting parentheses/minus)
+                    if let r = Range(m.range, in: lower) {
+                        var token = String(lower[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        var isNegative = false
+                        if token.hasPrefix("(") && token.hasSuffix(")") { isNegative = true; token.removeFirst(); token.removeLast() }
+                        token = token.replacingOccurrences(of: "$", with: "")
+                                     .replacingOccurrences(of: ",", with: "")
+                                     .replacingOccurrences(of: " ", with: "")
+                        if token.hasSuffix("-") { isNegative = true; token.removeLast() }
+                        if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
+                        guard let dec = Decimal(string: token) else { return }
+
+                        // Score by proximity to trigger and positivity
+                        // Distance measured from end of trigger to start of amount
+                        let amountStart = m.range.location
+                        let triggerEnd = tr.location + tr.length
+                        let distance = abs(amountStart - triggerEnd)
+
+                        var score = 100 - min(distance, 100) // clamp contribution
+                        if isNegative { score -= 25 }        // prefer positive amounts for "payment due"
+                        if amountStart < triggerEnd { score -= 10 } // prefer amounts that come after the trigger phrase
+
+                        // Light penalty if the local window contains "balance" (helps avoid grabbing balances)
+                        let localStr = ns.substring(with: window).lowercased()
+                        if localStr.contains("balance") { score -= 8 }
+
+                        candidates.append(Candidate(value: isNegative ? -dec : dec, score: score))
+                    }
+                }
+            }
+
+            // If we collected nothing (should be rare), fall back to original behavior on the same line/window
+            guard !candidates.isEmpty else { return nil }
+
+            // Prefer the highest score; if tied, prefer positive and then smaller absolute value
+            let best = candidates.max { lhs, rhs in
+                if lhs.score != rhs.score { return lhs.score < rhs.score }
+                let lPos = (lhs.value as NSDecimalNumber).doubleValue >= 0
+                let rPos = (rhs.value as NSDecimalNumber).doubleValue >= 0
+                if lPos != rPos { return !lPos && rPos } // prefer positive
+                let lAbs = abs((lhs.value as NSDecimalNumber).doubleValue)
+                let rAbs = abs((rhs.value as NSDecimalNumber).doubleValue)
+                return lAbs > rAbs
+            }
+
+            return best?.value
+        }
 
         // Augment balances from any embedded Balance Summary section text (synthetic rows)
         // Gather candidate section texts (rows with a single cell containing 'balance' and 'summary')
@@ -668,24 +789,153 @@ struct PDFSummaryParser: StatementParser {
         }
 
         func parseAmountFromLine(_ line: String) -> Decimal? {
-            let parts = line.split(separator: " ").map { String($0) }
-            for token in parts.reversed() {
-                let cleaned = token.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
-                if let dec = Decimal(string: cleaned) { return dec }
-            }
-            return nil
+            let values = extractCurrencyValues(from: line)
+            return values.last
         }
 
         func extractCurrencyValues(from line: String) -> [Decimal] {
             // Match currency/decimal tokens like 1,234.56, ($123.45), 25.00, 0.00
-            let pattern = #"\(?\$?\s*[-+]?[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,4})?|\(?\$?\s*[-+]?[0-9]+(?:\.[0-9]{1,4})?\)?"#
+            let pattern = #"\(?\$?\s*[-+]?[0-9]+(?:\.[0-9]{1,4})?\)?|\(?\$?\s*[-+]?[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,4})?"#
             guard let rx = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
             let ns = line as NSString
-            let range = NSRange(location: 0, length: ns.length)
+            let fullRange = NSRange(location: 0, length: ns.length)
+
+            // Precompute phone/time/vanity-phone/address contexts to filter out false positives
+            let phonePattern = #"(?:\(\d{3}\)\s*|\b\d{3}[-.\s]?)\d{3}[-.\s]?\d{4}\b"#
+            // Vanity phone like "833-59-SLOAN" or "59-SLOAN" (digits + letters with hyphens)
+            let vanityPhonePattern = #"\b(?:\d{3}[-.\s]?)?\d{2,4}[-.\s]?[A-Za-z]{3,}\b"#
+            let timePattern = #"\b(?:[0-1]?\d|2[0-3])(?::[0-5]\d)?\s?(?:am|pm)\b"#
+            // Address patterns: PO Box / P.O. Box and ZIP codes
+            let poBoxPattern = #"\b(?:p\.?\s*o\.\?\s*)?box\s+\d+\b"#
+            let zipPattern = #"\b\d{5}(?:-\d{4})?\b"#
+            
+            // Date patterns: spelled-out month with day and year, month with year, and slash-separated dates
+            let dateMonthDayYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*|\s+)\d{4}\b"#
+            let dateMonthYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b"#
+            let dateSlashPattern = #"\b\d{1,2}/\d{1,2}/\d{2,4}\b"#
+            
+            let phoneRx = try? NSRegularExpression(pattern: phonePattern, options: [.caseInsensitive])
+            let vanityRx = try? NSRegularExpression(pattern: vanityPhonePattern, options: [.caseInsensitive])
+            let timeRx = try? NSRegularExpression(pattern: timePattern, options: [.caseInsensitive])
+            let poBoxRx = try? NSRegularExpression(pattern: poBoxPattern, options: [.caseInsensitive])
+            let zipRx = try? NSRegularExpression(pattern: zipPattern, options: [.caseInsensitive])
+
+            let dateMonthDayYearRx = try? NSRegularExpression(pattern: dateMonthDayYearPattern, options: [.caseInsensitive])
+            let dateMonthYearRx = try? NSRegularExpression(pattern: dateMonthYearPattern, options: [.caseInsensitive])
+            let dateSlashRx = try? NSRegularExpression(pattern: dateSlashPattern, options: [.caseInsensitive])
+            
+            let phoneMatches = phoneRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let vanityMatches = vanityRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let timeMatches = timeRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let poBoxMatches = poBoxRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let zipMatches = zipRx?.matches(in: line, options: [], range: fullRange) ?? []
+
+            let dateMonthDayYearMatches = dateMonthDayYearRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let dateMonthYearMatches = dateMonthYearRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let dateSlashMatches = dateSlashRx?.matches(in: line, options: [], range: fullRange) ?? []
+            
+            func intersects(_ r: NSRange, with matches: [NSTextCheckingResult]) -> Bool {
+                for m in matches {
+                    let a = r
+                    let b = m.range
+                    if NSIntersectionRange(a, b).length > 0 { return true }
+                }
+                return false
+            }
+
+            // Determine the non-whitespace token that contains a given range, and whether it has both letters and digits
+            func tokenRange(containing r: NSRange) -> NSRange {
+                var start = 0
+                if r.location > 0 {
+                    let prevWS = ns.rangeOfCharacter(from: .whitespacesAndNewlines, options: [.backwards], range: NSRange(location: 0, length: r.location))
+                    if prevWS.location != NSNotFound {
+                        start = prevWS.location + prevWS.length
+                    } else {
+                        start = 0
+                    }
+                } else {
+                    start = 0
+                }
+                let endSearchLoc = r.location + r.length
+                var end = ns.length
+                if endSearchLoc < ns.length {
+                    let nextWS = ns.rangeOfCharacter(from: .whitespacesAndNewlines, options: [], range: NSRange(location: endSearchLoc, length: ns.length - endSearchLoc))
+                    if nextWS.location != NSNotFound {
+                        end = nextWS.location
+                    }
+                }
+                return NSRange(location: start, length: max(0, end - start))
+            }
+
+            func tokenHasLettersAndDigits(_ tokenRange: NSRange) -> Bool {
+                guard tokenRange.length > 0 else { return false }
+                let token = ns.substring(with: tokenRange)
+                let hasLetter = token.range(of: "[A-Za-z]", options: .regularExpression) != nil
+                let hasDigit = token.range(of: "[0-9]", options: .regularExpression) != nil
+                return hasLetter && hasDigit
+            }
+
             var out: [Decimal] = []
-            rx.enumerateMatches(in: line, options: [], range: range) { m, _, _ in
+            rx.enumerateMatches(in: line, options: [], range: fullRange) { m, _, _ in
                 guard let m, m.range.location != NSNotFound, let r = Range(m.range, in: line) else { return }
+
+                // Skip numbers that are part of phone numbers, vanity phone strings, times, PO Boxes, or ZIP codes
+                if intersects(m.range, with: phoneMatches) { return }
+                if intersects(m.range, with: vanityMatches) { return }
+                if intersects(m.range, with: timeMatches) { return }
+                if intersects(m.range, with: poBoxMatches) { return }
+                if intersects(m.range, with: zipMatches) { return }
+                
+                if intersects(m.range, with: dateMonthDayYearMatches) { return }
+                if intersects(m.range, with: dateMonthYearMatches) { return }
+                if intersects(m.range, with: dateSlashMatches) { return }
+
+                // Skip numbers embedded within a single non-whitespace token that mixes letters and digits (e.g., "(833-59-SLOAN)")
+                let tokRange = tokenRange(containing: m.range)
+                if tokenHasLettersAndDigits(tokRange) { return }
+
                 var token = String(line[r])
+
+                // Skip if this match sits inside a contiguous 4-digit year (e.g., parts of "2025")
+                do {
+                    var runStart = m.range.location
+                    var runEnd = m.range.location + m.range.length
+                    // Expand left over digits
+                    while runStart > 0 {
+                        let ch = ns.character(at: runStart - 1)
+                        if ch >= 48 && ch <= 57 { // '0'...'9'
+                            runStart -= 1
+                        } else {
+                            break
+                        }
+                    }
+                    // Expand right over digits
+                    while runEnd < ns.length {
+                        let ch = ns.character(at: runEnd)
+                        if ch >= 48 && ch <= 57 { // '0'...'9'
+                            runEnd += 1
+                        } else {
+                            break
+                        }
+                    }
+                    if runEnd > runStart {
+                        let runRange = NSRange(location: runStart, length: runEnd - runStart)
+                        let runStr = ns.substring(with: runRange)
+                        if runStr.range(of: #"^\d{4}$"#, options: .regularExpression) != nil,
+                           let year = Int(runStr), year >= 1900 && year <= 2099 {
+                            return
+                        }
+                    }
+                }
+
+                // Skip standalone four-digit years (e.g., "2025") as non-balance context
+                let rawTrim = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                if rawTrim.range(of: #"^\d{4}$"#, options: .regularExpression) != nil {
+                    if let year = Int(rawTrim), year >= 1900 && year <= 2099 {
+                        return
+                    }
+                }
+                
                 // Normalize token: handle parentheses for negatives and strip $ and commas/spaces
                 var isNegative = false
                 token = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -694,6 +944,8 @@ struct PDFSummaryParser: StatementParser {
                 if token.hasSuffix("-") { isNegative = true; token.removeLast() }
                 if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
                 if let dec = Decimal(string: token) {
+                    // Skip zero balances (e.g., 0.00)
+                    if dec == .zero { return }
                     out.append(isNegative ? -dec : dec)
                 }
             }
@@ -706,6 +958,16 @@ struct PDFSummaryParser: StatementParser {
 
         for text in summaryTexts {
             let ls = text.replacingOccurrences(of: "\r", with: "\n").split(separator: "\n").map { String($0) }
+            // Try to capture a typical payment from the entire section header/text once
+            let sectionPayment: Decimal? = extractTypicalPayment(from: text)
+            if let p = sectionPayment, !typicalPaymentSentinelInserted {
+                let dateForSentinel = asOfForSummaryEnd ?? asOfForSummaryStart ?? Date()
+                var sentinel = StagedBalance(asOfDate: dateForSentinel, balance: p)
+                sentinel.sourceAccountLabel = "__typical_payment__"
+                balances.append(sentinel)
+                typicalPaymentSentinelInserted = true
+                AMLogging.log("BalanceSummary: inserted typical payment sentinel — amount=\(p) date=\(dateForSentinel)", component: LOG_COMPONENT)
+            }
             for raw in ls {
                 let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if s.isEmpty { continue }
@@ -726,6 +988,7 @@ struct PDFSummaryParser: StatementParser {
                     let end = values.last!
                     if let startDate = asOfForSummaryStart {
                         var sbBegin = StagedBalance(asOfDate: startDate, balance: begin)
+                        if let p = sectionPayment { sbBegin.typicalPaymentAmount = p }
                         sbBegin.sourceAccountLabel = label
                         balances.append(sbBegin)
                         AMLogging.log("BalanceSummary: added BEGIN label=\(label ?? "nil") date=\(startDate) amount=\(begin) line='" + s + "'", component: LOG_COMPONENT)
@@ -734,6 +997,7 @@ struct PDFSummaryParser: StatementParser {
                     }
                     if let endDate = asOfForSummaryEnd ?? asOfForSummaryStart {
                         var sbEnd = StagedBalance(asOfDate: endDate, balance: end)
+                        if let p = sectionPayment { sbEnd.typicalPaymentAmount = p }
                         sbEnd.sourceAccountLabel = label
                         balances.append(sbEnd)
                         AMLogging.log("BalanceSummary: added END label=\(label ?? "nil") date=\(endDate) amount=\(end) line='" + s + "'", component: LOG_COMPONENT)
@@ -744,6 +1008,7 @@ struct PDFSummaryParser: StatementParser {
                     // Fallback: single amount found — treat as an ending balance if we have an end date, else use start
                     let date = asOfForSummaryEnd ?? asOfForSummaryStart ?? Date()
                     var sb = StagedBalance(asOfDate: date, balance: amount)
+                    if let p = sectionPayment { sb.typicalPaymentAmount = p }
                     sb.sourceAccountLabel = label
                     balances.append(sb)
                     AMLogging.log("BalanceSummary: added SINGLE label=\(label ?? "nil") date=\(date) amount=\(amount) line='" + s + "'", component: LOG_COMPONENT)
@@ -759,6 +1024,8 @@ struct PDFSummaryParser: StatementParser {
         if hasCreditCardIndicators && !balances.isEmpty {
             AMLogging.log("PDFSummaryParser: coercing \(balances.count) snapshot label(s) to creditcard due to document-level CC indicators", component: LOG_COMPONENT)
             for i in balances.indices {
+                let lbl = (balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lbl == "__typical_payment__" { continue }
                 balances[i].sourceAccountLabel = "creditcard"
             }
         }
@@ -779,10 +1046,146 @@ struct PDFSummaryParser: StatementParser {
                         AMLogging.log("DeDup: replacing zero with non-zero for key=\(key) old=\(existing.balance) new=\(b.balance) label=\(b.sourceAccountLabel ?? "nil") date=\(b.asOfDate)", component: LOG_COMPONENT)
                         chosen[key] = b
                     } else {
-                        AMLogging.log("DeDup: keeping existing for key=\(key) existing=\(existing.balance) incoming=\(b.balance) label=\(b.sourceAccountLabel ?? "nil") date=\(b.asOfDate)", component: LOG_COMPONENT)
-                        // keep existing (either both zero or both non-zero)
-                    }
+                        // Special-case: same day, same label, opposite sign and same magnitude (within epsilon)
+                        // Prefer the snapshot with APR; if tie/no APR, prefer negative value for loans.
+                        let eps = 0.005
+                        let existingVal = (existing.balance as NSDecimalNumber).doubleValue
+                        let incomingVal = (b.balance as NSDecimalNumber).doubleValue
+                        let sameMagnitude = abs(abs(existingVal) - abs(incomingVal)) <= eps
+                        let oppositeSign = (existingVal < 0 && incomingVal > 0) || (existingVal > 0 && incomingVal < 0)
+
+                        if sameMagnitude && oppositeSign {
+                            let existingHasAPR = (existing.interestRateAPR != nil)
+                            let incomingHasAPR = (b.interestRateAPR != nil)
+
+                            // Decide winner
+                            var keepIncoming = false
+                            if existingHasAPR != incomingHasAPR {
+                                // Prefer the one with APR
+                                keepIncoming = incomingHasAPR
+                            } else if label == "loan" {
+                                // For loans, prefer negative value
+                                keepIncoming = (incomingVal < 0)
+                            } else {
+                                // Default: keep existing
+                                keepIncoming = false
+                            }
+
+                            if keepIncoming {
+                                // Carry over typicalPaymentAmount if incoming lacks it
+                                var incomingUpdated = b
+                                if incomingUpdated.typicalPaymentAmount == nil, let pay = existing.typicalPaymentAmount {
+                                    incomingUpdated.typicalPaymentAmount = pay
+                                    AMLogging.log("DeDup: (opp-sign) carried typicalPaymentAmount=\(pay) to incoming for key=\(key) label=\(b.sourceAccountLabel ?? "nil") date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                }
+                                AMLogging.log("DeDup: (opp-sign) replacing existing=\(existing.balance) with incoming=\(incomingUpdated.balance) key=\(key) label=\(label) date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                chosen[key] = incomingUpdated
+                            } else {
+                                // Merge typicalPaymentAmount into existing if needed
+                                var updated = existing
+                                if updated.typicalPaymentAmount == nil, let pay = b.typicalPaymentAmount {
+                                    updated.typicalPaymentAmount = pay
+                                    AMLogging.log("DeDup: (opp-sign) merged typicalPaymentAmount=\(pay) into existing for key=\(key) label=\(label) date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                }
+                                AMLogging.log("DeDup: (opp-sign) keeping existing=\(updated.balance) and discarding incoming=\(b.balance) key=\(key) label=\(label) date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                chosen[key] = updated
+                            }
+                            continue
+                        }
+
+                                // Default behavior: only merge typicalPaymentAmount; otherwise keep existing
+                                var updated = existing
+                                var didMerge = false
+                                if updated.typicalPaymentAmount == nil, let incomingPayment = b.typicalPaymentAmount {
+                                    updated.typicalPaymentAmount = incomingPayment
+                                    didMerge = true
+                                    AMLogging.log("DeDup: merged typicalPaymentAmount=\(incomingPayment) into existing for key=\(key) label=\(b.sourceAccountLabel ?? "nil") date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                }
+                                if didMerge {
+                                    chosen[key] = updated
+                                } else {
+                                    AMLogging.log("DeDup: keeping existing for key=\(key) existing=\(existing.balance) incoming=\(b.balance) label=\(b.sourceAccountLabel ?? "nil") date=\(b.asOfDate)", component: LOG_COMPONENT)
+                                    // keep existing (either both zero or both non-zero)
+                                }
+                            }
                 } else {
+                    // Cross-label special-case: look for an existing snapshot on the same day with a different label
+                    // that has opposite sign and same magnitude. Prefer APR; if tie/no APR, prefer negative for loans.
+                    let eps = 0.005
+                    let incomingVal = (b.balance as NSDecimalNumber).doubleValue
+                    var handledCross = false
+
+                    for (ekey, ebal) in chosen {
+                        let parts = ekey.split(separator: "|")
+                        guard parts.count == 2, let eDay = Int(parts[1]), eDay == Int(dayStart) else { continue }
+
+                        let existingVal = (ebal.balance as NSDecimalNumber).doubleValue
+                        let sameMagnitude = abs(abs(existingVal) - abs(incomingVal)) <= eps
+                        let oppositeSign = (existingVal < 0 && incomingVal > 0) || (existingVal > 0 && incomingVal < 0)
+                        if !(sameMagnitude && oppositeSign) { continue }
+
+                        let existingHasAPR = (ebal.interestRateAPR != nil)
+                        let incomingHasAPR = (b.interestRateAPR != nil)
+                        let existingLabelFromKey = String(parts[0])
+
+                        var keepIncoming = false
+                        // Never let an unlabeled snapshot replace a labeled one; allow labeled to replace unlabeled
+                        if existingLabelFromKey != "default" && label == "default" {
+                            keepIncoming = false
+                        } else if existingLabelFromKey == "default" && label != "default" {
+                            keepIncoming = true
+                        } else if existingHasAPR != incomingHasAPR {
+                            // Prefer the one with APR
+                            keepIncoming = incomingHasAPR
+                        } else if existingLabelFromKey == "loan" || label == "loan" {
+                            // For loans, prefer negative value
+                            keepIncoming = (incomingVal < 0)
+                        } else {
+                            // Default: keep existing
+                            keepIncoming = false
+                        }
+
+                        if keepIncoming {
+                            var incomingUpdated = b
+                            if incomingUpdated.typicalPaymentAmount == nil, let pay = ebal.typicalPaymentAmount {
+                                incomingUpdated.typicalPaymentAmount = pay
+                                AMLogging.log("DeDup: (cross-label opp-sign) carried typicalPaymentAmount=\(pay) to incoming for key=\(ekey) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                            }
+                            AMLogging.log("DeDup: (cross-label opp-sign) replacing existing=\(ebal.balance) label=\(existingLabelFromKey) with incoming=\(incomingUpdated.balance) label=\(label) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                            // Replace the existing entry in-place to preserve insertion order
+                            chosen[ekey] = incomingUpdated
+                        } else {
+                            var updated = ebal
+                            if updated.typicalPaymentAmount == nil, let pay = b.typicalPaymentAmount {
+                                updated.typicalPaymentAmount = pay
+                                AMLogging.log("DeDup: (cross-label opp-sign) merged typicalPaymentAmount=\(pay) into existing key=\(ekey)", component: LOG_COMPONENT)
+                            }
+                            AMLogging.log("DeDup: (cross-label opp-sign) keeping existing=\(updated.balance) and discarding incoming=\(b.balance) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                            chosen[ekey] = updated
+                        }
+
+                        handledCross = true
+                        break
+                    }
+
+                    if handledCross { continue }
+
+                    // If unlabeled ("default"), drop it when any snapshot already exists for this day
+                    if label == "default" {
+                        var anyForDay = false
+                        for k in chosen.keys {
+                            let parts = k.split(separator: "|")
+                            if parts.count == 2, let eDay = Int(parts[1]), eDay == Int(dayStart) {
+                                anyForDay = true
+                                break
+                            }
+                        }
+                        if anyForDay {
+                            AMLogging.log("DeDup: dropping unlabeled snapshot for day=\(Int(dayStart)) amount=\(b.balance) because another snapshot exists for the same day", component: LOG_COMPONENT)
+                            continue
+                        }
+                    }
+
                     AMLogging.log("DeDup: adding key=\(key) label=\(label) date=\(b.asOfDate) amount=\(b.balance)", component: LOG_COMPONENT)
                     chosen[key] = b
                     order.append(key)
@@ -827,3 +1230,8 @@ struct PDFSummaryParser: StatementParser {
     }
 }
 
+private extension NSRange {
+    func toOptional() -> NSRange? {
+        return self.location == NSNotFound ? nil : self
+    }
+}
