@@ -528,7 +528,15 @@ struct ReviewImportView: View {
             typicalPaymentParsed = amt
             AMLogging.log("ReviewImportView: Seeded Typical Payment from sentinel — amount=\(amt)", component: "ReviewImportView")
         } else {
-            AMLogging.log("ReviewImportView: sentinel not found in staged balances; no seeding performed", component: "ReviewImportView")
+            AMLogging.log("ReviewImportView: sentinel not found in staged balances; attempting fallback from snapshot fields", component: "ReviewImportView")
+            // Fallback: seed from any snapshot that carries a typicalPaymentAmount
+            if let pay = staged.balances.compactMap({ $0.typicalPaymentAmount }).first(where: { $0 > 0 }) {
+                typicalPaymentInput = formatAmountForInput(pay)
+                typicalPaymentParsed = pay
+                AMLogging.log("ReviewImportView: Seeded Typical Payment from snapshot field — amount=\(pay)", component: "ReviewImportView")
+            } else {
+                AMLogging.log("ReviewImportView: no typicalPaymentAmount found on snapshots; no seeding performed", component: "ReviewImportView")
+            }
         }
     }
 

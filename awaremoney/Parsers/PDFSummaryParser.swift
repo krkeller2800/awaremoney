@@ -29,14 +29,56 @@ struct PDFSummaryParser: StatementParser {
         AMLogging.log("PDFSummaryParser.parse: doc length=\(docProbe.count) purchasesTokenCount=\(purchasesTokenCount)", component: LOG_COMPONENT)
 
         // Helper to parse dates in the normalized format from PDFStatementExtractor (MM/dd/yyyy)
+        // Helper to parse dates in the normalized format from PDFStatementExtractor (MM/dd/yyyy)
         func parseDate(_ s: String) -> Date? {
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
             df.timeZone = TimeZone(secondsFromGMT: 0)
-            df.dateFormat = "MM/dd/yyyy"
-            return df.date(from: s)
+            for fmt in ["MM/dd/yyyy", "M/d/yy", "MM/dd/yy", "M/d/yyyy"] {
+                df.dateFormat = fmt
+                if let d = df.date(from: s) { return d }
+            }
+            return nil
         }
 
+        func extractStatementClosingDate(from rows: [[String]]) -> Date? {
+            let doc = rows.flatMap { $0 }.joined(separator: " ").lowercased()
+
+            // Pattern 1: explicit range like "12/21/2025 - 01/20/2026" or with en dash or "to"
+            let rangePattern = #"\b(\d{1,2}/\d{1,2}/\d{2,4})\s*(?:–|-|to)\s*(\d{1,2}/\d{1,2}/\d{2,4})\b"#
+            if let rx = try? NSRegularExpression(pattern: rangePattern, options: []),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 3,
+               let r2 = Range(m.range(at: 2), in: doc) {
+                let endStr = String(doc[r2])
+                if let d = parseDate(endStr) { return d }
+            }
+
+            // Pattern 2: labeled closing date
+            let labelPattern = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{2,4})"#
+            if let rx = try? NSRegularExpression(pattern: labelPattern, options: []),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 2,
+               let r1 = Range(m.range(at: 1), in: doc) {
+                let endStr = String(doc[r1])
+                if let d = parseDate(endStr) { return d }
+            }
+
+            // Pattern 3: Payment Due Date fallback — subtract one month
+            let duePattern = #"(?:payment\s+due\s+date)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{2,4})"#
+            if let rx = try? NSRegularExpression(pattern: duePattern, options: []),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 2,
+               let r1 = Range(m.range(at: 1), in: doc) {
+                let dueStr = String(doc[r1])
+                if let due = parseDate(dueStr),
+                   let approx = Calendar.current.date(byAdding: DateComponents(month: -1), to: due) {
+                    return approx
+                }
+            }
+            
+            return nil
+        }
         func normalizedLabel(_ raw: String?) -> String? {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
@@ -81,7 +123,8 @@ struct PDFSummaryParser: StatementParser {
             ]
             let promoWords = ["promo", "promotional", "intro", "introductory", "offer"]
 
-            let purchaseWords = ["purchase", "purchases", "purchase apr"]
+            // Removed purchaseWords line here as per instructions
+            // let purchaseWords = ["purchase", "purchases", "purchase apr"]
             let demoteWords = ["cash advance", "balance transfer"]
             let priorWords = ["prior to", "previous"]
 
@@ -139,8 +182,9 @@ struct PDFSummaryParser: StatementParser {
                 let hasRewardContext = rewardWords.contains(where: { ctx.contains($0) })
                 let hasFXContext = fxWords.contains(where: { ctx.contains($0) })
                 let hasFeeContext = feeWords.contains(where: { ctx.contains($0) })
-                // Treat purchases as a positive context only when not clearly in a rewards paragraph
-                let hasPurchaseContext = !hasRewardContext && purchaseWords.contains(where: { ctx.contains($0) })
+                // Replace hasPurchaseContext logic with updated version
+                let purchasesStandalone = (ctx.range(of: #"\bpurchases\b(?!\s*(?:before|prior|previous))"#, options: [.regularExpression]) != nil) || ctx.contains("purchase apr")
+                let hasPurchaseContext = !hasRewardContext && purchasesStandalone
 
                 let hasBankingContext = bankingWords.contains(where: { ctx.contains($0) })
                 let hasLiabilityContext = liabilityWords.contains(where: { ctx.contains($0) })
@@ -307,45 +351,91 @@ struct PDFSummaryParser: StatementParser {
                 var pcands: [PCandidate] = []
 
                 for pm in pMatches {
-                    // Build a local context around the 'purchases' token (both sides)
-                    let ctxStart = max(0, pm.range.location - 220)
-                    let ctxEnd = min(wRange.length, pm.range.location + pm.range.length + 320)
-                    let ctxRange = NSRange(location: ctxStart, length: ctxEnd - ctxStart)
-                    guard let swiftRange = Range(ctxRange, in: window) else { continue }
-                    let ctx = String(window[swiftRange])
-                    let ctxLower = ctx.lowercased()
-                    let ctxPreview = String(ctxLower.prefix(220))
-                    AMLogging.log("PurchasesAPR: context around 'purchases' token: '" + ctxPreview + "'", component: LOG_COMPONENT)
-
-                    // Skip rewards/marketing and FX/fee contexts
-                    let rewardWords = ["cash back", "cashback", "rewards", "points", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
-                    let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
-                    let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
-                    if rewardWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to rewards context", component: LOG_COMPONENT); continue }
-                    if fxWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to FX context", component: LOG_COMPONENT); continue }
-                    if feeWords.contains(where: { ctxLower.contains($0) }) { AMLogging.log("PurchasesAPR: skip due to fee context", component: LOG_COMPONENT); continue }
-                    if ctxLower.contains("no interest") { AMLogging.log("PurchasesAPR: skip due to 'no interest' context", component: LOG_COMPONENT); continue }
-
-                    let ctxNS = ctx as NSString
-                    let localRange = NSRange(location: 0, length: ctxNS.length)
-                    let allPctMatches = pctRx.matches(in: ctx, options: [], range: localRange)
-                    AMLogging.log("PurchasesAPR: % matches in ctx=\(allPctMatches.count)", component: LOG_COMPONENT)
-
-                    if let m = pctRx.firstMatch(in: ctx, options: [], range: localRange), m.numberOfRanges >= 2,
-                       let r = Range(m.range(at: 1), in: ctx) {
-                        let token = String(ctx[r])
-                        if var val = Decimal(string: token) {
-                            let scale = token.contains(".") ? (token.split(separator: ".").last?.count ?? 0) : 0
-                            if val > 1 { val /= 100 }
-                            // Score: penalize contexts containing prior/previous; otherwise boost
-                            var score = 0
-                            if ctxLower.contains("prior") || ctxLower.contains("previous") { score -= 2 } else { score += 3 }
-                            AMLogging.log("PurchasesAPR: candidate token=\(token) value=\(val) scale=\(scale) score=\(score)", component: LOG_COMPONENT)
-                            pcands.append(PCandidate(value: val, scale: scale, score: score))
+                    // Ensure this match is exactly 'purchases' and not followed by 'before/prior/previous'
+                    guard let pr = Range(pm.range, in: window) else { continue }
+                    let matchedWord = String(window[pr]).lowercased()
+                    if matchedWord != "purchases" { AMLogging.log("PurchasesAPR: skipping non-plural 'purchase' token", component: LOG_COMPONENT); continue }
+                    let afterIndex = window.index(pr.upperBound, offsetBy: 0, limitedBy: window.endIndex) ?? pr.upperBound
+                    let tail = String(window[afterIndex..<window.endIndex]).lowercased()
+                    if let wMatch = tail.range(of: #"^\s*([a-z]+)"#, options: .regularExpression) {
+                        let nextWord = String(tail[wMatch]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            .replacingOccurrences(of: ":", with: "")
+                        if nextWord == "before" || nextWord == "prior" || nextWord == "previous" {
+                            AMLogging.log("PurchasesAPR: skipping due to disqualifying next word after 'purchases'", component: LOG_COMPONENT)
+                            continue
                         }
-                    } else {
-                        AMLogging.log("PurchasesAPR: no % following 'purchases' in ctx", component: LOG_COMPONENT)
                     }
+
+            // Isolate the single line containing the 'purchases' token
+            let ns = window as NSString
+            let startSearch = NSRange(location: 0, length: pm.range.location)
+            let endSearch = NSRange(location: pm.range.location + pm.range.length, length: ns.length - (pm.range.location + pm.range.length))
+            let prevNL = ns.range(of: "\n", options: [.backwards], range: startSearch)
+            let nextNL = ns.range(of: "\n", options: [], range: endSearch)
+            let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
+            let lineEnd = nextNL.location == NSNotFound ? ns.length : nextNL.location
+            let lineRange = NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+            let line = ns.substring(with: lineRange)
+            let lineLower = line.lowercased()
+            AMLogging.log("PurchasesAPR: line around 'purchases': '" + String(lineLower.prefix(220)) + "'", component: LOG_COMPONENT)
+
+            // Disqualify lines that mention penalty or disqualifying contexts
+            if lineLower.contains("penalty") {
+                AMLogging.log("PurchasesAPR: skip due to penalty on line", component: LOG_COMPONENT)
+                continue
+            }
+            let rewardWords = ["cash back", "cashback", "rewards", "points", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
+            let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
+            let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
+            if rewardWords.contains(where: { lineLower.contains($0) }) {
+                AMLogging.log("PurchasesAPR: skip due to rewards context on line", component: LOG_COMPONENT)
+                continue
+            }
+            if fxWords.contains(where: { lineLower.contains($0) }) {
+                AMLogging.log("PurchasesAPR: skip due to FX context on line", component: LOG_COMPONENT)
+                continue
+            }
+            if feeWords.contains(where: { lineLower.contains($0) }) {
+                AMLogging.log("PurchasesAPR: skip due to fee context on line", component: LOG_COMPONENT)
+                continue
+            }
+            if lineLower.contains("no interest") {
+                AMLogging.log("PurchasesAPR: skip due to 'no interest' context on line", component: LOG_COMPONENT)
+                continue
+            }
+            // Disallow 'before/prior/previous' anywhere on the same line
+            if lineLower.contains("before") || lineLower.contains("prior") || lineLower.contains("previous") {
+                AMLogging.log("PurchasesAPR: skipping due to disqualifying word on same line", component: LOG_COMPONENT)
+                continue
+            }
+
+            // Find percentage tokens on this line only, prefer the one closest to 'purchases'
+            let purchaseOffset = pm.range.location - lineStart
+            let lns = line as NSString
+            let lRange = NSRange(location: 0, length: lns.length)
+            let pctMatches = pctRx.matches(in: line, options: [], range: lRange)
+            AMLogging.log("PurchasesAPR: % matches on line=\(pctMatches.count)", component: LOG_COMPONENT)
+
+            var bestLocal: (token: String, dist: Int)? = nil
+            for m in pctMatches {
+                guard m.numberOfRanges >= 2, let rTok = Range(m.range(at: 1), in: line) else { continue }
+                let token = String(line[rTok])
+                let dist = abs(m.range.location - purchaseOffset)
+                if bestLocal == nil || dist < bestLocal!.dist {
+                    bestLocal = (token, dist)
+                }
+            }
+
+            if let bestLocal = bestLocal, var val = Decimal(string: bestLocal.token) {
+                let scale = bestLocal.token.contains(".") ? (bestLocal.token.split(separator: ".").last?.count ?? 0) : 0
+                if val > 1 { val /= 100 }
+                // Score: strong boost for exact line match; light penalty if line hints at prior/previous (already filtered above)
+                var score = 5
+                AMLogging.log("PurchasesAPR: candidate token=\(bestLocal.token) value=\(val) scale=\(scale) score=\(score) (line-based)", component: LOG_COMPONENT)
+                pcands.append(PCandidate(value: val, scale: scale, score: score))
+            } else {
+                AMLogging.log("PurchasesAPR: no % found on same line as 'purchases'", component: LOG_COMPONENT)
+            }
                 }
 
                 if let best = pcands.max(by: { (l, r) in
@@ -492,6 +582,9 @@ struct PDFSummaryParser: StatementParser {
         let headerSummary = aprHeaderPresence.map { "\($0.0)=\($0.1)" }.joined(separator: ", ")
         AMLogging.log("PDFSummaryParser: docFlags penalty=\(docHasPenaltyDoc) purchases=\(docHasPurchaseDoc) headers=[\(headerSummary)]", component: LOG_COMPONENT)
 
+        let statementClosingDate = extractStatementClosingDate(from: rows)
+        AMLogging.log("PDFSummaryParser: statementClosingDate=\(String(describing: statementClosingDate))", component: LOG_COMPONENT)
+        
         // Rolling account context inferred from section headers or explicit account field
         var currentAccountContext: String? = nil
 
@@ -549,7 +642,7 @@ struct PDFSummaryParser: StatementParser {
             }
         }
         let asOfForSummaryStart = earliestDateForSummary
-        let asOfForSummaryEnd = latestDateForSummary
+        let asOfForSummaryEnd = statementClosingDate ?? latestDateForSummary
         AMLogging.log("BalanceSummary: asOf dates start=\(String(describing: asOfForSummaryStart)) end=\(String(describing: asOfForSummaryEnd))", component: LOG_COMPONENT)
 
         // Collect only rows whose description clearly indicates statement summary lines
@@ -561,6 +654,7 @@ struct PDFSummaryParser: StatementParser {
             updateContext(from: descRawOriginal, accountField: value(row, map, key: "account"))
 
             // Detect credit-card style summary lines
+            let isCCNewBalance = lower.contains("new balance")
             let isCreditCardSummary = lower.contains("new balance")
                 || lower.contains("previous balance")
                 || lower.contains("minimum payment due")
@@ -569,17 +663,45 @@ struct PDFSummaryParser: StatementParser {
                 || lower.contains("available credit")
                 || lower.contains("card ending")
 
-            let isStatementSummary = lower.contains("statement beginning balance") || lower.contains("statement ending balance")
+            let isStatementSummary = lower.contains("statement ending balance") || (!hasCreditCardIndicators && lower.contains("statement beginning balance"))
             let isLoanSummary = lower.contains("beginning balance") || lower.contains("ending balance") || lower.contains("current amount due") || lower.contains("amount due") || lower.contains("payment due") || lower.contains("principal balance") || lower.contains("outstanding principal")
-            guard isStatementSummary || isLoanSummary || isCreditCardSummary else { continue }
-            guard let dateStr = value(row, map, key: "date"), let date = parseDate(dateStr) else { continue }
+
+            // Only accept CC "New Balance" (avoid multiple snapshots); keep other statement/loan summaries as before
+            // In credit card documents, ignore generic loan-like summaries (beginning/ending/current due) to avoid picking the wrong balance
+            let isRelevant = isStatementSummary || isCCNewBalance || (!hasCreditCardIndicators && isLoanSummary)
+            guard isRelevant else { continue }
+
+            // Date selection: prefer the statement closing date for CC "New Balance"
+            let rowDateStr = value(row, map, key: "date")
+            let rowDate = rowDateStr.flatMap(parseDate)
+            let date: Date
+            if isCCNewBalance, let cd = statementClosingDate {
+                date = cd
+            } else if let d = rowDate {
+                date = d
+            } else if isCCNewBalance, let fallback = (statementClosingDate ?? asOfForSummaryEnd ?? asOfForSummaryStart) {
+                date = fallback
+            } else {
+                continue
+            }
+
+            // If this is a CC summary line but not "New Balance", skip it
+            if hasCreditCardIndicators && isCreditCardSummary && !isCCNewBalance {
+                AMLogging.log("RowSummary: skipping non-New Balance CC summary '\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
+                continue
+            }
 
             // If this summary row describes an amount due or auto debit, capture it as a typical payment
             let balStr = value(row, map, key: "balance") ?? value(row, map, key: "amount")
             guard let balRaw = balStr else { continue }
             let cleaned = balRaw.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
             guard let dec = Decimal(string: cleaned) else { continue }
-            var sb = StagedBalance(asOfDate: date, balance: dec)
+            // For credit card contexts, store balances as negative liabilities
+            var amount = dec
+            if isCreditCardSummary || hasCreditCardIndicators {
+                if amount > 0 { amount = -amount }
+            }
+            var sb = StagedBalance(asOfDate: date, balance: amount)
             if sb.typicalPaymentAmount == nil {
                 let descForPayment = descRawOriginal ?? ""
                 if let p = extractTypicalPayment(from: descForPayment) {
@@ -603,11 +725,19 @@ struct PDFSummaryParser: StatementParser {
                 // OR if the document has CC indicators OR if the rolling section context indicates creditcard.
                 let rowIsCreditCardContext = isCreditCardSummary || hasCreditCardIndicators || (currentAccountContext == "creditcard")
 
-                if hasPenalty {
+                let hasLoanLikeContext = lower.contains("loan") || lower.contains("mortgage") || lower.contains("principal balance") || lower.contains("outstanding principal") || lower.contains("statement ending balance") || lower.contains("statement beginning balance")
+                let hasGenericInterestOnly = lower.contains("interest rate")
+
+                // In credit card documents, ignore APRs coming from generic interest/loan/summary lines unless they explicitly mention purchases
+                if rowIsCreditCardContext && !hasPurchase && (hasLoanLikeContext || hasGenericInterestOnly) {
+                    AMLogging.log("Row APR rejected due to non-purchases generic/loan summary context in credit card document: value=\(aprInfo.value) desc='\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
+                    // Do not set APR here; allow global Purchases APR to apply later
+                }
+                else if hasPenalty {
                     AMLogging.log("Row APR rejected due to penalty context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
-                } else if rowIsCreditCardContext && aprInfo.value >= 0.30 && !hasPurchase {
-                    // Enforce purchases context for high APRs (>= 30%) in credit-card context
-                    AMLogging.log("Row APR rejected due to high APR (>= 30%) without purchases context in credit card row: value=\(aprInfo.value) desc='\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
+                } else if rowIsCreditCardContext && aprInfo.value >= 0.28 && !hasPurchase {
+                    // Enforce purchases context for high APRs (>= 28%) in credit-card context
+                    AMLogging.log("Row APR rejected due to high APR (>= 28%) without purchases context in credit card row: value=\(aprInfo.value) desc='\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
                 } else if aprInfo.value >= 0.28 && !hasPurchase && !rowIsCreditCardContext {
                     // Keep the high-APR guard for non-CC contexts unless explicitly tied to purchases
                     AMLogging.log("Row APR rejected due to high APR without purchases/CC context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
@@ -955,7 +1085,7 @@ struct PDFSummaryParser: StatementParser {
         if !summaryTexts.isEmpty {
             AMLogging.log("BalanceSummary: found \(summaryTexts.count) section text(s)", component: LOG_COMPONENT)
         }
-
+        if hasCreditCardIndicators { summaryTexts.removeAll() }
         for text in summaryTexts {
             let ls = text.replacingOccurrences(of: "\r", with: "\n").split(separator: "\n").map { String($0) }
             // Try to capture a typical payment from the entire section header/text once
@@ -986,23 +1116,34 @@ struct PDFSummaryParser: StatementParser {
                     // Heuristic: first numeric token is Beginning Balance, last is Ending Balance
                     let begin = values.first!
                     let end = values.last!
-                    if let startDate = asOfForSummaryStart {
-                        var sbBegin = StagedBalance(asOfDate: startDate, balance: begin)
-                        if let p = sectionPayment { sbBegin.typicalPaymentAmount = p }
-                        sbBegin.sourceAccountLabel = label
-                        balances.append(sbBegin)
-                        AMLogging.log("BalanceSummary: added BEGIN label=\(label ?? "nil") date=\(startDate) amount=\(begin) line='" + s + "'", component: LOG_COMPONENT)
+
+                    if hasCreditCardIndicators {
+                        if let endDate = asOfForSummaryEnd ?? asOfForSummaryStart {
+                            var sbEnd = StagedBalance(asOfDate: endDate, balance: end)
+                            if let p = sectionPayment { sbEnd.typicalPaymentAmount = p }
+                            sbEnd.sourceAccountLabel = label
+                            balances.append(sbEnd)
+                            AMLogging.log("BalanceSummary: (CC) added END label=\(label ?? "nil") date=\(endDate) amount=\(end) line='" + s + "'", component: LOG_COMPONENT)
+                        }
                     } else {
-                        AMLogging.log("BalanceSummary: no start date available; skipping BEGIN for line='" + s + "'", component: LOG_COMPONENT)
-                    }
-                    if let endDate = asOfForSummaryEnd ?? asOfForSummaryStart {
-                        var sbEnd = StagedBalance(asOfDate: endDate, balance: end)
-                        if let p = sectionPayment { sbEnd.typicalPaymentAmount = p }
-                        sbEnd.sourceAccountLabel = label
-                        balances.append(sbEnd)
-                        AMLogging.log("BalanceSummary: added END label=\(label ?? "nil") date=\(endDate) amount=\(end) line='" + s + "'", component: LOG_COMPONENT)
-                    } else {
-                        AMLogging.log("BalanceSummary: no end date available; skipping END for line='" + s + "'", component: LOG_COMPONENT)
+                        if let startDate = asOfForSummaryStart {
+                            var sbBegin = StagedBalance(asOfDate: startDate, balance: begin)
+                            if let p = sectionPayment { sbBegin.typicalPaymentAmount = p }
+                            sbBegin.sourceAccountLabel = label
+                            balances.append(sbBegin)
+                            AMLogging.log("BalanceSummary: added BEGIN label=\(label ?? "nil") date=\(startDate) amount=\(begin) line='" + s + "'", component: LOG_COMPONENT)
+                        } else {
+                            AMLogging.log("BalanceSummary: no start date available; skipping BEGIN for line='" + s + "'", component: LOG_COMPONENT)
+                        }
+                        if let endDate = asOfForSummaryEnd ?? asOfForSummaryStart {
+                            var sbEnd = StagedBalance(asOfDate: endDate, balance: end)
+                            if let p = sectionPayment { sbEnd.typicalPaymentAmount = p }
+                            sbEnd.sourceAccountLabel = label
+                            balances.append(sbEnd)
+                            AMLogging.log("BalanceSummary: added END label=\(label ?? "nil") date=\(endDate) amount=\(end) line='" + s + "'", component: LOG_COMPONENT)
+                        } else {
+                            AMLogging.log("BalanceSummary: no end date available; skipping END for line='" + s + "'", component: LOG_COMPONENT)
+                        }
                     }
                 } else if let amount = parseAmountFromLine(s) {
                     // Fallback: single amount found — treat as an ending balance if we have an end date, else use start
@@ -1194,7 +1335,58 @@ struct PDFSummaryParser: StatementParser {
             balances = order.compactMap { chosen[$0] }
             AMLogging.log("PDFSummaryParser: de-duplicated balances by day/label — before=\(before) after=\(balances.count)", component: LOG_COMPONENT)
         }
-
+        
+        if hasCreditCardIndicators, let cd = statementClosingDate {
+            // Force all credit card snapshots to the closing date and backfill APR if missing
+            for i in balances.indices {
+                let lbl = (balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lbl == "__typical_payment__" { continue }
+                if lbl == "creditcard" {
+                    balances[i].asOfDate = cd
+                    if balances[i].interestRateAPR == nil, let apr = globalAPR {
+                        balances[i].interestRateAPR = apr.value
+                        if balances[i].interestRateScale == nil { balances[i].interestRateScale = apr.scale }
+                    }
+                }
+            }
+            // Collapse duplicates after coercion (keep one per label/day)
+            var seen: Set<String> = []
+            let cal = Calendar.current
+            balances = balances.filter { b in
+                let lbl = (b.sourceAccountLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lbl == "__typical_payment__" { return true }
+                let key = "\(lbl)|\(Int(cal.startOfDay(for: b.asOfDate).timeIntervalSince1970))"
+                if seen.contains(key) { return false }
+                seen.insert(key)
+                return true
+            }
+            AMLogging.log("PostFilter: coerced CC snapshot date to closing date and backfilled APR; count=\(balances.count)", component: LOG_COMPONENT)
+        }
+        
+        // Final fallback: if no sentinel and no snapshot carries a typicalPaymentAmount,
+        // try extracting Typical Payment from the full document text and attach it.
+        do {
+            let hasSentinel = balances.contains { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "__typical_payment__" }
+            let hasPaymentOnAny = balances.contains { $0.typicalPaymentAmount != nil }
+            if !hasSentinel && !hasPaymentOnAny {
+                let docAll = rows.flatMap { $0 }.joined(separator: " ")
+                if let p = extractTypicalPayment(from: docAll), p > 0 {
+                    if let idx = balances.firstIndex(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "__typical_payment__" }) {
+                        balances[idx].typicalPaymentAmount = p
+                        AMLogging.log("DocFallback: attached Typical Payment to snapshot — amount=\(p) index=\(idx)", component: LOG_COMPONENT)
+                    } else {
+                        let dateForSentinel = asOfForSummaryEnd ?? asOfForSummaryStart ?? Date()
+                        var sentinel = StagedBalance(asOfDate: dateForSentinel, balance: p)
+                        sentinel.sourceAccountLabel = "__typical_payment__"
+                        balances.append(sentinel)
+                        AMLogging.log("DocFallback: appended Typical Payment sentinel — amount=\(p) date=\(dateForSentinel)", component: LOG_COMPONENT)
+                    }
+                } else {
+                    AMLogging.log("DocFallback: no Typical Payment found in full document scan", component: LOG_COMPONENT)
+                }
+            }
+        }
+        
         // If we didn't find any summary rows, surface a helpful message
         if balances.isEmpty {
             throw ImportError.parseFailure("We couldn't detect statement balances in this PDF. Try Transactions mode to import activity, or export a CSV for best results.")
@@ -1235,3 +1427,4 @@ private extension NSRange {
         return self.location == NSNotFound ? nil : self
     }
 }
+
