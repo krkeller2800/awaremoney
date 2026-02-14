@@ -23,18 +23,38 @@ struct PDFSummaryParser: StatementParser {
         var balances: [StagedBalance] = []
         var typicalPaymentSentinelInserted = false
 
-        AMLogging.log("PDFSummaryParser.parse: rows=\(rows.count) headers=\(headers)", component: LOG_COMPONENT)
-        let docProbe = rows.flatMap { $0 }.joined(separator: " ").lowercased()
-        let purchasesTokenCount = max(0, docProbe.components(separatedBy: "purchase").count - 1)
-        AMLogging.log("PDFSummaryParser.parse: doc length=\(docProbe.count) purchasesTokenCount=\(purchasesTokenCount)", component: LOG_COMPONENT)
+        func normalizeSpaces(_ s: String) -> String {
+            if s.isEmpty { return s }
+            var out = String()
+            out.reserveCapacity(s.count)
+            var lastWasSpace = false
+            for scalar in s.unicodeScalars {
+                let isWS = CharacterSet.whitespacesAndNewlines.contains(scalar) || scalar == "\u{00A0}" // NBSP
+                if isWS {
+                    if !lastWasSpace { out.append(" ") }
+                    lastWasSpace = true
+                } else {
+                    out.unicodeScalars.append(scalar)
+                    lastWasSpace = false
+                }
+            }
+            return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
 
-        // Helper to parse dates in the normalized format from PDFStatementExtractor (MM/dd/yyyy)
+        AMLogging.log("PDFSummaryParser.parse: rows=\(rows.count) headers=\(headers)", component: LOG_COMPONENT)
+        let docProbe = normalizeSpaces(rows.flatMap { $0 }.joined(separator: " ")).lowercased()
+        AMLogging.log("PDFSummaryParser.parse: doc length=\(docProbe.count) purchasesTokenCount=\(max(0, docProbe.components(separatedBy: "purchase").count - 1))", component: LOG_COMPONENT)
+
         // Helper to parse dates in the normalized format from PDFStatementExtractor (MM/dd/yyyy)
         func parseDate(_ s: String) -> Date? {
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
             df.timeZone = TimeZone(secondsFromGMT: 0)
-            for fmt in ["MM/dd/yyyy", "M/d/yy", "MM/dd/yy", "M/d/yyyy"] {
+            for fmt in [
+                "MM/dd/yyyy", "M/d/yy", "MM/dd/yy", "M/d/yyyy",
+                "MMMM d, yyyy", "MMM d, yyyy", "MMMM dd, yyyy", "MMM dd, yyyy",
+                "MMMM d yyyy", "MMM d yyyy"
+            ] {
                 df.dateFormat = fmt
                 if let d = df.date(from: s) { return d }
             }
@@ -42,7 +62,7 @@ struct PDFSummaryParser: StatementParser {
         }
 
         func extractStatementClosingDate(from rows: [[String]]) -> Date? {
-            let doc = rows.flatMap { $0 }.joined(separator: " ").lowercased()
+            let doc = normalizeSpaces(rows.flatMap { $0 }.joined(separator: " "))
 
             // Pattern 1: explicit range like "12/21/2025 - 01/20/2026" or with en dash or "to"
             let rangePattern = #"\b(\d{1,2}/\d{1,2}/\d{2,4})\s*(?:–|-|to)\s*(\d{1,2}/\d{1,2}/\d{2,4})\b"#
@@ -56,7 +76,27 @@ struct PDFSummaryParser: StatementParser {
 
             // Pattern 2: labeled closing date
             let labelPattern = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{2,4})"#
-            if let rx = try? NSRegularExpression(pattern: labelPattern, options: []),
+            if let rx = try? NSRegularExpression(pattern: labelPattern, options: [.caseInsensitive]),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 2,
+               let r1 = Range(m.range(at: 1), in: doc) {
+                let endStr = String(doc[r1])
+                if let d = parseDate(endStr) { return d }
+            }
+
+            // Pattern 2b: labeled closing date with spelled-out month (e.g., "Closing Date January 13, 2026")
+            let labelPatternWords = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\s*[:\-]?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?)"#
+            if let rx = try? NSRegularExpression(pattern: labelPatternWords, options: [.caseInsensitive]),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 2,
+               let r1 = Range(m.range(at: 1), in: doc) {
+                let endStr = String(doc[r1])
+                if let d = parseDate(endStr) { return d }
+            }
+
+            // Pattern 2c: "New Balance as of <Month DD, YYYY>"
+            let newBalWords = #"(?:new\s+balance)\s+(?:as\s+of)\s*([A-Za-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?)"#
+            if let rx = try? NSRegularExpression(pattern: newBalWords, options: [.caseInsensitive]),
                let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
                m.numberOfRanges >= 2,
                let r1 = Range(m.range(at: 1), in: doc) {
@@ -66,7 +106,20 @@ struct PDFSummaryParser: StatementParser {
 
             // Pattern 3: Payment Due Date fallback — subtract one month
             let duePattern = #"(?:payment\s+due\s+date)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{2,4})"#
-            if let rx = try? NSRegularExpression(pattern: duePattern, options: []),
+            if let rx = try? NSRegularExpression(pattern: duePattern, options: [.caseInsensitive]),
+               let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+               m.numberOfRanges >= 2,
+               let r1 = Range(m.range(at: 1), in: doc) {
+                let dueStr = String(doc[r1])
+                if let due = parseDate(dueStr),
+                   let approx = Calendar.current.date(byAdding: DateComponents(month: -1), to: due) {
+                    return approx
+                }
+            }
+            
+            // Pattern 3b: Payment Due Date fallback with spelled-out month — subtract one month
+            let dueWords = #"(?:payment\s+due\s+date)\s*[:\-]?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?)"#
+            if let rx = try? NSRegularExpression(pattern: dueWords, options: [.caseInsensitive]),
                let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
                m.numberOfRanges >= 2,
                let r1 = Range(m.range(at: 1), in: doc) {
@@ -384,7 +437,7 @@ struct PDFSummaryParser: StatementParser {
                 AMLogging.log("PurchasesAPR: skip due to penalty on line", component: LOG_COMPONENT)
                 continue
             }
-            let rewardWords = ["cash back", "cashback", "rewards", "points", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
+            let rewardWords = ["cash back", "cashback", "rewards", "points", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
             let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
             let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
             if rewardWords.contains(where: { lineLower.contains($0) }) {
@@ -650,18 +703,20 @@ struct PDFSummaryParser: StatementParser {
             let descRawOriginal = value(row, map, key: "description")
             let desc = descRawOriginal?.lowercased() ?? ""
             let lower = desc
+            let rowCombinedNorm = normalizeSpaces(row.joined(separator: " ")).lowercased()
+
             // Update rolling section/account context from description or account field
             updateContext(from: descRawOriginal, accountField: value(row, map, key: "account"))
 
             // Detect credit-card style summary lines
-            let isCCNewBalance = lower.contains("new balance")
-            let isCreditCardSummary = lower.contains("new balance")
-                || lower.contains("previous balance")
-                || lower.contains("minimum payment due")
-                || lower.contains("payment due date")
-                || lower.contains("credit limit")
-                || lower.contains("available credit")
-                || lower.contains("card ending")
+            let isCCNewBalance = rowCombinedNorm.contains("new balance")
+            let isCreditCardSummary = rowCombinedNorm.contains("new balance")
+                || rowCombinedNorm.contains("previous balance")
+                || rowCombinedNorm.contains("minimum payment due")
+                || rowCombinedNorm.contains("payment due date")
+                || rowCombinedNorm.contains("credit limit")
+                || rowCombinedNorm.contains("available credit")
+                || rowCombinedNorm.contains("card ending")
 
             let isStatementSummary = lower.contains("statement ending balance") || (!hasCreditCardIndicators && lower.contains("statement beginning balance"))
             let isLoanSummary = lower.contains("beginning balance") || lower.contains("ending balance") || lower.contains("current amount due") || lower.contains("amount due") || lower.contains("payment due") || lower.contains("principal balance") || lower.contains("outstanding principal")
