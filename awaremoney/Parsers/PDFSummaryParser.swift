@@ -869,6 +869,7 @@ struct PDFSummaryParser: StatementParser {
                 "regular monthly payment",
                 "monthly payment",
                 "payment due",
+                "Total Minimum Payment Due",
             ]
 
             var triggerRanges: [NSRange] = []
@@ -1140,7 +1141,7 @@ struct PDFSummaryParser: StatementParser {
         if !summaryTexts.isEmpty {
             AMLogging.log("BalanceSummary: found \(summaryTexts.count) section text(s)", component: LOG_COMPONENT)
         }
-        if hasCreditCardIndicators { summaryTexts.removeAll() }
+        // Removed: if hasCreditCardIndicators { summaryTexts.removeAll() }
         for text in summaryTexts {
             let ls = text.replacingOccurrences(of: "\r", with: "\n").split(separator: "\n").map { String($0) }
             // Try to capture a typical payment from the entire section header/text once
@@ -1152,6 +1153,10 @@ struct PDFSummaryParser: StatementParser {
                 balances.append(sentinel)
                 typicalPaymentSentinelInserted = true
                 AMLogging.log("BalanceSummary: inserted typical payment sentinel — amount=\(p) date=\(dateForSentinel)", component: LOG_COMPONENT)
+            }
+            // In credit card documents, only use this section to capture Typical Payment; skip balance extraction.
+            if hasCreditCardIndicators {
+                continue
             }
             for raw in ls {
                 let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
