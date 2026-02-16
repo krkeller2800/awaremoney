@@ -27,9 +27,10 @@ struct StatementImporter {
                     AMLogging.log("StatementImporter: Balance Summary section found — length=\(balanceSection.count)", component: "StatementImporter")
                     augmentedRows.append([balanceSection])
                 } else {
-                    AMLogging.log("StatementImporter: Balance Summary section not found — appending full text fallback", component: "StatementImporter")
-                    augmentedRows.append([fullText])
+                    AMLogging.log("StatementImporter: Balance Summary section not found in raw text", component: "StatementImporter")
                 }
+                AMLogging.log("StatementImporter: appending full document text as synthetic row", component: "StatementImporter")
+                augmentedRows.append([fullText])
             } else {
                 AMLogging.log("StatementImporter: PDF raw text unavailable — proceeding without synthetic sections", component: "StatementImporter")
             }

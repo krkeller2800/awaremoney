@@ -95,6 +95,9 @@ struct DebtDashboardView: View {
                             NavigationLink(destination: DebtSummaryView()) {
                                 Text("Summary")
                             }
+                            NavigationLink(destination: IncomeAndBillsView()) {
+                                Text("Income & Bills")
+                            }
                         }
                     }
                 }
@@ -117,6 +120,9 @@ struct DebtDashboardView: View {
                         }
                         NavigationLink(destination: DebtSummaryView()) {
                             Text("Summary")
+                        }
+                        NavigationLink(destination: IncomeAndBillsView()) {
+                            Text("Income & Bills")
                         }
                     }
                 }
@@ -179,6 +185,9 @@ struct DebtDashboardView: View {
                         }
                         NavigationLink(destination: DebtSummaryView()) {
                             Text("Summary")
+                        }
+                        NavigationLink(destination: IncomeAndBillsView()) {
+                            Text("Income & Bills")
                         }
                     }
                 }

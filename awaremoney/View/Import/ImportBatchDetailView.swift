@@ -536,6 +536,9 @@ struct ImportBatchDetailView: View {
                         AMLogging.log("Balance Summary section not found in raw text", component: "ImportBatchDetailView")
                     }
 
+                    AMLogging.log("ImportBatchDetailView: appending full document text as synthetic row", component: "ImportBatchDetailView")
+                    augmentedRows.append([fullText])
+
                     parsedRows = augmentedRows
                     parsedHeaders = rowsAndHeaders.1
                 } else {

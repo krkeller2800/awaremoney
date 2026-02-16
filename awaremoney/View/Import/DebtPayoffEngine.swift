@@ -79,6 +79,7 @@ public enum DebtPayoffEngine {
             return DebtPlanResult(months: [], payoffDates: [:], payoffOrder: [], totalInterest: 0)
         }
 
+        // NOTE: Implements spillover allocation so leftover extra is applied to additional debts in the same month
         // State variables
         var balances: [UUID: Decimal] = [:]
         var aprs: [UUID: Decimal] = [:]
@@ -165,6 +166,7 @@ public enum DebtPayoffEngine {
 
             var payments: [UUID: Decimal] = basePayments
 
+            // Step 1: Apply extra to the primary target (original behavior)
             if strategy != .minimumsOnly, let target = targetDebt {
                 let currentPayment = payments[target] ?? 0
                 let bal = balances[target] ?? 0
@@ -173,8 +175,79 @@ public enum DebtPayoffEngine {
                 let newPayment = (currentPayment + extraPayment).rounded(2)
                 payments[target] = newPayment
                 extraBudget -= extraPayment
-                if extraBudget < 0 {
-                    extraBudget = 0
+                if extraBudget < 0 { extraBudget = 0 }
+            }
+
+            // Step 2: Spillover pass — allocate any leftover extra across additional debts
+            if strategy != .minimumsOnly && extraBudget > 0 {
+                let epsilon: Decimal = Decimal(string: "0.005") ?? 0
+
+                func remainingAfterCurrent(_ id: UUID) -> Decimal {
+                    let bal = balances[id] ?? 0
+                    let pay = payments[id] ?? 0
+                    return (bal - pay).clampedLowerBound(0).rounded(2)
+                }
+
+                func nextTargetID() -> UUID? {
+                    let candidates = openIDs.filter { remainingAfterCurrent($0) > 0 }
+                    guard !candidates.isEmpty else { return nil }
+                    switch strategy {
+                    case .snowball:
+                        // Lowest remaining (after current payments), tie-break: highest APR, then name
+                        return candidates.sorted { a, b in
+                            let ra = remainingAfterCurrent(a)
+                            let rb = remainingAfterCurrent(b)
+                            if ra != rb { return ra < rb }
+                            let aprA = aprs[a] ?? 0
+                            let aprB = aprs[b] ?? 0
+                            if aprA != aprB { return aprA > aprB }
+                            let nameA = names[a] ?? ""
+                            let nameB = names[b] ?? ""
+                            return nameA < nameB
+                        }.first
+                    case .avalanche:
+                        // Highest APR first, tie-break: highest remaining, then name
+                        return candidates.sorted { a, b in
+                            let aprA = aprs[a] ?? 0
+                            let aprB = aprs[b] ?? 0
+                            if aprA != aprB { return aprA > aprB }
+                            let ra = remainingAfterCurrent(a)
+                            let rb = remainingAfterCurrent(b)
+                            if ra != rb { return ra > rb }
+                            let nameA = names[a] ?? ""
+                            let nameB = names[b] ?? ""
+                            return nameA < nameB
+                        }.first
+                    case .minimumsOnly:
+                        return nil
+                    }
+                }
+
+                var safety = 0
+                while extraBudget > epsilon {
+                    guard let nid = nextTargetID() else { break }
+                    let rem = remainingAfterCurrent(nid)
+                    if rem <= 0 { break }
+                    let add = min(extraBudget, rem).rounded(2)
+                    if add <= 0 { break }
+                    payments[nid] = ((payments[nid] ?? 0) + add).rounded(2)
+                    extraBudget -= add
+                    safety += 1
+                    if safety > 1000 { break }
+                }
+
+                // Step 3: Final reconciliation for rounding pennies — try to consume tiny leftover if capacity exists
+                if extraBudget > 0 {
+                    if let nid = nextTargetID() {
+                        let rem = remainingAfterCurrent(nid)
+                        if rem > 0 {
+                            let add = min(extraBudget, rem).rounded(2)
+                            if add > 0 {
+                                payments[nid] = ((payments[nid] ?? 0) + add).rounded(2)
+                                extraBudget -= add
+                            }
+                        }
+                    }
                 }
             }
 

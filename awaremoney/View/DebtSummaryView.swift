@@ -180,6 +180,28 @@ struct DebtSummaryView: View {
                         }
                     }
                 }
+                
+                Section("Income & Bills") {
+                    NavigationLink("Manage Income & Bills") {
+                        IncomeAndBillsView()
+                    }
+                    LabeledContent("Monthly Income") {
+                        Text(formatAmount(computedMonthlyIncome))
+                    }
+                    LabeledContent("Monthly Bills") {
+                        Text(formatAmount(computedMonthlyBills))
+                    }
+                    LabeledContent("Net for Debt") {
+                        Text(formatAmount(computedMonthlyNet))
+                    }
+                    Button("Use Net as Budget") {
+                        if computedMonthlyNet > 0 {
+                            tempMonthlyBudget = formatAmount(computedMonthlyNet)
+                        }
+                    }
+                    .disabled(computedMonthlyNet <= 0)
+                }
+                
                 Section("Strategy") {
                     Picker("Strategy", selection: $tempStrategy) {
                         Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
@@ -227,8 +249,8 @@ struct DebtSummaryView: View {
                             showPlanErrorAlert = true
                             return
                         }
-                        appliedPlanDate = tempPlanDate
                         appliedPlanMode = tempPlanMode
+                        appliedPlanDate = (tempPlanMode == .projectedAtDate) ? tempPlanDate : nil
                         appliedStrategy = tempStrategy
                         appliedBudget = parsedBudget
                         AMLogging.log("Applied plan selections: mode=\(appliedPlanMode.rawValue), date=\(String(describing: appliedPlanDate)), strategy=\(appliedStrategyDisplay), budget=\(String(describing: appliedBudget))", component: "DebtSummaryView")
@@ -284,12 +306,15 @@ struct DebtSummaryView: View {
                                 minPayment: d.minPayment
                             )
                         }
+                        let startDateForPlan = normalizeToMonth(
+                            appliedPlanMode == .projectedAtDate ? (appliedPlanDate ?? Date()) : Date()
+                        )
                         do {
                             let planResult = try DebtPayoffEngine.plan(
                                 debts: debtInputs,
                                 monthlyBudget: budgetToUse,
                                 strategy: appliedStrategy,
-                                startDate: normalizeToMonth(appliedPlanDate ?? Date())
+                                startDate: startDateForPlan
                             )
                             currentPlan = planResult
                             AMLogging.log("Plan computed successfully; closing plan sheet", component: "DebtSummaryView")
@@ -473,8 +498,11 @@ struct DebtSummaryView: View {
             }
         }()
         let payoff: Date? = {
-            if let plan = currentPlan, let d = plan.payoffDates[account.id] {
-                return d
+            if let plan = currentPlan, let monthDate = plan.payoffDates[account.id] {
+                // Adjust plan month date to the account's actual due day within that month
+                let dueDay = account.loanTerms?.paymentDayOfMonth
+                    ?? Calendar.current.component(.day, from: latestSnapshotDate(account) ?? monthDate)
+                return dateInSameMonth(monthDate, withDay: dueDay)
             }
             if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
                 return payoffDate(startingBalance: usedBal, startFrom: plan, for: account)
@@ -736,6 +764,16 @@ struct DebtSummaryView: View {
         comps.day = clampedDay
         return cal.date(from: comps)!
     }
+    
+    private func dateInSameMonth(_ date: Date, withDay targetDay: Int) -> Date {
+        let cal = Calendar.current
+        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
+        let range = cal.range(of: .day, in: .month, for: monthStart)!
+        let clampedDay = min(max(1, targetDay), range.count)
+        var comps = cal.dateComponents([.year, .month], from: monthStart)
+        comps.day = clampedDay
+        return cal.date(from: comps) ?? date
+    }
 
     private func normalizeToMonth(_ date: Date) -> Date {
         let cal = Calendar.current
@@ -851,6 +889,38 @@ struct DebtSummaryView: View {
             .replacingOccurrences(of: "$", with: "")
             .replacingOccurrences(of: ",", with: "")
         return Decimal(string: filtered)
+    }
+    
+    // MARK: - Income & Bills helpers
+    
+    private func allCashFlowItems() -> [CashFlowItem] {
+        do {
+            return try modelContext.fetch(FetchDescriptor<CashFlowItem>())
+        } catch {
+            return []
+        }
+    }
+    
+    private func monthlyEquivalent(amount: Decimal, frequency: PaymentFrequency) -> Decimal {
+        return amount * frequency.monthlyEquivalentFactor
+    }
+    
+    private var computedMonthlyIncome: Decimal {
+        let items = allCashFlowItems().filter { $0.isIncome }
+        return items.reduce(0) { acc, item in
+            acc + monthlyEquivalent(amount: item.amount, frequency: item.frequency)
+        }
+    }
+    
+    private var computedMonthlyBills: Decimal {
+        let items = allCashFlowItems().filter { !$0.isIncome }
+        return items.reduce(0) { acc, item in
+            acc + monthlyEquivalent(amount: item.amount, frequency: item.frequency)
+        }
+    }
+    
+    private var computedMonthlyNet: Decimal {
+        computedMonthlyIncome - computedMonthlyBills
     }
 }
 

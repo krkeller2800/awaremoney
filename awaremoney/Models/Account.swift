@@ -24,6 +24,17 @@ struct LoanTerms: Codable, Hashable {
 enum PaymentFrequency: String, Codable, CaseIterable {
     case monthly
     case biweekly
+    case weekly
+    case semimonthly
+    case socialSecurity
+    case yearly
+    // Additional cases to support existing usages in other files
+    case oneTime
+    case biWeekly
+    case twiceMonthly
+    case quarterly
+    case semiAnnual
+    case annual
 }
 
 enum CreditCardPaymentMode: String, Codable, CaseIterable {

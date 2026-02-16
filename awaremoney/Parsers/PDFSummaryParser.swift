@@ -860,8 +860,9 @@ struct PDFSummaryParser: StatementParser {
         // Detect typical/regular monthly payment amount from free-form summary lines
         func extractTypicalPayment(from text: String) -> Decimal? {
             let lower = text.lowercased()
+            AMLogging.log("TypicalPayment: scanning text length=\(lower.count)", component: LOG_COMPONENT)
 
-            // Find trigger occurrences
+            // Find trigger occurrences (store trigger label with range for diagnostics)
             let triggers = [
                 "current amount due",
                 "next auto debit",
@@ -869,96 +870,193 @@ struct PDFSummaryParser: StatementParser {
                 "regular monthly payment",
                 "monthly payment",
                 "payment due",
-                "Total Minimum Payment Due",
+                "total minimum payment due",
+                "minimum payment due",
+                "minimum amount due"
             ]
 
-            var triggerRanges: [NSRange] = []
+            var triggerRanges: [(trigger: String, range: NSRange)] = []
             let ns = lower as NSString
             let fullRange = NSRange(location: 0, length: ns.length)
 
             for t in triggers {
                 var searchRange = fullRange
+                var count = 0
                 while true {
                     let r = ns.range(of: t, options: [.caseInsensitive], range: searchRange)
                     if r.location == NSNotFound { break }
-                    triggerRanges.append(r)
+                    triggerRanges.append((t, r))
+                    count += 1
                     let nextLoc = r.location + r.length
                     if nextLoc >= ns.length { break }
                     searchRange = NSRange(location: nextLoc, length: ns.length - nextLoc)
                 }
+                if count > 0 {
+                    AMLogging.log("TypicalPayment: trigger='\(t)' occurrences=\(count)", component: LOG_COMPONENT)
+                }
             }
 
-            // If we didn’t find any trigger at all, bail early.
-            guard !triggerRanges.isEmpty else { return nil }
+            guard !triggerRanges.isEmpty else {
+                AMLogging.log("TypicalPayment: no triggers found in text", component: LOG_COMPONENT)
+                return nil
+            }
 
-            // Currency regex (keeps your handling of parentheses/negatives)
+            // Currency regex (keeps handling of parentheses/negatives)
             let pattern = #"\(\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?\s*\)|[-+]?\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?(?:-)?"#
             guard let rx = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
 
             struct Candidate {
                 let value: Decimal
                 let score: Int
+                let distance: Int
+                let afterTrigger: Bool
+                let lineHasNewBalance: Bool
+                let lineHasMinimum: Bool
+                let lineHasDueDate: Bool
+                let windowHasMinimum: Bool
             }
             var candidates: [Candidate] = []
 
             // Search a small window around each trigger
-            for tr in triggerRanges {
-                // Window: a little before and after the trigger; bias after the trigger
+            for (triggerLabel, tr) in triggerRanges {
                 let pre = 80
                 let post = 160
                 let start = max(0, tr.location - pre)
                 let end = min(ns.length, tr.location + tr.length + post)
                 let window = NSRange(location: start, length: end - start)
+                let windowStr = ns.substring(with: window)
+                let windowLower = windowStr.lowercased()
+                let preview = String(windowLower.prefix(300)).replacingOccurrences(of: "\n", with: " ")
+                let hasNewBalance = windowLower.contains("new balance")
+                let hasMinimum = windowLower.contains("minimum payment") || windowLower.contains("minimum amount due")
+                AMLogging.log("TypicalPayment: trigger='\(triggerLabel)' windowPreview='" + preview + "' hasNewBalance=\(hasNewBalance) hasMinimum=\(hasMinimum)", component: LOG_COMPONENT)
 
                 rx.enumerateMatches(in: lower, options: [], range: window) { m, _, _ in
-                    guard let m, m.range.location != NSNotFound else { return }
+                    guard let m, m.range.location != NSNotFound, let r = Range(m.range, in: lower) else { return }
 
-                    // Normalize token to Decimal (respecting parentheses/minus)
-                    if let r = Range(m.range, in: lower) {
-                        var token = String(lower[r]).trimmingCharacters(in: .whitespacesAndNewlines)
-                        var isNegative = false
-                        if token.hasPrefix("(") && token.hasSuffix(")") { isNegative = true; token.removeFirst(); token.removeLast() }
-                        token = token.replacingOccurrences(of: "$", with: "")
-                                     .replacingOccurrences(of: ",", with: "")
-                                     .replacingOccurrences(of: " ", with: "")
-                        if token.hasSuffix("-") { isNegative = true; token.removeLast() }
-                        if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
-                        guard let dec = Decimal(string: token) else { return }
+                    var token = String(lower[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    var isNegative = false
+                    if token.hasPrefix("(") && token.hasSuffix(")") { isNegative = true; token.removeFirst(); token.removeLast() }
+                    token = token.replacingOccurrences(of: "$", with: "")
+                                 .replacingOccurrences(of: ",", with: "")
+                                 .replacingOccurrences(of: " ", with: "")
+                    if token.hasSuffix("-") { isNegative = true; token.removeLast() }
+                    if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
+                    guard let dec = Decimal(string: token) else { return }
 
-                        // Score by proximity to trigger and positivity
-                        // Distance measured from end of trigger to start of amount
-                        let amountStart = m.range.location
-                        let triggerEnd = tr.location + tr.length
-                        let distance = abs(amountStart - triggerEnd)
+                    // Distance and ordering relative to trigger
+                    let amountStart = m.range.location
+                    let triggerEnd = tr.location + tr.length
+                    let distance = abs(amountStart - triggerEnd)
+                    let afterTrigger = amountStart >= triggerEnd
 
-                        var score = 100 - min(distance, 100) // clamp contribution
-                        if isNegative { score -= 25 }        // prefer positive amounts for "payment due"
-                        if amountStart < triggerEnd { score -= 10 } // prefer amounts that come after the trigger phrase
+                    // Determine the single line containing this amount match
+                    let nsAll = lower as NSString
+                    let startSearch = NSRange(location: 0, length: m.range.location)
+                    let endSearch = NSRange(location: m.range.location + m.range.length, length: nsAll.length - (m.range.location + m.range.length))
+                    let prevNL = nsAll.range(of: "\n", options: [.backwards], range: startSearch)
+                    let nextNL = nsAll.range(of: "\n", options: [], range: endSearch)
+                    let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
+                    let lineEnd = nextNL.location == NSNotFound ? nsAll.length : nextNL.location
+                    let lineRange = NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+                    let line = nsAll.substring(with: lineRange)
+                    let lineLower = line.lowercased()
+                    let lineHasNewBalance = lineLower.contains("new balance")
+                    let lineHasMinimum = lineLower.contains("minimum payment") || lineLower.contains("minimum amount due")
+                    let lineHasDueDate = lineLower.contains("payment due date")
 
-                        // Light penalty if the local window contains "balance" (helps avoid grabbing balances)
-                        let localStr = ns.substring(with: window).lowercased()
-                        if localStr.contains("balance") { score -= 8 }
+                    // Score by proximity to trigger and positivity
+                    var score = 100 - min(distance, 100) // clamp contribution
+                    if isNegative { score -= 25 }        // prefer positive amounts for "payment due"
+                    if !afterTrigger { score -= 10 }     // prefer amounts after the trigger phrase
 
-                        candidates.append(Candidate(value: isNegative ? -dec : dec, score: score))
-                    }
+                    // Light penalty if the local window contains "balance" (helps avoid grabbing balances)
+                    if windowLower.contains("balance") { score -= 8 }
+
+                    AMLogging.log(
+                        "TypicalPayment: candidate value=\(isNegative ? -dec : dec) sign=\(isNegative ? "neg" : "pos") distance=\(distance) after=\(afterTrigger) lineHasNewBalance=\(lineHasNewBalance) lineHasMinimum=\(lineHasMinimum) score=\(score) line='" + String(lineLower.prefix(160)) + "'",
+                        component: LOG_COMPONENT
+                    )
+
+                    candidates.append(Candidate(value: isNegative ? -dec : dec,
+                                                score: score,
+                                                distance: distance,
+                                                afterTrigger: afterTrigger,
+                                                lineHasNewBalance: lineHasNewBalance,
+                                                lineHasMinimum: lineHasMinimum,
+                                                lineHasDueDate: lineHasDueDate,
+                                                windowHasMinimum: hasMinimum))
                 }
             }
 
-            // If we collected nothing (should be rare), fall back to original behavior on the same line/window
-            guard !candidates.isEmpty else { return nil }
+            // After collecting `candidates` for all triggers, post-process and select best
 
-            // Prefer the highest score; if tied, prefer positive and then smaller absolute value
-            let best = candidates.max { lhs, rhs in
-                if lhs.score != rhs.score { return lhs.score < rhs.score }
-                let lPos = (lhs.value as NSDecimalNumber).doubleValue >= 0
-                let rPos = (rhs.value as NSDecimalNumber).doubleValue >= 0
-                if lPos != rPos { return !lPos && rPos } // prefer positive
+            guard !candidates.isEmpty else {
+                AMLogging.log("TypicalPayment: no currency candidates found near triggers", component: LOG_COMPONENT)
+                return nil
+            }
+
+            // We don't have a single global window context here; use a conservative default.
+            // We'll prefer candidates whose own line contains minimum-related wording.
+            // Removed hardcoded line below as per instructions:
+            // let windowHasMinimum = false
+
+            // 1) Reject any candidate that occurs before the trigger (typical payment should follow the label/trigger)
+            var filtered = candidates.filter { $0.afterTrigger }
+            if filtered.isEmpty {
+                AMLogging.log("TypicalPayment: all candidates occur before trigger — rejecting pre-trigger amounts", component: LOG_COMPONENT)
+                return nil
+            }
+
+            // 2) If any candidate’s line has “minimum”, restrict to those first
+            let minLineCandidates = filtered.filter { $0.lineHasMinimum }
+            if !minLineCandidates.isEmpty {
+                filtered = minLineCandidates
+            }
+
+            let anyWindowHasMinimum = filtered.contains { $0.windowHasMinimum || $0.lineHasMinimum }
+
+            // 3) Penalize “payment due date” lines that don’t also contain “minimum”
+            func adjustedScore(for c: Candidate) -> Int {
+                var s = c.score
+                // Strongly boost amounts on a “minimum” line
+                if c.lineHasMinimum { s += 60 }
+                // Penalize amounts on “payment due date” lines without “minimum”
+                if c.lineHasDueDate && !c.lineHasMinimum { s -= 30 }
+                return s
+            }
+
+            // 4) If “minimum” appears anywhere in the window and multiple positive candidates remain,
+            // prefer the smallest positive amount among the after-trigger candidates.
+            let positiveFiltered = filtered.filter { ( $0.value as NSDecimalNumber ).doubleValue > 0 }
+            if anyWindowHasMinimum && positiveFiltered.count >= 2 {
+                // Choose smallest positive value among after-trigger candidates
+                if let smallest = positiveFiltered.min(by: { (l, r) in
+                    let lv = abs((l.value as NSDecimalNumber).doubleValue)
+                    let rv = abs((r.value as NSDecimalNumber).doubleValue)
+                    return lv < rv
+                }) {
+                    AMLogging.log("TypicalPayment: window has 'minimum' — selecting smallest positive candidate value=\(smallest.value)", component: LOG_COMPONENT)
+                    return smallest.value
+                }
+            }
+
+            // 5) Otherwise, choose by adjusted score; tie-breaker by smaller absolute value
+            if let best = filtered.max(by: { lhs, rhs in
+                let ls = adjustedScore(for: lhs)
+                let rs = adjustedScore(for: rhs)
+                if ls != rs { return ls < rs }
                 let lAbs = abs((lhs.value as NSDecimalNumber).doubleValue)
                 let rAbs = abs((rhs.value as NSDecimalNumber).doubleValue)
                 return lAbs > rAbs
+            }) {
+                let finalScore = adjustedScore(for: best)
+                AMLogging.log("TypicalPayment: selected candidate (adjusted) value=\(best.value) adjustedScore=\(finalScore) distance=\(best.distance) after=\(best.afterTrigger) lineHasMinimum=\(best.lineHasMinimum)", component: LOG_COMPONENT)
+                return best.value
             }
 
-            return best?.value
+            AMLogging.log("TypicalPayment: candidates present but no selection made after adjustments (unexpected)", component: LOG_COMPONENT)
+            return nil
         }
 
         // Augment balances from any embedded Balance Summary section text (synthetic rows)
@@ -1141,18 +1239,35 @@ struct PDFSummaryParser: StatementParser {
         if !summaryTexts.isEmpty {
             AMLogging.log("BalanceSummary: found \(summaryTexts.count) section text(s)", component: LOG_COMPONENT)
         }
-        // Removed: if hasCreditCardIndicators { summaryTexts.removeAll() }
+        // Diagnostics for Balance Summary section text
         for text in summaryTexts {
+            // Diagnostics for Balance Summary section text
+            let sectionPreview = String(text.prefix(320)).replacingOccurrences(of: "\n", with: " ")
+            let lowerSection = text.lowercased()
+            let newBalCount = max(0, lowerSection.components(separatedBy: "new balance").count - 1)
+            let minPayCount = max(0, lowerSection.components(separatedBy: "minimum payment").count - 1) + max(0, lowerSection.components(separatedBy: "minimum amount due").count - 1)
+            let dueDateCount = max(0, lowerSection.components(separatedBy: "payment due date").count - 1)
+            let paymentDueCount = max(0, lowerSection.components(separatedBy: "payment due").count - 1)
+            AMLogging.log("BalanceSummary: section preview='" + sectionPreview + "' newBalanceCount=\(newBalCount) minimumCount=\(minPayCount) paymentDueDateCount=\(dueDateCount) paymentDueCount=\(paymentDueCount)", component: LOG_COMPONENT)
+            let sectionLines = text.replacingOccurrences(of: "\r", with: "\n").split(separator: "\n").map { String($0) }
+            var loggedMinLines = 0
+            for ln in sectionLines {
+                let ll = ln.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if ll.contains("minimum payment") || ll.contains("minimum amount due") {
+                    AMLogging.log("BalanceSummary: min-line='" + String(ll.prefix(220)) + "'", component: LOG_COMPONENT)
+                    loggedMinLines += 1
+                    if loggedMinLines >= 3 { break }
+                }
+            }
+            AMLogging.log("BalanceSummary: scanning section for typical payment via extractTypicalPayment", component: LOG_COMPONENT)
+
             let ls = text.replacingOccurrences(of: "\r", with: "\n").split(separator: "\n").map { String($0) }
             // Try to capture a typical payment from the entire section header/text once
             let sectionPayment: Decimal? = extractTypicalPayment(from: text)
-            if let p = sectionPayment, !typicalPaymentSentinelInserted {
-                let dateForSentinel = asOfForSummaryEnd ?? asOfForSummaryStart ?? Date()
-                var sentinel = StagedBalance(asOfDate: dateForSentinel, balance: p)
-                sentinel.sourceAccountLabel = "__typical_payment__"
-                balances.append(sentinel)
-                typicalPaymentSentinelInserted = true
-                AMLogging.log("BalanceSummary: inserted typical payment sentinel — amount=\(p) date=\(dateForSentinel)", component: LOG_COMPONENT)
+            if let p = sectionPayment {
+                AMLogging.log("BalanceSummary: extractTypicalPayment returned amount=\(p) (sentinelInserted=\(typicalPaymentSentinelInserted))", component: LOG_COMPONENT)
+            } else {
+                AMLogging.log("BalanceSummary: extractTypicalPayment returned nil for this section", component: LOG_COMPONENT)
             }
             // In credit card documents, only use this section to capture Typical Payment; skip balance extraction.
             if hasCreditCardIndicators {
