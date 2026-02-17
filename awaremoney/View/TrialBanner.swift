@@ -1,10 +1,16 @@
 import SwiftUI
 
+@MainActor
 struct TrialBanner: View {
     @ObservedObject private var purchases: PurchaseManager
 
-    init(purchases: PurchaseManager = .shared) {
+    init(purchases: PurchaseManager) {
         self.purchases = purchases
+    }
+
+    @MainActor
+    init() {
+        self.purchases = .shared
     }
 
     var body: some View {
@@ -47,3 +53,4 @@ struct TrialBanner: View {
         Spacer()
     }
 }
+

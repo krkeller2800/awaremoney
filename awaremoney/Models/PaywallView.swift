@@ -110,14 +110,20 @@ extension View {
     /// Wrap premium-only content. Presents the paywall if the user is not entitled (neither purchased nor in trial).
     /// - Parameters:
     ///   - isPresented: A binding you control to show the paywall.
-    ///   - purchases: A shared purchase manager (default: shared singleton).
+    ///   - purchases: A purchase manager instance.
     /// - Returns: A view that conditionally overlays a paywall sheet.
-    func paywalled(isPresented: Binding<Bool>, purchases: PurchaseManager = .shared) -> some View {
+    func paywalled(isPresented: Binding<Bool>, purchases: PurchaseManager) -> some View {
         self
             .sheet(isPresented: isPresented) {
                 PaywallView()
                     .environmentObject(purchases)
             }
+    }
+
+    /// Convenience overload that uses the shared PurchaseManager. Kept @MainActor to safely access `.shared`.
+    @MainActor
+    func paywalled(isPresented: Binding<Bool>) -> some View {
+        paywalled(isPresented: isPresented, purchases: PurchaseManager.shared)
     }
 }
 

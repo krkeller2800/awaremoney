@@ -12,6 +12,7 @@ struct DebtDashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var liabilities: [Account] = []
     @State private var selection: Account.ID? = nil
+    @State private var showIncomeBillsHost = false
 
     var body: some View {
         Group {
@@ -38,21 +39,25 @@ struct DebtDashboardView: View {
         } detail: {
             iPadDetail
         }
-//        .safeAreaInset(edge: .top) { TrialBanner() }
+        //.safeAreaInset(edge: .top) { TrialBanner() }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 340)
-//        .toolbar {
-//            ToolbarItem(placement: .navigationBarLeading) {
-//                Menu("Plan") {
-//                    NavigationLink(destination: DebtPlannerView()) {
-//                        Text("Planning")
-//                    }
-//                    NavigationLink(destination: DebtSummaryView()) {
-//                        Text("Summary")
-//                    }
-//                }
-//            }
-//        }
+        //.toolbar {
+        //    ToolbarItem(placement: .navigationBarLeading) {
+        //        Menu("Plan") {
+        //            NavigationLink(destination: DebtPlannerView()) {
+        //                Text("Planning")
+        //            }
+        //            NavigationLink(destination: DebtSummaryView()) {
+        //                Text("Summary")
+        //            }
+        //        }
+        //    }
+        //}
         .task { await load() }
+        .fullScreenCover(isPresented: $showIncomeBillsHost) {
+            IncomeBillsSplitHostView()
+                .environment(\.modelContext, modelContext)
+        }
     }
 
     @ViewBuilder
@@ -84,20 +89,24 @@ struct DebtDashboardView: View {
     private var iPadSidebar: some View {
         if liabilities.isEmpty {
             ContentUnavailableView("No debts yet", systemImage: "creditcard")
-//                .safeAreaInset(edge: .top) { TrialBanner() }
+            //.safeAreaInset(edge: .top) { TrialBanner() }
                 .navigationTitle("Debt")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Menu("Plan") {
+                        Menu {
                             NavigationLink(destination: DebtPlannerView()) {
                                 Text("Planning")
                             }
                             NavigationLink(destination: DebtSummaryView()) {
                                 Text("Summary")
                             }
-                            NavigationLink(destination: IncomeAndBillsView()) {
+                            Button {
+                                showIncomeBillsHost = true
+                            } label: {
                                 Text("Income & Bills")
                             }
+                        } label: {
+                            PlanMenuLabel()
                         }
                     }
                 }
@@ -114,20 +123,24 @@ struct DebtDashboardView: View {
             .navigationTitle("Debt")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Menu("Plan") {
+                    Menu {
                         NavigationLink(destination: DebtPlannerView()) {
                             Text("Planning")
                         }
                         NavigationLink(destination: DebtSummaryView()) {
                             Text("Summary")
                         }
-                        NavigationLink(destination: IncomeAndBillsView()) {
+                        Button {
+                            showIncomeBillsHost = true
+                        } label: {
                             Text("Income & Bills")
                         }
+                    } label: {
+                        PlanMenuLabel()
                     }
                 }
             }
-//            .safeAreaInset(edge: .top) { TrialBanner() }
+            //.safeAreaInset(edge: .top) { TrialBanner() }
         }
     }
 
@@ -161,7 +174,7 @@ struct DebtDashboardView: View {
             Group {
                 if liabilities.isEmpty {
                     ContentUnavailableView("No debts yet", systemImage: "creditcard")
-//                        .safeAreaInset(edge: .top) { TrialBanner() }
+                    //.safeAreaInset(edge: .top) { TrialBanner() }
                 } else {
                     List {
                         Section("Institutions") {
@@ -173,27 +186,35 @@ struct DebtDashboardView: View {
                         }
                     }
                     .refreshable { await load() }
-//                    .safeAreaInset(edge: .top) { TrialBanner() }
+                    //.safeAreaInset(edge: .top) { TrialBanner() }
                 }
             }
             .navigationTitle("Debt")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Menu("Plan") {
+                    Menu {
                         NavigationLink(destination: DebtPlannerView()) {
                             Text("Planning")
                         }
                         NavigationLink(destination: DebtSummaryView()) {
                             Text("Summary")
                         }
-                        NavigationLink(destination: IncomeAndBillsView()) {
+                        Button {
+                            showIncomeBillsHost = true
+                        } label: {
                             Text("Income & Bills")
                         }
+                    } label: {
+                        PlanMenuLabel()
                     }
                 }
             }
         }
         .task { await load() }
+        .fullScreenCover(isPresented: $showIncomeBillsHost) {
+            IncomeAndBillsView()
+                .environment(\.modelContext, modelContext)
+        }
     }
 
     @Sendable private func load() async {

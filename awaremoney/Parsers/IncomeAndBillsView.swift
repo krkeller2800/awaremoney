@@ -12,7 +12,14 @@ struct IncomeAndBillsView: View {
     @State private var selectedIncomeID: UUID? = nil
     @State private var selectedBillID: UUID? = nil
     @State private var showAddSheet = false
+    @State private var addKind: CashFlowItem.Kind = .income
     @State private var activeSheet: ActiveSheet? = nil
+
+    private enum IPadMode: String, CaseIterable { case incomeBills, summary }
+    @State private var ipadMode: IPadMode = .incomeBills
+
+    private enum PhoneMode: String, CaseIterable { case incomeBills = "Income & Bills"; case summary = "Summary" }
+    @State private var phoneMode: PhoneMode = .incomeBills
 
     @State private var leftTopBarBottomY: CGFloat = 0
     @State private var rightTopBarBottomY: CGFloat = 0
@@ -39,7 +46,6 @@ struct IncomeAndBillsView: View {
     @Query(sort: \CashFlowItem.createdAt, order: .reverse) private var items: [CashFlowItem]
 
     var body: some View {
- //       Text("Income & Bills").font(.largeTitle)
         Group {
             if isPad {
                 iPadBody
@@ -57,202 +63,158 @@ struct IncomeAndBillsView: View {
         #endif
     }
 
-    // MARK: - iPhone
     @ViewBuilder
-    private var iPhoneBody: some View {
-        NavigationStack {
-            List {
-                if incomes.isEmpty && bills.isEmpty {
-                    ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
-                } else {
-                    Section("Income") {
-                        ForEach(incomes) { item in
-                            NavigationLink(destination: CashFlowItemEditorView(item: item)) {
-                                row(for: item)
-                            }
-                        }
-                        .onDelete { indexSet in
-                            delete(items: indexSet.map { incomes[$0] })
-                        }
-                        if incomes.isEmpty {
-                            Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    Section("Bills") {
-                        ForEach(bills) { item in
-                            NavigationLink(destination: CashFlowItemEditorView(item: item)) {
-                                row(for: item)
-                            }
-                        }
-                        .onDelete { indexSet in
-                            delete(items: indexSet.map { bills[$0] })
-                        }
-                        if bills.isEmpty {
-                            Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                    summarySection
-                }
-            }
-            .navigationTitle("Income & Bills")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $showAddSheet) {
-                AddCashFlowItemView(initialKind: .income) { newItem in
-                    modelContext.insert(newItem)
-                    try? modelContext.save()
-                }
-            }
+    private var iPadSummaryBody: some View {
+        List {
+            summarySection
         }
+        .listStyle(.insetGrouped)
+        .contentMargins(.top, 30)
     }
 
     // MARK: - iPad
     @ViewBuilder
     private var iPadBody: some View {
-        HStack(spacing: 0) {
-            // Left: Income column
-            VStack(alignment: .leading, spacing: 0) {
-                List {
-                    if incomes.isEmpty {
-                        Section {
-                            HStack(spacing: 8) {
-                                Image(systemName: "list.bullet")
-                                    .foregroundStyle(.secondary)
-                                Text("No income yet")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
+        Group {
+            if ipadMode == .incomeBills {
+                HStack(spacing: 0) {
+                    // Left: Income column
+                    VStack(alignment: .leading, spacing: 0) {
+                        List {
+                            if incomes.isEmpty {
+                                Section {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "list.bullet")
+                                            .foregroundStyle(.secondary)
+                                        Text("No income yet")
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 8)
+                                    .listRowSeparator(.hidden)
+                                }
+                            } else {
+                                Section {
+                                    ForEach(incomes) { item in
+                                        row(for: item)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture { activeSheet = .edit(item: item) }
+                                    }
+                                    .onDelete { indexSet in
+                                        delete(items: indexSet.map { incomes[$0] })
+                                    }
+                                }
                             }
-                            .padding(.vertical, 8)
-                            .listRowSeparator(.hidden)
                         }
-                    } else {
-                        Section {
-                            ForEach(incomes) { item in
-                                row(for: item)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { activeSheet = .edit(item: item) }
+                        .listStyle(.insetGrouped)
+                        .contentMargins(.top, 30)
+                        .safeAreaInset(edge: .top) {
+                            ZStack {
+                                GeometryReader { proxy in
+                                    Color.clear
+                                        .preference(key: LeftTopBarBottomYKey.self, value: proxy.frame(in: .global).minY)
+                                }
+                                .frame(height: 0)
+                                HStack {
+                                    Spacer()
+                                    Text("Income")
+                                        .font(.title3)
+                                        .bold()
+                                    Spacer()
+                                    Button {
+                                        activeSheet = .add(kind: .income)
+                                    } label: {
+                                        Image(systemName: "plus")
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal)
+                                .padding(.top, leftHeaderTopCompensation)
+                                .padding(.vertical, 8)
+                                .background(.bar)
+                                .overlay(Divider(), alignment: .bottom)
                             }
-                            .onDelete { indexSet in
-                                delete(items: indexSet.map { incomes[$0] })
-                            }
+                        }
+                        .onPreferenceChange(LeftTopBarBottomYKey.self) { value in
+                            leftTopBarBottomY = value
                         }
                     }
-                }
-                .listStyle(.insetGrouped)
-                .contentMargins(.top, 30)
-                .safeAreaInset(edge: .top) {
-                    ZStack {
-                        GeometryReader { proxy in
-                            Color.clear
-                                .preference(key: LeftTopBarBottomYKey.self, value: proxy.frame(in: .global).minY)
-                        }
-                        .frame(height: 0)
-                        HStack {
-                            Spacer()
-                            Text("Income")
-                                .font(.title3)
-                                .bold()
-                            Spacer()
-                            Button {
-                                activeSheet = .add(kind: .income)
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, leftHeaderTopCompensation)
-                        .padding(.vertical, 8)
-                        .background(.bar)
-                        .overlay(Divider(), alignment: .bottom)
-                    }
-                }
-                .onPreferenceChange(LeftTopBarBottomYKey.self) { value in
-                    leftTopBarBottomY = value
-                }
-            }
-            .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
+                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
 
-            Divider()
+                    Divider()
 
-            // Right: Bills column
-            VStack(alignment: .leading, spacing: 0) {
-                List {
-                    if bills.isEmpty {
-                        Section {
-                            HStack(spacing: 8) {
-                                Image(systemName: "list.bullet")
-                                    .foregroundStyle(.secondary)
-                                Text("No bills yet")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
+                    // Right: Bills column
+                    VStack(alignment: .leading, spacing: 0) {
+                        List {
+                            if bills.isEmpty {
+                                Section {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "list.bullet")
+                                            .foregroundStyle(.secondary)
+                                        Text("No bills yet")
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 8)
+                                    .listRowSeparator(.hidden)
+                                }
+                            } else {
+                                Section {
+                                    ForEach(bills) { item in
+                                        row(for: item)
+                                            .contentShape(Rectangle())
+                                            .onTapGesture { activeSheet = .edit(item: item) }
+                                    }
+                                    .onDelete { indexSet in
+                                        delete(items: indexSet.map { bills[$0] })
+                                    }
+                                }
                             }
-                            // Optional polish to match your row look-and-feel:
-                            .padding(.vertical, 8)
-                            .listRowSeparator(.hidden)
-                            // If you want to be explicit about insets (often not necessary):
-                            // .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                         }
-                    } else {
-                        Section {
-                            ForEach(bills) { item in
-                                row(for: item)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { activeSheet = .edit(item: item) }
-                            }
-                            .onDelete { indexSet in
-                                delete(items: indexSet.map { bills[$0] })
+                        .listStyle(.insetGrouped)
+                        .contentMargins(.top, 30)
+                        .safeAreaInset(edge: .top) {
+                            ZStack {
+                                GeometryReader { proxy in
+                                    Color.clear
+                                        .preference(key: RightTopBarBottomYKey.self, value: proxy.frame(in: .global).minY)
+                                }
+                                .frame(height: 0)
+                                HStack {
+                                    Spacer()
+                                    Text("Bills")
+                                        .font(.title3)
+                                        .bold()
+                                    Spacer()
+                                    Button {
+                                        activeSheet = .add(kind: .bill)
+                                    } label: {
+                                        Image(systemName: "plus")
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal)
+                                .padding(.top, rightHeaderTopCompensation)
+                                .padding(.vertical, 8)
+                                .background(.bar)
+                                .overlay(Divider(), alignment: .bottom)
                             }
                         }
-                        summarySection
+                        .onPreferenceChange(RightTopBarBottomYKey.self) { value in
+                            rightTopBarBottomY = value
+                        }
                     }
+                    .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
                 }
-                .listStyle(.insetGrouped)
-                .contentMargins(.top, 30)
-                .safeAreaInset(edge: .top) {
-                    ZStack {
-                        GeometryReader { proxy in
-                            Color.clear
-                                .preference(key: RightTopBarBottomYKey.self, value: proxy.frame(in: .global).minY)
-                        }
-                        .frame(height: 0)
-                        HStack {
-                            Spacer()
-                            Text("Bills")
-                                .font(.title3)
-                                .bold()
-                            Spacer()
-                            Button {
-                                activeSheet = .add(kind: .bill)
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, rightHeaderTopCompensation)
-                        .padding(.vertical, 8)
-                        .background(.bar)
-                        .overlay(Divider(), alignment: .bottom)
-                    }
-                }
-                .onPreferenceChange(RightTopBarBottomYKey.self) { value in
-                    rightTopBarBottomY = value
-                }
+                .environment(\.sidebarTopBarBottomY, effectiveTopBarBottomY)
+            } else {
+                iPadSummaryBody
             }
-            .frame(minWidth: 300, idealWidth: 340, maxWidth: 380)
         }
-        .environment(\.sidebarTopBarBottomY, effectiveTopBarBottomY)
+        .animation(.default, value: ipadMode)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Income & Bills")
+                Text(ipadMode == .incomeBills ? "Income & Bills" : "Monthly Summary")
                     .font(.largeTitle)
             }
         }
@@ -278,6 +240,80 @@ struct IncomeAndBillsView: View {
                         activeSheet = nil
                     }
                 )
+            }
+        }
+    }
+
+    // MARK: - iPhone
+    @ViewBuilder
+    private var iPhoneBody: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker("View", selection: $phoneMode) {
+                        Text("Income & Bills").tag(PhoneMode.incomeBills)
+                        Text("Summary").tag(PhoneMode.summary)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if phoneMode == .incomeBills {
+                    if incomes.isEmpty && bills.isEmpty {
+                        ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
+                    } else {
+                        Section("Income") {
+                            ForEach(incomes) { item in
+                                NavigationLink(destination: CashFlowItemEditorView(item: item)) {
+                                    row(for: item)
+                                }
+                            }
+                            .onDelete { indexSet in
+                                delete(items: indexSet.map { incomes[$0] })
+                            }
+                            if incomes.isEmpty {
+                                Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                        Section("Bills") {
+                            ForEach(bills) { item in
+                                NavigationLink(destination: CashFlowItemEditorView(item: item)) {
+                                    row(for: item)
+                                }
+                            }
+                            .onDelete { indexSet in
+                                delete(items: indexSet.map { bills[$0] })
+                            }
+                            if bills.isEmpty {
+                                Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } else {
+                    summarySection
+                }
+            }
+            .navigationTitle("Income & Bills")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button("Add Income") {
+                            addKind = .income
+                            showAddSheet = true
+                        }
+                        Button("Add Bill") {
+                            addKind = .bill
+                            showAddSheet = true
+                        }
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
+                }
+            }
+            .sheet(isPresented: $showAddSheet) {
+                AddCashFlowItemView(initialKind: addKind) { newItem in
+                    modelContext.insert(newItem)
+                    try? modelContext.save()
+                }
             }
         }
     }

@@ -483,7 +483,7 @@ struct PDFSummaryParser: StatementParser {
                 let scale = bestLocal.token.contains(".") ? (bestLocal.token.split(separator: ".").last?.count ?? 0) : 0
                 if val > 1 { val /= 100 }
                 // Score: strong boost for exact line match; light penalty if line hints at prior/previous (already filtered above)
-                var score = 5
+                let score = 5
                 AMLogging.log("PurchasesAPR: candidate token=\(bestLocal.token) value=\(val) scale=\(scale) score=\(score) (line-based)", component: LOG_COMPONENT)
                 pcands.append(PCandidate(value: val, scale: scale, score: score))
             } else {
@@ -797,8 +797,8 @@ struct PDFSummaryParser: StatementParser {
                     // Keep the high-APR guard for non-CC contexts unless explicitly tied to purchases
                     AMLogging.log("Row APR rejected due to high APR without purchases/CC context: value=\(aprInfo.value) desc='\(desc)'", component: LOG_COMPONENT)
                 } else {
-                    var sbApr = aprInfo.value
-                    var sbScale = aprInfo.scale
+                    let sbApr = aprInfo.value
+                    let sbScale = aprInfo.scale
                     // Sanity clamp for mis-OCR (e.g., '37' where '3.7' was intended) — only when not CC context
                     if !rowIsCreditCardContext && sbApr > 0.6 {
                         AMLogging.log("Row APR clamped/rejected due to implausible value outside CC context: value=\(sbApr)", component: LOG_COMPONENT)

@@ -76,7 +76,7 @@ public struct SocialSecuritySchedule {
     /// - Returns: The next scheduled payment Date strictly after `afterDate`.
     public static func nextPaymentDate(after afterDate: Date, birthdayDay: Int) -> Date? {
         let calendar = self.calendar
-        var components = calendar.dateComponents([.year, .month], from: afterDate)
+        let components = calendar.dateComponents([.year, .month], from: afterDate)
 
         // Check current month first
         if let currentMonthPayment = scheduledPaymentDate(birthdayDay: birthdayDay, month: components.month!, year: components.year!),

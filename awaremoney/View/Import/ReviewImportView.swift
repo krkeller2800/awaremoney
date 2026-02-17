@@ -17,6 +17,8 @@ struct ReviewImportView: View {
     @State private var showPDFSheet = false
     @State private var typicalPaymentInput: String = ""
     @State private var typicalPaymentParsed: Decimal? = nil
+    @State private var aprInput: String = ""
+    @State private var aprScale: Int? = nil
 
     var body: some View {
         ZStack {
@@ -146,29 +148,42 @@ struct ReviewImportView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                // Interest rate entry for liabilities
+                if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+                    LabeledContent("Interest Rate (APR)") {
+                        TextField("0.00", text: $aprInput)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    Text("Enter as a percent (e.g., 19.99 for 19.99%).")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             // Starting balance prompt
             if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
-                StartingBalanceInlineView(asOfDate: earliestDate) { dec in
-                    let sb = StagedBalance(asOfDate: earliestDate, balance: dec)
+                StartingBalanceInlineView(asOfDate: earliestDate) { dec, pickedDate in
+                    let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
                     vm.staged?.balances.append(sb)
                 }
             }
             
             // Fallback: when there are no transactions and no balances, allow entering an ending balance manually
             if (vm.staged?.transactions.isEmpty ?? true) && (vm.staged?.balances.isEmpty ?? true) {
-                Section("Ending Balance") {
-                    Text("This statement doesn't include transactions or detected balances. Enter the ending balance to anchor this account.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    StartingBalanceInlineView(asOfDate: Date()) { dec in
-                        // Use 'as of today' as a neutral default; users can adjust later
-                        let sb = StagedBalance(asOfDate: Date(), balance: dec)
+                StartingBalanceInlineView(
+                    asOfDate: Date(),
+                    onSet: { dec, pickedDate in
+                        let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
                         vm.staged?.balances.append(sb)
-                        AMLogging.log("ReviewImportView: User added ending balance fallback — value=\(dec)", component: "ReviewImportView")
-                    }
-                }
+                        AMLogging.log("ReviewImportView: User added ending balance fallback — value=\(dec) date=\(pickedDate)", component: "ReviewImportView")
+                    },
+                    title: "Ending Balance",
+                    messageOverride: "Enter the ending balance and choose the statement date."
+                )
             }
 
             // Summary
@@ -366,6 +381,38 @@ struct ReviewImportView: View {
                         } else {
                             AMLogging.log("ReviewImportView: Not persisting Typical Payment — value is nil or non-positive", component: "ReviewImportView")
                         }
+                        
+                        // Persist APR to the chosen account if available
+                        if let (aprFraction, scale) = parsePercentInput(aprInput) {
+                            let targetAccount: Account? = {
+                                if let sel = selectedAccountId {
+                                    return accounts.first(where: { $0.id == sel })
+                                } else {
+                                    let all = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+                                    let liabilities = all.filter { $0.type == .creditCard || $0.type == .loan }
+                                    let inst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let candidates: [Account] = liabilities.sorted { $0.createdAt > $1.createdAt }
+                                    if let byInst = candidates.first(where: { ($0.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(inst) == .orderedSame && $0.type == vm.newAccountType }) {
+                                        return byInst
+                                    }
+                                    return candidates.first
+                                }
+                            }()
+                            if let acct = targetAccount {
+                                var terms = acct.loanTerms ?? LoanTerms()
+                                terms.apr = aprFraction
+                                terms.aprScale = scale
+                                acct.loanTerms = terms
+                                try? modelContext.save()
+                                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                AMLogging.log("ReviewImportView: Persisted APR to account id=\(acct.id) apr=\(aprFraction) scale=\(String(describing: scale))", component: "ReviewImportView")
+                            } else {
+                                AMLogging.log("ReviewImportView: Unable to resolve account to persist APR", component: "ReviewImportView")
+                            }
+                        } else {
+                            AMLogging.log("ReviewImportView: Not persisting APR — input empty or invalid", component: "ReviewImportView")
+                        }
+                        
                     } catch {
                         vm.errorMessage = error.localizedDescription
                     }
@@ -504,6 +551,15 @@ struct ReviewImportView: View {
 
         // Seed Typical Payment from a sentinel balance embedded by PDFSummaryParser (top-level init and fallback here)
         seedTypicalPaymentFromSentinelIfNeeded()
+        
+        // Seed APR input from any staged balance that carries an APR
+        if aprInput.isEmpty {
+            if let apr = vm.staged?.balances.compactMap({ $0.interestRateAPR }).first {
+                aprInput = formatPercentForInput(apr, scale: vm.staged?.balances.compactMap({ $0.interestRateScale }).first)
+                aprScale = vm.staged?.balances.compactMap({ $0.interestRateScale }).first
+                AMLogging.log("ReviewImportView: Seeded APR from staged balances — apr=\(apr) scale=\(String(describing: aprScale))", component: "ReviewImportView")
+            }
+        }
     }
     
     private func seedTypicalPaymentFromSentinelIfNeeded() {
@@ -546,6 +602,20 @@ struct ReviewImportView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return Decimal(string: cleaned)
     }
+    
+    private func parsePercentInput(_ s: String) -> (Decimal, Int)? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: ",", with: ".")
+        guard let dec = Decimal(string: cleaned) else { return nil }
+        let scale: Int = {
+            if let dot = cleaned.firstIndex(of: ".") { return cleaned.distance(from: cleaned.index(after: dot), to: cleaned.endIndex) }
+            return 0
+        }()
+        var fraction = dec
+        if fraction > 1 { fraction /= 100 }
+        return (fraction, scale)
+    }
 
     private func formatAmountForInput(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
@@ -553,6 +623,14 @@ struct ReviewImportView: View {
         nf.minimumFractionDigits = 0
         nf.maximumFractionDigits = 2
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+    
+    private func formatPercentForInput(_ apr: Decimal, scale: Int?) -> String {
+        let percent = apr * 100
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
+        return nf.string(from: NSDecimalNumber(decimal: percent)) ?? "\(percent)"
     }
 
     private static let currencyFormatter: NumberFormatter = {

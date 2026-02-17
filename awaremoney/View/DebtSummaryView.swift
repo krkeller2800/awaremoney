@@ -44,6 +44,7 @@ struct DebtSummaryView: View {
     @State private var budgetValidationError: String? = nil
     @State private var showPlanErrorAlert = false
     @State private var planErrorMessage: String? = nil
+//    @State private var showIncomeBillsHost = false
 
     var body: some View {
         NavigationStack {
@@ -94,11 +95,23 @@ struct DebtSummaryView: View {
                         }
                         .accessibilityIdentifier("planByDateButton")
                     }
+//                    ToolbarItem(placement: .topBarTrailing) {
+//                        Button {
+//                            showIncomeBillsHost = true
+//                        } label: {
+//                            Text("Income & Bills")
+//                        }
+//                        .accessibilityIdentifier("incomeBillsButton")
+//                    }
                 }
                 .task { await load() }
                 .sheet(isPresented: $showPlanSheet) {
                     planSheetView()
                 }
+//                .fullScreenCover(isPresented: $showIncomeBillsHost) {
+//                    IncomeBillsSplitHostView()
+//                        .environment(\.modelContext, modelContext)
+//                }
                 .onChange(of: showPlanSheet) { _, newValue in
                     AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
                 }

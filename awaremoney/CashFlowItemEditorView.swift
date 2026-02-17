@@ -41,11 +41,11 @@ public struct CashFlowItemEditorView: View {
             }
             Section("Details") {
                 TextField("Name", text: $name)
-                    .onChange(of: name) { _ in applyChanges() }
+                    .onChange(of: name) { applyChanges() }
                 TextField("Amount", text: $amountText)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
-                    .onChange(of: amountText) { _ in applyChanges() }
+                    .onChange(of: amountText) { applyChanges() }
                 Picker("Frequency", selection: $frequency) {
                     Text("Monthly").tag(PaymentFrequency.monthly)
                     Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -102,7 +102,7 @@ public struct CashFlowItemEditorView: View {
                     }
                 }
                 TextField("Notes", text: $notes)
-                    .onChange(of: notes) { _ in applyChanges() }
+                    .onChange(of: notes) { applyChanges() }
             }
         }
         .navigationTitle("Edit \(kind == .income ? "Income" : "Bill")")
