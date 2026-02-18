@@ -20,6 +20,65 @@ struct ReviewImportView: View {
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
 
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case institution
+        case typicalPayment
+        case apr
+        case balanceAmount(Int)
+    }
+
+    private var focusOrder: [Field] {
+        var order: [Field] = []
+        if selectedAccountId == nil {
+            order.append(.institution)
+        }
+        if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+            order.append(.typicalPayment)
+            order.append(.apr)
+        }
+        if let balances = vm.staged?.balances, !balances.isEmpty {
+            for idx in balances.indices {
+                order.append(.balanceAmount(idx))
+            }
+        }
+        return order
+    }
+
+    private var canMovePrev: Bool {
+        guard let f = focusedField, let idx = focusOrder.firstIndex(of: f) else { return false }
+        return idx > 0
+    }
+
+    private var canMoveNext: Bool {
+        guard let f = focusedField, let idx = focusOrder.firstIndex(of: f) else { return false }
+        return idx < focusOrder.count - 1
+    }
+
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { focusedField = nil; return }
+        let currentIndex: Int = {
+            if let f = focusedField, let idx = order.firstIndex(of: f) { return idx }
+            return 0
+        }()
+        let newIndex = max(0, min(order.count - 1, currentIndex + delta))
+        focusedField = order[newIndex]
+    }
+
+    private func commitAndDismissKeyboard() {
+        if let pay = parseCurrencyInput(typicalPaymentInput) {
+            typicalPaymentParsed = pay
+            typicalPaymentInput = formatAmountForInput(pay)
+        }
+        if let (aprFraction, scale) = parsePercentInput(aprInput) {
+            aprScale = scale
+            aprInput = formatPercentForInput(aprFraction, scale: scale)
+        }
+        focusedField = nil
+    }
+
     var body: some View {
         ZStack {
             mainList
@@ -37,8 +96,13 @@ struct ReviewImportView: View {
             NavigationStack {
                 Group {
                     if let url = vm.lastPickedLocalURL {
-                        PDFKitView(url: url)
-                            .ignoresSafeArea()
+                        ZStack(alignment: .topTrailing) {
+                            PDFKitView(url: url)
+                                .ignoresSafeArea()
+                            DismissOverlay()
+                                .padding(.top, 12)
+                                .padding(.trailing, 12)
+                        }
                     } else {
                         VStack {
                             Text("File: \(staged.sourceFileName)")
@@ -113,6 +177,7 @@ struct ReviewImportView: View {
                 if selectedAccountId == nil {
                     TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
                         .textInputAutocapitalization(.words)
+                        .focused($focusedField, equals: .institution)
                     Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
                         ForEach(Account.AccountType.allCases, id: \.self) {
                             Text($0.rawValue)
@@ -143,6 +208,7 @@ struct ReviewImportView: View {
                             .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
                                 typicalPaymentParsed = parseCurrencyInput(newValue)
                             }
+                            .focused($focusedField, equals: .typicalPayment)
                     }
                     Text("Used for payoff estimates and budget projections.")
                         .font(.footnote)
@@ -157,6 +223,7 @@ struct ReviewImportView: View {
                             .keyboardType(.decimalPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .focused($focusedField, equals: .apr)
                     }
                     Text("Enter as a percent (e.g., 19.99 for 19.99%).")
                         .font(.footnote)
@@ -268,6 +335,7 @@ struct ReviewImportView: View {
                                         .keyboardType(.decimalPad)
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
+                                        .focused($focusedField, equals: .balanceAmount(idx))
                                 }
                                 if let label = b.sourceAccountLabel, !label.isEmpty {
                                     Text(label.capitalized)
@@ -312,6 +380,31 @@ struct ReviewImportView: View {
         }
         .onChange(of: selectedAccountId, initial: false) { _, newValue in
             AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Button {
+                    moveFocus(-1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!canMovePrev)
+
+                Button {
+                    moveFocus(1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!canMoveNext)
+
+                Spacer()
+
+                Button {
+                    commitAndDismissKeyboard()
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+            }
         }
         .safeAreaInset(edge: .bottom) { bottomBar }
     }
@@ -684,6 +777,24 @@ struct ReviewImportView: View {
                 }
             }
         )
+    }
+}
+
+private struct DismissOverlay: View {
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.title2)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white)
+                .shadow(radius: 2)
+        }
+        .buttonStyle(.plain)
+        .background(.ultraThinMaterial, in: Circle())
+        .accessibilityLabel("Close")
     }
 }
 

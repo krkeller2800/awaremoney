@@ -452,6 +452,20 @@ private struct AddCashFlowItemView: View {
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
 
+    enum Field: Hashable { case name, amount, notes }
+    @FocusState private var focusedField: Field?
+    private let fieldOrder: [Field] = [.name, .amount, .notes]
+
+    private func goPrev() {
+        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
+        focusedField = fieldOrder[idx - 1]
+    }
+
+    private func goNext() {
+        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
+        focusedField = fieldOrder[idx + 1]
+    }
+
     let onAdd: (CashFlowItem) -> Void
 
     var body: some View {
@@ -459,9 +473,15 @@ private struct AddCashFlowItemView: View {
             Form {
                 Section("Details") {
                     TextField("Name", text: $name)
+                        .focused($focusedField, equals: .name)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .amount }
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
+                        .focused($focusedField, equals: .amount)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .notes }
                     Picker("Frequency", selection: $frequency) {
                         Text("Monthly").tag(PaymentFrequency.monthly)
                         Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -512,6 +532,9 @@ private struct AddCashFlowItemView: View {
                         }
                     }
                     TextField("Notes", text: $notes)
+                        .focused($focusedField, equals: .notes)
+                        .submitLabel(.done)
+                        .onSubmit { commitAndDismissKeyboard() }
                 }
             }
             .navigationTitle(initialKind == .income ? "Add Income" : "Add Bill")
@@ -541,6 +564,31 @@ private struct AddCashFlowItemView: View {
                     }
                 }
             }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button(action: { goPrev() }) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled({
+                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        return idx == 0
+                    }())
+
+                    Button(action: { goNext() }) {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled({
+                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        return idx >= fieldOrder.count - 1
+                    }())
+
+                    Spacer()
+
+                    Button(action: { commitAndDismissKeyboard() }) {
+                        Image(systemName: "checkmark.circle.fill")
+                    }
+                }
+            }
         }
         .onAppear {
             if initialKind == .income {
@@ -550,6 +598,42 @@ private struct AddCashFlowItemView: View {
                 default: break
                 }
             }
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        let cleanedAmount = amountText
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "$", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let amt = Decimal(string: cleanedAmount), !trimmedName.isEmpty {
+            let finalNotes: String? = {
+                let base = notes
+                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = removeSSAToken(from: trimmed)
+                if let n = ssaWednesday {
+                    let token = "[SSA_WED]=\(n)"
+                    if cleaned.isEmpty { return token } else { return cleaned + " " + token }
+                } else {
+                    return cleaned.isEmpty ? nil : cleaned
+                }
+            }()
+            let item = CashFlowItem(
+                kind: initialKind,
+                name: trimmedName,
+                amount: amt,
+                frequency: frequency,
+                dayOfMonth: dayOfMonth,
+                firstPaymentDate: firstPaymentDate,
+                notes: finalNotes
+            )
+            onAdd(item)
+            focusedField = nil
+            dismiss()
+        } else {
+            // If invalid, just dismiss the keyboard
+            focusedField = nil
         }
     }
 
@@ -575,6 +659,20 @@ private struct EditCashFlowItemView: View {
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
 
+    enum Field: Hashable { case name, amount, notes }
+    @FocusState private var focusedField: Field?
+    private let fieldOrder: [Field] = [.name, .amount, .notes]
+
+    private func goPrev() {
+        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
+        focusedField = fieldOrder[idx - 1]
+    }
+
+    private func goNext() {
+        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
+        focusedField = fieldOrder[idx + 1]
+    }
+
     private var isIncome: Bool { item.kind == .income }
 
     var body: some View {
@@ -582,9 +680,15 @@ private struct EditCashFlowItemView: View {
             Form {
                 Section("Details") {
                     TextField("Name", text: $name)
+                        .focused($focusedField, equals: .name)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .amount }
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
+                        .focused($focusedField, equals: .amount)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .notes }
                     Picker("Frequency", selection: $frequency) {
                         Text("Monthly").tag(PaymentFrequency.monthly)
                         Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -635,6 +739,9 @@ private struct EditCashFlowItemView: View {
                         }
                     }
                     TextField("Notes", text: $notes)
+                        .focused($focusedField, equals: .notes)
+                        .submitLabel(.done)
+                        .onSubmit { commitAndDismissKeyboard() }
                 }
             }
             .navigationTitle(isIncome ? "Edit Income" : "Edit Bill")
@@ -678,6 +785,31 @@ private struct EditCashFlowItemView: View {
                     }
                 }
             }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button(action: { goPrev() }) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled({
+                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        return idx == 0
+                    }())
+
+                    Button(action: { goNext() }) {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled({
+                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        return idx >= fieldOrder.count - 1
+                    }())
+
+                    Spacer()
+
+                    Button(action: { commitAndDismissKeyboard() }) {
+                        Image(systemName: "checkmark.circle.fill")
+                    }
+                }
+            }
         }
         .onAppear {
             // Seed state from the existing item
@@ -695,6 +827,39 @@ private struct EditCashFlowItemView: View {
                 default: break
                 }
             }
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        let cleanedAmount = amountText
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "$", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let amt = Decimal(string: cleanedAmount), !trimmedName.isEmpty {
+            let finalNotes: String? = {
+                let base = notes
+                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = removeSSAToken(from: trimmed)
+                if let n = ssaWednesday {
+                    let token = "[SSA_WED]=\(n)"
+                    if cleaned.isEmpty { return token } else { return cleaned + " " + token }
+                } else {
+                    return cleaned.isEmpty ? nil : cleaned
+                }
+            }()
+            item.name = trimmedName
+            item.amount = amt
+            item.frequency = frequency
+            item.dayOfMonth = dayOfMonth
+            item.firstPaymentDate = firstPaymentDate
+            item.notes = finalNotes
+            onSave()
+            focusedField = nil
+            dismiss()
+        } else {
+            // If invalid, just dismiss the keyboard
+            focusedField = nil
         }
     }
 

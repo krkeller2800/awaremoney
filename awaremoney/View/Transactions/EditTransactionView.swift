@@ -13,6 +13,8 @@ struct EditTransactionView: View {
     // For manual transactions only (imported transactions lock amount/date)
     @State private var amountInput: String
     @State private var date: Date
+    @FocusState private var focusedField: Field?
+    private enum Field: Hashable { case payee, memo, amount }
 
     init(transaction: Transaction) {
         self._transaction = Bindable(transaction)
@@ -30,7 +32,9 @@ struct EditTransactionView: View {
         Form {
             Section("Details") {
                 TextField("Payee", text: $payee)
+                    .focused($focusedField, equals: .payee)
                 TextField("Memo", text: $memo)
+                    .focused($focusedField, equals: .memo)
                 Toggle(isOn: Binding(get: {
                     !(transaction.isExcluded)
                 }, set: { newVal in
@@ -44,6 +48,7 @@ struct EditTransactionView: View {
             Section("Amount & Date") {
                 TextField("0.00", text: $amountInput)
                     .keyboardType(.decimalPad)
+                    .focused($focusedField, equals: .amount)
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 Text("Editing amount/date will be preserved across batch replacement unless you choose 'Accept new' during conflict resolution.")
                     .font(.footnote)
@@ -73,7 +78,70 @@ struct EditTransactionView: View {
                     }
                 }
             }
+
+            ToolbarItemGroup(placement: .keyboard) {
+                Button {
+                    previousField()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!canMovePrevious)
+
+                Button {
+                    nextField()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!canMoveNext)
+
+                Spacer()
+
+                Button {
+                    commitKeyboard()
+                } label: {
+                    Image(systemName: "checkmark")
+                }
+            }
         }
+    }
+
+    // MARK: - Focus handling
+
+    private var canMovePrevious: Bool {
+        guard let f = focusedField else { return false }
+        return f != .payee
+    }
+
+    private var canMoveNext: Bool {
+        guard let f = focusedField else { return false }
+        return f != .amount
+    }
+
+    private func previousField() {
+        switch focusedField {
+        case .memo:
+            focusedField = .payee
+        case .amount:
+            focusedField = .memo
+        default:
+            break
+        }
+    }
+
+    private func nextField() {
+        switch focusedField {
+        case .payee:
+            focusedField = .memo
+        case .memo:
+            focusedField = .amount
+        default:
+            break
+        }
+    }
+
+    private func commitKeyboard() {
+        // Ending focus commits current text field edits and dismisses the keyboard
+        focusedField = nil
     }
 
     // MARK: - Save logic

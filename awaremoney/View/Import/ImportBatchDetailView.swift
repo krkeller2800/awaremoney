@@ -312,8 +312,13 @@ struct ImportBatchDetailView: View {
     @ViewBuilder private func pdfSheetContent(for batch: ImportBatch) -> some View {
         NavigationStack {
             if let url = resolvedPDFURL(for: batch) {
-                PDFKitView(url: url)
-                    .ignoresSafeArea()
+                ZStack(alignment: .topTrailing) {
+                    PDFKitView(url: url)
+                        .ignoresSafeArea()
+                    DismissOverlay()
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
+                }
             } else {
                 VStack {
                     Text("File: \(batch.sourceFileName)")
@@ -397,41 +402,62 @@ struct ImportBatchDetailView: View {
     }
 
     @ViewBuilder private func mappingSheetContent(for batch: ImportBatch) -> some View {
-        CSVMappingSheet(
-            headers: pendingCSVHeaders,
-            onSave: { mapping in
-                AMLogging.log("MappingSheet onSave invoked — headers=\(pendingCSVHeaders.count), rows=\(pendingCSVRows.count)", component: "ImportBatchDetailView")
-                Task { @MainActor in
-                    do {
-                        modelContext.insert(mapping)
-                        AMLogging.log("Using saved CSV mapping label=\(mapping.label ?? "(no label)")", component: "ImportBatchDetailView")
-                        try modelContext.save()
-                        let parser = GenericCSVParser(mapping: mapping)
-                        var staged = try parser.parse(rows: pendingCSVRows, headers: pendingCSVHeaders)
-                        AMLogging.log("GenericCSVParser parsed staged — tx=\(staged.transactions.count), balances=\(staged.balances.count), holdings=\(staged.holdings.count)", component: "ImportBatchDetailView")
-                        staged.sourceFileName = batch.sourceFileName
+        NavigationStack {
+            CSVMappingEditorView(
+                mapping: CSVColumnMapping(label: "New Mapping", mappings: [:]),
+                headers: pendingCSVHeaders,
+                sampleRows: pendingCSVRows,
+                onSaveWithOptions: { mapping, opts in
+                    AMLogging.log("MappingEditor onSaveWithOptions — headers=\(pendingCSVHeaders.count), rows=\(pendingCSVRows.count) opts(delim=\(opts.delimiter), header=\(opts.hasHeaderRow), skipEmpty=\(opts.skipEmptyLines))", component: "ImportBatchDetailView")
+                    Task { @MainActor in
+                        do {
+                            // Persist mapping
+                            modelContext.insert(mapping)
+                            try modelContext.save()
 
-                        let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
-                        AMLogging.log("Replace Batch summary (mapped CSV) — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
-                        self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
-                        self.showSummaryAlert = true
-                        AMLogging.log("Showing summary alert: \(self.summaryMessage)", component: "ImportBatchDetailView")
-                        self.showMappingSheet = false
-                        await load()
-                    } catch {
-                        AMLogging.log("CSV mapping parse failed — presenting mapping editor", component: "ImportBatchDetailView")
-                        AMLogging.error("CSV mapping parse failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
-                        self.summaryMessage = "Failed to parse CSV with mapping: \(error.localizedDescription)"
-                        self.showSummaryAlert = true
-                        self.showMappingSheet = false
+                            // Re-read original CSV using selected options if possible.
+                            // We only have the parsed rows/headers here; attempt best-effort by using the batch's source file name if present in Caches.
+                            var effectiveRows = pendingCSVRows
+                            var effectiveHeaders = pendingCSVHeaders
+                            if batch.sourceFileName.lowercased().hasSuffix(".csv"), let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                                let candidate = caches.appendingPathComponent(batch.sourceFileName)
+                                if FileManager.default.fileExists(atPath: candidate.path) {
+                                    AMLogging.log("Re-reading CSV from caches with options at: \(candidate.path)", component: "ImportBatchDetailView")
+                                    let data = try Data(contentsOf: candidate)
+                                    let read = try CSV.read(data: data, encoding: .utf8, options: CSV.ReadOptions(delimiter: opts.delimiter, hasHeaderRow: opts.hasHeaderRow, skipEmptyLines: opts.skipEmptyLines))
+                                    effectiveRows = read.rows
+                                    effectiveHeaders = read.headers
+                                } else {
+                                    AMLogging.log("Cached CSV not found; using in-memory rows/headers", component: "ImportBatchDetailView")
+                                }
+                            }
+
+                            let parser = GenericCSVParser(mapping: mapping)
+                            var staged = try parser.parse(rows: effectiveRows, headers: effectiveHeaders)
+                            staged.sourceFileName = batch.sourceFileName
+
+                            let summary = try ImportViewModel.replaceBatch(batch: batch, with: staged, context: modelContext)
+                            AMLogging.log("Replace Batch summary (mapped CSV via editor) — tx(updated: \(summary.updatedTx), inserted: \(summary.insertedTx), deleted: \(summary.deletedTx)); balances(updated: \(summary.updatedBalances), inserted: \(summary.insertedBalances), deleted: \(summary.deletedBalances)); holdings(updated: \(summary.updatedHoldings), inserted: \(summary.insertedHoldings), deleted: \(summary.deletedHoldings))", component: "ImportBatchDetailView")
+                            self.summaryMessage = "Replaced: tx updated \(summary.updatedTx), inserted \(summary.insertedTx), deleted \(summary.deletedTx)."
+                            self.showSummaryAlert = true
+                            self.showMappingSheet = false
+                            await load()
+                        } catch {
+                            AMLogging.error("CSV mapping parse failed (editor flow): \(error.localizedDescription)", component: "ImportBatchDetailView")
+                            self.summaryMessage = "Failed to parse CSV with mapping: \(error.localizedDescription)"
+                            self.showSummaryAlert = true
+                            self.showMappingSheet = false
+                        }
                     }
-                }
-            },
-            onCancel: {
-                AMLogging.log("MappingSheet canceled by user", component: "ImportBatchDetailView")
-                showMappingSheet = false
-            }
-        )
+                },
+                onCancel: {
+                    AMLogging.log("MappingEditor canceled by user", component: "ImportBatchDetailView")
+                    showMappingSheet = false
+                },
+                visibleFields: nil,
+                autoSaveWhenReady: false
+            )
+        }
     }
 
     // When multiple BalanceSnapshot entries exist for the same account and calendar day,
@@ -832,6 +858,25 @@ struct ImportBatchDetailView: View {
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s }
         else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
+    }
+}
+
+private struct DismissOverlay: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.title2)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white)
+                .shadow(radius: 2)
+        }
+        .buttonStyle(.plain)
+        .background(.ultraThinMaterial, in: Circle())
+        .accessibilityLabel("Close")
     }
 }
 

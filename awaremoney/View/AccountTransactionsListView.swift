@@ -22,7 +22,7 @@ struct AccountTransactionsListView: View {
     var body: some View {
         List {
             ForEach(rows) { row in
-                NavigationLink(value: row.id) {
+                NavigationLink(destination: EditTransactionContainer(transactionID: row.id)) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.payee).font(.body)
@@ -58,9 +58,6 @@ struct AccountTransactionsListView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 AMLogging.log("AccountTransactionsListView post-appear tick (100ms) accountID=\(accountID)", component: "AccountTransactionsListView")
             }
-        }
-        .navigationDestination(for: UUID.self) { txID in
-            EditTransactionContainer(transactionID: txID)
         }
         .task {
             AMLogging.log("AccountTransactionsListView task loadRows accountID=\(accountID)", component: "AccountTransactionsListView")

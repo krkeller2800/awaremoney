@@ -192,7 +192,7 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "AC91FABF-C11D-445B-800B-8329592914E3"
+            uuid = "4206A167-7041-4739-8FE8-0B22004A7B09"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
@@ -206,17 +206,62 @@
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.SymbolicBreakpoint">
+         <BreakpointContent
+            uuid = "C4570918-617F-4F02-A4A7-17E57FB3CB28"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "Yes"
+            symbolName = "PDFStatementExtractor.parse(url:mode:userOverride) "
+            moduleName = "">
+            <Actions>
+               <BreakpointActionProxy
+                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
+                  <ActionContent
+                     consoleCommand = "po url">
+                  </ActionContent>
+               </BreakpointActionProxy>
+               <BreakpointActionProxy
+                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
+                  <ActionContent
+                     consoleCommand = "Let doc = PDFDocument(url: url); po doc != nil">
+                  </ActionContent>
+               </BreakpointActionProxy>
+               <BreakpointActionProxy
+                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
+                  <ActionContent
+                     consoleCommand = "po doc?.pageCount">
+                  </ActionContent>
+               </BreakpointActionProxy>
+               <BreakpointActionProxy
+                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
+                  <ActionContent
+                     consoleCommand = "po doc?.documentAttributes ?? [:]">
+                  </ActionContent>
+               </BreakpointActionProxy>
+               <BreakpointActionProxy
+                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
+                  <ActionContent
+                     consoleCommand = "po doc?.page(at: 0)?.string?.prefix(500)">
+                  </ActionContent>
+               </BreakpointActionProxy>
+            </Actions>
+            <Locations>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "F1427AF5-92FE-49F0-B6ED-BDFDE63D22A9"
+            uuid = "187B84DE-45CE-49B5-8E37-666B0F2D3CB5"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "200"
-            endingLineNumber = "200"
+            startingLineNumber = "236"
+            endingLineNumber = "236"
             landmarkName = "handlePDFSnapshotImport(url:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -224,16 +269,32 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "78D998F7-1A0C-42B3-BD43-48C1CC688C53"
+            uuid = "39DFD94F-C3FD-4DF5-B74E-C2C5861887A8"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
-            filePath = "awaremoney/View/Import/StatementImporter.swift"
+            filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "7"
-            endingLineNumber = "7"
-            landmarkName = "importStatement(from:prefer:)"
+            startingLineNumber = "231"
+            endingLineNumber = "231"
+            landmarkName = "handlePDFSnapshotImport(url:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "D453D65D-8B45-42E8-8A3F-C4AE364B6B10"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "awaremoney/View/Import/PDFTextExtractor.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "35"
+            endingLineNumber = "35"
+            landmarkName = "extractText(from:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

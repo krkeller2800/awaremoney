@@ -18,6 +18,31 @@ public struct CashFlowItemEditorView: View {
 
     @State private var initialized = false
 
+    @FocusState private var focusedField: FocusField?
+
+    private enum FocusField: Hashable {
+        case name, amount, notes
+    }
+
+    private let focusOrder: [FocusField] = [.name, .amount, .notes]
+
+    private func moveFocus(_ direction: Int) {
+        guard !focusOrder.isEmpty else { return }
+        guard let current = focusedField else {
+            focusedField = focusOrder.first
+            return
+        }
+        if let idx = focusOrder.firstIndex(of: current) {
+            let newIdx = max(focusOrder.startIndex, min(focusOrder.index(before: focusOrder.endIndex), idx + direction))
+            focusedField = focusOrder[newIdx]
+        }
+    }
+
+    private func commitAndDismiss() {
+        applyChanges()
+        focusedField = nil
+    }
+
     public var body: some View {
         Form {
             Section("Type") {
@@ -42,10 +67,12 @@ public struct CashFlowItemEditorView: View {
             Section("Details") {
                 TextField("Name", text: $name)
                     .onChange(of: name) { applyChanges() }
+                    .focused($focusedField, equals: .name)
                 TextField("Amount", text: $amountText)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .onChange(of: amountText) { applyChanges() }
+                    .focused($focusedField, equals: .amount)
                 Picker("Frequency", selection: $frequency) {
                     Text("Monthly").tag(PaymentFrequency.monthly)
                     Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -103,6 +130,33 @@ public struct CashFlowItemEditorView: View {
                 }
                 TextField("Notes", text: $notes)
                     .onChange(of: notes) { applyChanges() }
+                    .focused($focusedField, equals: .notes)
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Button {
+                    moveFocus(-1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(focusedField == focusOrder.first)
+
+                Button {
+                    moveFocus(1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(focusedField == focusOrder.last)
+
+                Spacer()
+
+                Button {
+                    commitAndDismiss()
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .accessibilityLabel("Done")
             }
         }
         .navigationTitle("Edit \(kind == .income ? "Income" : "Bill")")

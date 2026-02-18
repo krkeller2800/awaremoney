@@ -46,6 +46,11 @@ struct DebtSummaryView: View {
     @State private var planErrorMessage: String? = nil
 //    @State private var showIncomeBillsHost = false
 
+//    @FocusState private var focusedField: FocusField?
+//    private enum FocusField: Hashable {
+//        case monthlyBudget
+//    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
@@ -178,6 +183,11 @@ struct DebtSummaryView: View {
                         TextField("", text: $tempMonthlyBudget)
                             .multilineTextAlignment(.trailing)
                             .keyboardType(.decimalPad)
+//                            .focused($focusedField, equals: .monthlyBudget)
+//                            .submitLabel(.done)
+//                            .onSubmit {
+//                                commitAndDismissKeyboard()
+//                            }
                     }
                 } header: {
                     Text("Payoff Plan")
@@ -241,6 +251,18 @@ struct DebtSummaryView: View {
                     }
                 }
             }
+//            .toolbar {
+//                if focusedField == .monthlyBudget {
+//                    ToolbarItemGroup(placement: .keyboard) {
+//                        Spacer()
+//                        Button {
+//                            commitAndDismissKeyboard()
+//                        } label: {
+//                            Image(systemName: "checkmark")
+//                        }
+//                    }
+//                }
+//            }
             .navigationTitle("Adjust Date")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -364,13 +386,50 @@ struct DebtSummaryView: View {
                     }
                 }
             }
-            .alert("Can't set plan", isPresented: $showPlanErrorAlert, presenting: planErrorMessage) { _ in
+            .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
                 Button("OK", role: .cancel) { }
-            } message: { msg in
-                Text(msg)
+            } message: {
+                Text(planErrorMessage ?? "")
             }
         }
     }
+
+    // MARK: - Keyboard handling
+
+//    private var focusOrder: [FocusField] { [.monthlyBudget] }
+//
+//    private func focusPrevious() {
+//        guard !focusOrder.isEmpty else { return }
+//        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
+//            let newIdx = (idx - 1 + focusOrder.count) % focusOrder.count
+//            focusedField = focusOrder[newIdx]
+//        } else {
+//            focusedField = focusOrder.last
+//        }
+//    }
+//
+//    private func focusNext() {
+//        guard !focusOrder.isEmpty else { return }
+//        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
+//            let newIdx = (idx + 1) % focusOrder.count
+//            focusedField = focusOrder[newIdx]
+//        } else {
+//            focusedField = focusOrder.first
+//        }
+//    }
+//
+//    private func commitAndDismissKeyboard() {
+//        switch focusedField {
+//        case .monthlyBudget:
+//            let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+//            if let d = parseCurrencyInput(trimmed) {
+//                tempMonthlyBudget = formatAmount(d)
+//            }
+//        case .none:
+//            break
+//        }
+//        focusedField = nil
+//    }
 
     // MARK: - Rows
 

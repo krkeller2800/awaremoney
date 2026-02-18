@@ -405,6 +405,25 @@ struct DebtDetailView: View {
                     .disabled(absDecimal(latestBalance(account)) <= 0)
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Button(action: { moveFocus(-1) }) {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(focusedField == nil || focusedField == focusOrder.first)
+
+                Button(action: { moveFocus(1) }) {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(focusedField == nil || focusedField == focusOrder.last)
+
+                Spacer()
+
+                Button(action: { commitAndDismissKeyboard() }) {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
         .navigationTitle(account.name)
         .task(id: account.id) {
             AMLogging.log("DebtDetailView: account changed to \(account.id) — reinitializing state", component: "DebtDetailView")
@@ -418,12 +437,6 @@ struct DebtDetailView: View {
         .onChange(of: paymentInput) { saveTerms() }
         .onChange(of: paymentDay) { saveTerms() }
         .onChange(of: ccMode) { saveTerms() }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { focusedField = nil }
-            }
-        }
         .sheet(isPresented: $showProjection) {
             NavigationStack {
                 List {
@@ -462,6 +475,24 @@ struct DebtDetailView: View {
                 }
             }
         }
+    }
+
+    private var focusOrder: [Field] { [.payment, .apr] }
+
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { return }
+        guard let current = focusedField, let idx = order.firstIndex(of: current) else {
+            focusedField = order.first
+            return
+        }
+        let nextIdx = max(0, min(order.count - 1, idx + delta))
+        focusedField = order[nextIdx]
+    }
+
+    private func commitAndDismissKeyboard() {
+        saveTerms()
+        focusedField = nil
     }
 
     private func payoffDate(for account: Account) -> Date? {

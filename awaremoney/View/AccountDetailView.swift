@@ -12,12 +12,17 @@ struct AccountDetailView: View {
 
     @State private var showStartingBalanceSheet = false
     @State private var showRecordedBalanceInfo = false
-    @State private var showInstitutionEditSheet = false
-    @State private var tempInstitutionName: String = ""
     @State private var showMergeSheet = false
     @State private var mergeTargetID: UUID?
     @State private var cachedDerivedBalance: Decimal? = nil
     @State private var cachedEarliestTransactionDate: Date? = nil
+
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case institution
+        case paymentAmount
+    }
 
     init(accountID: UUID) {
         self.accountID = accountID
@@ -32,31 +37,27 @@ struct AccountDetailView: View {
                 List {
                     Section(header: GroupedSectionHeader("Details")) {
                         LabeledContent("Name", value: account.name)
-                        if isInvalidInstitutionName(account.institutionName) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text("Institution")
-                                    Spacer()
-                                    Button {
-                                        tempInstitutionName = ""
-                                        showInstitutionEditSheet = true
-                                    } label: {
-                                        Label("Set Institution…", systemImage: "exclamationmark.triangle.fill")
-                                    }
-                                    .buttonStyle(.borderedProminent)
+                        LabeledContent("Institution") {
+                            TextField("Institution name", text: Binding<String>(
+                                get: { account.institutionName ?? "" },
+                                set: { newVal in
+                                    let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    account.institutionName = trimmed
+                                    // Keep account name in sync with institution when edited here
+                                    if account.name != trimmed { account.name = trimmed }
+                                    do { try modelContext.save() } catch {}
+                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
                                 }
-                                Text("Required. We couldn't derive this from your import.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
-                        } else {
-                            Button {
-                                tempInstitutionName = account.institutionName ?? ""
-                                showInstitutionEditSheet = true
-                            } label: {
-                                LabeledContent("Institution", value: account.institutionName ?? "")
-                            }
-                            .buttonStyle(.plain)
+                            ))
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .focused($focusedField, equals: .institution)
+                        }
+                        if isInvalidInstitutionName(account.institutionName) {
+                            Text("Required. We couldn't derive this from your import.")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
                         }
                         LabeledContent("Type", value: account.type.rawValue.capitalized)
                         if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
@@ -97,6 +98,7 @@ struct AccountDetailView: View {
                                 ))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .paymentAmount)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                             }
@@ -265,39 +267,6 @@ struct AccountDetailView: View {
                 .sheet(isPresented: $showStartingBalanceSheet) {
                     StartingBalanceSheet(account: account, defaultDate: defaultStartingBalanceDate(for: account))
                 }
-                .sheet(isPresented: $showInstitutionEditSheet) {
-                    NavigationStack {
-                        Form {
-                            Section("Institution") {
-                                TextField("Institution name", text: $tempInstitutionName)
-                            }
-                            if isInvalidInstitutionName(tempInstitutionName) {
-                                Text("Please enter the bank or institution name (not a generic word like 'statement').")
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        .navigationTitle("Set Institution")
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Cancel") { showInstitutionEditSheet = false }
-                            }
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Save") {
-                                    let trimmed = tempInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    guard !isInvalidInstitutionName(trimmed) else { return }
-                                    account.institutionName = trimmed
-                                    // Keep account name in sync with institution when edited here
-                                    if account.name != trimmed { account.name = trimmed }
-                                    do { try modelContext.save() } catch {}
-                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-                                    showInstitutionEditSheet = false
-                                }
-                                .disabled(isInvalidInstitutionName(tempInstitutionName))
-                            }
-                        }
-                    }
-                }
                 .sheet(isPresented: $showMergeSheet) {
                     NavigationStack {
                         MergeAccountSheet(currentAccountID: account.id, selectedTargetID: $mergeTargetID)
@@ -317,6 +286,55 @@ struct AccountDetailView: View {
                             .simultaneousGesture(TapGesture().onEnded {
                                 AMLogging.log("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
                             })
+                        }
+                    }
+
+                    ToolbarItemGroup(placement: .keyboard) {
+                        // Determine the ordered fields that are currently visible
+                        let fields: [Field] = {
+                            var arr: [Field] = [.institution]
+                            if account.type == .loan || account.type == .creditCard {
+                                arr.append(.paymentAmount)
+                            }
+                            return arr
+                        }()
+
+                        Button {
+                            guard let current = focusedField,
+                                  let idx = fields.firstIndex(of: current),
+                                  idx > 0 else { return }
+                            focusedField = fields[idx - 1]
+                        } label: {
+                            Image(systemName: "chevron.left")
+                        }
+                        .disabled({
+                            guard let current = focusedField,
+                                  let idx = fields.firstIndex(of: current) else { return true }
+                            return idx == 0
+                        }())
+
+                        Button {
+                            guard let current = focusedField,
+                                  let idx = fields.firstIndex(of: current),
+                                  idx < fields.count - 1 else { return }
+                            focusedField = fields[idx + 1]
+                        } label: {
+                            Image(systemName: "chevron.right")
+                        }
+                        .disabled({
+                            guard let current = focusedField,
+                                  let idx = fields.firstIndex(of: current) else { return true }
+                            return idx >= fields.count - 1
+                        }())
+
+                        Spacer()
+
+                        Button {
+                            // Commit any pending edits and dismiss the keyboard
+                            try? modelContext.save()
+                            focusedField = nil
+                        } label: {
+                            Image(systemName: "checkmark")
                         }
                     }
                 }

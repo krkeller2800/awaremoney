@@ -8,7 +8,17 @@
 import Foundation
 
 enum CSV {
+    struct ReadOptions {
+        var delimiter: Character = ","
+        var hasHeaderRow: Bool = true
+        var skipEmptyLines: Bool = true
+    }
+
     static func read(data: Data, encoding: String.Encoding = .utf8) throws -> (rows: [[String]], headers: [String]) {
+        return try read(data: data, encoding: encoding, options: ReadOptions())
+    }
+
+    static func read(data: Data, encoding: String.Encoding = .utf8, options: ReadOptions) throws -> (rows: [[String]], headers: [String]) {
         // Attempt robust decoding: try the provided encoding first, then fall back through common encodings
         var candidateEncodings: [String.Encoding] = [encoding, .utf8, .utf16LittleEndian, .utf16BigEndian, .unicode, .isoLatin1, .windowsCP1252, .ascii]
         // Deduplicate while preserving order
@@ -28,28 +38,33 @@ enum CSV {
         // Strip UTF BOM if present and normalize line endings to \n to avoid CRLF double-terminators
         s = s.replacingOccurrences(of: "\u{FEFF}", with: "")
         let normalized = s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        let rows = parse(csv: normalized)
+        let allRows = parse(csv: normalized, delimiter: options.delimiter)
 
-        // Find the first non-blank row to treat as the header. A blank row is one where all fields are empty/whitespace.
         func isBlankRow(_ row: [String]) -> Bool {
             return row.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
-        guard let headerIndex = rows.firstIndex(where: { !isBlankRow($0) }) else {
-            throw ImportError.invalidCSV
+
+        let rows: [[String]] = options.skipEmptyLines ? allRows.filter { !isBlankRow($0) } : allRows
+
+        if options.hasHeaderRow {
+            guard let headerIndex = rows.firstIndex(where: { !isBlankRow($0) }) else {
+                throw ImportError.invalidCSV
+            }
+            let rawHeader = rows[headerIndex]
+            let header = rawHeader.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let tail = rows.dropFirst(headerIndex + 1)
+            let body = options.skipEmptyLines ? tail.filter { !isBlankRow($0) } : Array(tail)
+            return (body, header)
+        } else {
+            // No header row present — synthesize headers as Column 1..N using the max field count across rows
+            let width = rows.map { $0.count }.max() ?? 0
+            let headers = (0..<width).map { i in "Column \(i+1)" }
+            return (rows, headers)
         }
-
-        let rawHeader = rows[headerIndex]
-        let header = rawHeader.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-        // Body is all rows after the header, excluding blank rows
-        let tail = rows.dropFirst(headerIndex + 1)
-        let body = tail.filter { !isBlankRow($0) }
-
-        return (body, header)
     }
 
     // Simple CSV parser with quote handling
-    private static func parse(csv: String) -> [[String]] {
+    private static func parse(csv: String, delimiter: Character) -> [[String]] {
         var result: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -80,7 +95,7 @@ enum CSV {
                 } else {
                     inQuotes = true
                 }
-            } else if ch == "," && !inQuotes {
+            } else if ch == delimiter && !inQuotes {
                 finishField()
             } else if (ch == "\n" || ch == "\r\n" || ch == "\r") && !inQuotes {
                 finishField()
@@ -96,5 +111,9 @@ enum CSV {
             finishRow()
         }
         return result.filter { !$0.isEmpty }
+    }
+
+    private static func parse(csv: String) -> [[String]] {
+        return parse(csv: csv, delimiter: ",")
     }
 }

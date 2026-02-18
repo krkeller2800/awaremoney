@@ -10,6 +10,9 @@ struct DebtPayoffView: View {
     @State private var aprInput: String = ""
     @State private var typicalPaymentInput: String = ""
 
+    enum Field: Hashable { case apr, typical }
+    @FocusState private var focusedField: Field?
+
     var body: some View {
         List {
             Section("Account") {
@@ -48,6 +51,7 @@ struct DebtPayoffView: View {
                     ))
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
+                    .focused($focusedField, equals: .apr)
                 }
 
                 HStack {
@@ -58,6 +62,7 @@ struct DebtPayoffView: View {
                     ))
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
+                    .focused($focusedField, equals: .typical)
                 }
 
                 ProgressView(value: viewModel.confidence) {
@@ -105,12 +110,47 @@ struct DebtPayoffView: View {
             }
         }
         .navigationTitle("Debt Payoff")
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Button(action: { moveFocus(direction: -1) }) {
+                    Image(systemName: "chevron.left")
+                }
+                .labelStyle(.iconOnly)
+
+                Button(action: { moveFocus(direction: +1) }) {
+                    Image(systemName: "chevron.right")
+                }
+                .labelStyle(.iconOnly)
+
+                Spacer()
+
+                Button(action: {
+                    applyAPRIfParsable()
+                    applyPaymentIfParsable()
+                    viewModel.computeVarianceAgainstLatestStatement()
+                    focusedField = nil
+                }) {
+                    Image(systemName: "checkmark.circle.fill")
+                }
+                .labelStyle(.iconOnly)
+            }
+        }
         .onAppear {
             // Seed UI fields from model
             aprInput = aprInputForUI()
             typicalPaymentInput = typicalPaymentInputForUI()
             viewModel.computeVarianceAgainstLatestStatement()
         }
+    }
+
+    private func moveFocus(direction: Int) {
+        let order: [Field] = [.apr, .typical]
+        guard let current = focusedField, let idx = order.firstIndex(of: current) else {
+            focusedField = .apr
+            return
+        }
+        let nextIndex = max(0, min(order.count - 1, idx + direction))
+        focusedField = order[nextIndex]
     }
 
     private func label(for mode: CreditCardPaymentMode) -> String {
@@ -163,3 +203,4 @@ struct DebtPayoffView: View {
 #Preview {
     Text("Preview requires model data")
 }
+

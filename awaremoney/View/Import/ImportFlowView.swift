@@ -186,6 +186,40 @@ struct ImportFlowView: View {
         return order.compactMap { chosen[$0] }
     }
     
+    private func deduplicateStagedBalancesForCreditCard(_ snaps: [StagedBalance]) -> [StagedBalance] {
+        // Credit card tweak: de-duplicate by calendar day only (ignore labels),
+        // prefer non-zero over zero, and when both are non-zero with opposite signs,
+        // prefer the negative value (liability convention).
+        if snaps.isEmpty { return snaps }
+        var chosen: [Int: StagedBalance] = [:]
+        var order: [Int] = []
+        let cal = Calendar.current
+        for snap in snaps {
+            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = Int(dayStart)
+            if let existing = chosen[key] {
+                let e = existing.balance
+                let s = snap.balance
+                if e == .zero && s != .zero {
+                    chosen[key] = snap
+                } else if e != .zero && s != .zero {
+                    // Prefer negative when signs differ
+                    if (e >= 0 && s < 0) {
+                        chosen[key] = snap
+                    } else {
+                        // keep existing
+                    }
+                } else {
+                    // keep existing (both zero or new is zero)
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        return order.compactMap { chosen[$0] }
+    }
+    
     private func handlePDFSnapshotImport(url: URL) {
         guard let hint = vm.userSelectedDocHint else {
             AMLogging.log("ImportFlowView: handlePDFSnapshotImport called without a userSelectedDocHint; falling back to default handler", component: "Import")
@@ -194,17 +228,52 @@ struct ImportFlowView: View {
         }
         AMLogging.log("ImportFlowView: handlePDFSnapshotImport hint=\(hint) file=\(url.lastPathComponent)", component: "Import")
         do {
+            let didStart = url.startAccessingSecurityScopedResource()
+            AMLogging.log("ImportFlowView: security scope started=\(didStart) for file=\(url.path)", component: "Import")
+            defer {
+                if didStart {
+                    url.stopAccessingSecurityScopedResource()
+                    AMLogging.log("ImportFlowView: security scope stopped for file=\(url.path)", component: "Import")
+                }
+            }
+            
+            // Cache the picked PDF to the app's Caches directory so we can preview it later
+            do {
+                let fm = FileManager.default
+                if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+                    let dest = caches.appendingPathComponent(url.lastPathComponent)
+                    AMLogging.log("ImportFlowView: caching picked PDF to: \(dest.path)", component: "Import")
+                    // Remove any existing file at the destination to avoid copy errors
+                    try? fm.removeItem(at: dest)
+                    if fm.fileExists(atPath: url.path) {
+                        do {
+                            try fm.copyItem(at: url, to: dest)
+                            vm.lastPickedLocalURL = dest
+                            AMLogging.log("ImportFlowView: cached PDF copied; lastPickedLocalURL set", component: "Import")
+                        } catch {
+                            AMLogging.error("ImportFlowView: failed to cache PDF copy — \(error.localizedDescription)", component: "Import")
+                        }
+                    } else {
+                        AMLogging.log("ImportFlowView: picked PDF path does not exist at \(url.path)", component: "Import")
+                    }
+                }
+            }
+
             let importer = StatementImporter()
             // Prefer Transactions mode for PDF snapshot flows
-            let result = try importer.importStatement(from: url, prefer: .transactions)
+            let preferMode: PDFStatementExtractor.Mode = .transactions
+            let result = try importer.importStatement(from: url, prefer: preferMode)
+            AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode)", component: "Import")
             AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
 
             // Try PDFSummaryParser first for snapshot-style parsing
+            AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(result.headers.count) rows=\(result.rows.count)", component: "Import")
             var staged: StagedImport
             do {
                 let summaryParser = PDFSummaryParser()
                 staged = try summaryParser.parse(rows: result.rows, headers: result.headers)
                 AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+                AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (success path)", component: "Import")
             } catch {
                 AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
                 let parsers = ImportViewModel.defaultParsers()
@@ -212,7 +281,9 @@ struct ImportFlowView: View {
                 if let parser = matching.first {
                     staged = try parser.parse(rows: result.rows, headers: result.headers)
                     AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
                 } else {
+                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
                     AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
                     vm.handlePickedURL(url)
                     return
@@ -223,7 +294,11 @@ struct ImportFlowView: View {
 
             // Prefer non-zero snapshots when multiple exist for the same day
             let before = staged.balances.count
-            staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+            if hint == .creditCard {
+                staged.balances = deduplicateStagedBalancesForCreditCard(staged.balances)
+            } else {
+                staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+            }
             AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
 
             // Surface any importer warnings as an info message
@@ -354,8 +429,9 @@ struct ImportFlowView: View {
                 CSVMappingEditorView(
                     mapping: CSVColumnMapping(label: "New Mapping", mappings: Self.prefillMappings(from: session.headers, sampleRows: session.sampleRows)),
                     headers: session.headers,
-                    onSave: { mapping in
-                        AMLogging.log("ImportFlowView: CSVMappingEditorView.onSave — label='" + (mapping.label ?? "(unnamed)") + "' mappings=\(mapping.mappings)", component: "Import")
+                    sampleRows: session.sampleRows,
+                    onSaveWithOptions: { mapping, options in
+                        AMLogging.log("ImportFlowView: CSVMappingEditorView.onSaveWithOptions — label='" + (mapping.label ?? "(unnamed)") + "' mappings=\(mapping.mappings) options(delim=\(options.delimiter), header=\(options.hasHeaderRow), skipEmpty=\(options.skipEmptyLines))", component: "Import")
                         AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
                         // Persist the mapping
                         modelContext.insert(mapping)
@@ -612,21 +688,31 @@ struct ImportFlowView: View {
 
     @ViewBuilder
     private var ipadDetailContent: some View {
-        Group {
-            if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
-                ImportBatchDetailView(batch: batch)
-                    .environment(\.modelContext, modelContext)
-                    .id(batch.persistentModelID)
-                    .onAppear {
-                        AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "Import")
-                    }
-            } else {
-                ContentUnavailableView(
-                    "Select an Import",
-                    systemImage: "tray",
-                    description: Text("Choose an import from the sidebar.")
-                )
+        NavigationStack {
+            Group {
+                if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
+                    ImportBatchDetailView(batch: batch)
+                        .environment(\.modelContext, modelContext)
+                        .id(batch.persistentModelID)
+                        .onAppear {
+                            AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "ImportFlowView")
+                        }
+                } else {
+                    ContentUnavailableView(
+                        "Select an Import",
+                        systemImage: "tray",
+                        description: Text("Choose an import from the sidebar.")
+                    )
+                }
             }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(selectedBatchID == nil ? "" : "Update Transactions")
+                        .font(.largeTitle).bold()
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .frame(maxWidth: 640, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -720,15 +806,6 @@ struct ImportFlowView: View {
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
             ipadDetailContent
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        Text(selectedBatchID == nil ? "" : "Update Transactions")
-                            .font(.largeTitle).bold()
-                    }
-                }
-//                .navigationTitle(selectedBatchID == nil ? "" : "Update Transactions")
-                .navigationBarTitleDisplayMode(.inline)
-                .frame(maxWidth: 640, maxHeight: .infinity, alignment: .topLeading)
         }
         // Shared modifiers remain attached to the container so behavior remains the same
         .onAppear {

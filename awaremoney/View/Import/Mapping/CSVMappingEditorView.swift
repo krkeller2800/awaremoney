@@ -9,6 +9,20 @@ struct CSVMappingEditorView: View {
 
     @State private var availableHeaders: [String] = []
     @State private var autoHandled: Bool = false
+    
+    private enum FocusedField: Hashable { case label, delimiter }
+    @FocusState private var focusedField: FocusedField?
+
+    struct CSVMappingOptions {
+        var delimiter: Character = ","
+        var hasHeaderRow: Bool = true
+        var skipEmptyLines: Bool = true
+    }
+
+    @State private var options = CSVMappingOptions()
+    private var onSaveWithOptionsAction: ((CSVColumnMapping, CSVMappingOptions) -> Void)? = nil
+    private var sampleRows: [[String]] = []
+
     private var onSaveAction: ((CSVColumnMapping) -> Void)? = nil
     private var onCancelAction: (() -> Void)? = nil
     private var visibleFields: [CSVColumnMapping.Field]? = nil
@@ -60,6 +74,17 @@ struct CSVMappingEditorView: View {
         availableHeaders.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
+    private var delimiterBinding: Binding<String> {
+        Binding(
+            get: { String(options.delimiter) },
+            set: { value in
+                if let char = value.first {
+                    options.delimiter = char
+                }
+            }
+        )
+    }
+
     private func headerExists(_ name: String) -> Bool {
         let target = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalizedHeaders.contains { $0.compare(target, options: [.caseInsensitive]) == .orderedSame }
@@ -85,6 +110,17 @@ struct CSVMappingEditorView: View {
         self.onCancelAction = onCancel
         self.visibleFields = visibleFields
         self.autoSaveWhenReady = autoSaveWhenReady
+    }
+
+    init(mapping: CSVColumnMapping, headers: [String], sampleRows: [[String]], onSaveWithOptions: ((CSVColumnMapping, CSVMappingOptions) -> Void)? = nil, onCancel: (() -> Void)? = nil, visibleFields: [CSVColumnMapping.Field]? = nil, autoSaveWhenReady: Bool = true) {
+        self._mapping = Bindable(wrappedValue: mapping)
+        self._availableHeaders = State(initialValue: headers)
+        self.onSaveWithOptionsAction = onSaveWithOptions
+        self.onSaveAction = nil
+        self.onCancelAction = onCancel
+        self.visibleFields = visibleFields
+        self.autoSaveWhenReady = autoSaveWhenReady
+        self.sampleRows = sampleRows
     }
 
     var body: some View {
@@ -123,6 +159,22 @@ struct CSVMappingEditorView: View {
                     set: { mapping.label = $0 }
                 ))
                 .textInputAutocapitalization(.words)
+                .focused($focusedField, equals: .label)
+            }
+
+            if isImportFallback {
+                Section("Options") {
+                    Toggle("Has Header Row", isOn: $options.hasHeaderRow)
+                    Toggle("Skip Empty Lines", isOn: $options.skipEmptyLines)
+                    HStack {
+                        Text("Delimiter")
+                        Spacer()
+                        TextField("Delimiter", text: delimiterBinding)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 40)
+                            .focused($focusedField, equals: .delimiter)
+                    }
+                }
             }
 
             if !availableHeaders.isEmpty && !unmatchedFields.isEmpty {
@@ -169,13 +221,35 @@ struct CSVMappingEditorView: View {
                     }
                 }
             }
+
+            if isImportFallback && !sampleRows.isEmpty {
+                Section("Sample Data") {
+                    ScrollView(.horizontal) {
+                        VStack(alignment: .leading) {
+                            ForEach(sampleRows.prefix(5), id: \.self) { row in
+                                HStack {
+                                    ForEach(row.indices, id: \.self) { idx in
+                                        Text(row[idx])
+                                            .frame(minWidth: 80, alignment: .leading)
+                                            .border(Color.gray.opacity(0.3))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(height: 130)
+                }
+            }
         }
         .onAppear {
             AMLogging.log("CSVMappingEditorView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
             guard !autoHandled else { return }
             if autoSaveWhenReady && isImportFallback && !needsUserInput {
                 autoHandled = true
-                if let onSaveAction {
+                if let onSaveWithOptionsAction {
+                    onSaveWithOptionsAction(mapping, options)
+                    dismiss()
+                } else if let onSaveAction {
                     onSaveAction(mapping)
                     dismiss()
                 } else {
@@ -193,12 +267,38 @@ struct CSVMappingEditorView: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
-                    if let onSaveAction {
+                    if let onSaveWithOptionsAction {
+                        onSaveWithOptionsAction(mapping, options)
+                        dismiss()
+                    } else if let onSaveAction {
                         onSaveAction(mapping)
                         dismiss()
                     } else {
                         saveAndDismiss()
                     }
+                }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Button {
+                    moveToPreviousField()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(previousField() == nil)
+
+                Button {
+                    moveToNextField()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(nextField() == nil)
+
+                Spacer()
+
+                Button {
+                    commitAndDismissKeyboard()
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
                 }
             }
         }
@@ -238,6 +338,44 @@ struct CSVMappingEditorView: View {
             AMLogging.error("CSVMappingEditorView: failed to save mapping — \(error.localizedDescription)", component: "Import")
         }
         dismiss()
+    }
+    
+    private func availableFieldOrder() -> [FocusedField] {
+        var order: [FocusedField] = [.label]
+        if isImportFallback {
+            order.append(.delimiter)
+        }
+        return order
+    }
+
+    private func previousField() -> FocusedField? {
+        guard let current = focusedField else { return nil }
+        let order = availableFieldOrder()
+        guard let idx = order.firstIndex(of: current), idx > 0 else { return nil }
+        return order[order.index(before: idx)]
+    }
+
+    private func nextField() -> FocusedField? {
+        guard let current = focusedField else { return nil }
+        let order = availableFieldOrder()
+        guard let idx = order.firstIndex(of: current), idx < order.count - 1 else { return nil }
+        return order[order.index(after: idx)]
+    }
+
+    private func moveToPreviousField() {
+        if let prev = previousField() {
+            focusedField = prev
+        }
+    }
+
+    private func moveToNextField() {
+        if let next = nextField() {
+            focusedField = next
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        focusedField = nil
     }
 }
 

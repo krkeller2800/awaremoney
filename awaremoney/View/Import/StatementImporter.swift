@@ -10,7 +10,16 @@ struct StatementImporter {
             return gateCSV(rows: rows, headers: headers)
 
         case .pdf:
+            let didStart = url.startAccessingSecurityScopedResource()
+            AMLogging.log("StatementImporter: security scope started=\(didStart) for file=\(url.path)", component: "StatementImporter")
+            defer {
+                if didStart {
+                    url.stopAccessingSecurityScopedResource()
+                    AMLogging.log("StatementImporter: security scope stopped for file=\(url.path)", component: "StatementImporter")
+                }
+            }
             let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: mode)
+            AMLogging.log("StatementImporter: PDF extractor returned rows=\(rows.count) headers=\(headers)", component: "StatementImporter")
             var augmentedRows = rows
 
             if let fullText = PDFTextExtractor.extractText(from: url) {
