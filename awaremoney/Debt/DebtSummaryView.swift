@@ -91,13 +91,14 @@ struct DebtSummaryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            AMLogging.log("Project tapped; presenting plan sheet", component: "DebtSummaryView")
+                        PlanToolbarButton("Model") {
+                            AMLogging.log("Model tapped; presenting plan sheet", component: "DebtSummaryView")
                             showPlanSheet = true
-                        } label: {
-                            Text("Project")
-//                            Image(systemName: "calendar.badge.clock")
                         }
+//                        label: {
+//                            Text("Project")
+//                            Image(systemName: "calendar.badge.clock")
+//                        }
                         .accessibilityIdentifier("planByDateButton")
                     }
 //                    ToolbarItem(placement: .topBarTrailing) {
@@ -266,7 +267,7 @@ struct DebtSummaryView: View {
             .navigationTitle("Adjust Date")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Set Plan") {
+                    PlanToolbarButton("Set Plan") {
                         AMLogging.log("Set Plan tapped with mode=\(tempPlanMode.rawValue), date=\(String(describing: tempPlanDate)), strategy=\(tempStrategyDisplay), budgetField='\(tempMonthlyBudget)'", component: "DebtSummaryView")
                         budgetValidationError = nil
                         let parsedBudget: Decimal? = {
@@ -368,7 +369,7 @@ struct DebtSummaryView: View {
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    PlanToolbarButton("Cancel",fixedWidth: 70) {
                         AMLogging.log("Cancel tapped; resetting selections and dismissing sheet", component: "DebtSummaryView")
                         appliedPlanDate = nil
                         appliedPlanMode = .currentInputs

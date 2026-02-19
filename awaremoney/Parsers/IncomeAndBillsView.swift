@@ -15,6 +15,9 @@ struct IncomeAndBillsView: View {
     @State private var addKind: CashFlowItem.Kind = .income
     @State private var activeSheet: ActiveSheet? = nil
 
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) private var presentationMode
+
     private enum IPadMode: String, CaseIterable { case incomeBills, summary }
     @State private var ipadMode: IPadMode = .incomeBills
 
@@ -294,6 +297,13 @@ struct IncomeAndBillsView: View {
             }
             .navigationTitle("Income & Bills")
             .toolbar {
+                if presentationMode.wrappedValue.isPresented {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "chevron.left")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Add Income") {
@@ -362,12 +372,7 @@ struct IncomeAndBillsView: View {
     }
 
     @ViewBuilder private var summarySection: some View {
-        Section("Monthly Summary") {
-            LabeledContent("Income") { Text(formatCurrency(monthlyIncomeTotal)) }
-            LabeledContent("Bills") { Text(formatCurrency(monthlyBillsTotal)) }
-            LabeledContent("Net for Debt") { Text(formatCurrency(monthlyNetForDebt)) }
-                .foregroundStyle(monthlyNetForDebt < 0 ? .red : .primary)
-        }
+        IncomeBillsSummarySections(items: items)
     }
 
     // MARK: - Utils
@@ -750,7 +755,7 @@ private struct EditCashFlowItemView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button {
                         if let amt = Decimal(string: amountText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             let finalNotes: String? = {
                                 let base = notes
@@ -774,7 +779,10 @@ private struct EditCashFlowItemView: View {
                             onSave()
                             dismiss()
                         }
+                    } label: {
+                        PlanMenuLabel(title: "Save", titleFont: .callout)
                     }
+                    .buttonStyle(.plain)   // may remove chrome in some contexts
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(role: .destructive) {

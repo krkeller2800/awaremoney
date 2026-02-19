@@ -106,7 +106,7 @@ struct DebtDashboardView: View {
                                 Text("Income & Bills")
                             }
                         } label: {
-                            PlanMenuLabel()
+                            PlanMenuLabel(title: "Plan", titleFont: .callout)
                         }
                     }
                 }
@@ -136,7 +136,7 @@ struct DebtDashboardView: View {
                             Text("Income & Bills")
                         }
                     } label: {
-                        PlanMenuLabel()
+                        PlanMenuLabel(title: "Plan", titleFont: .callout)
                     }
                 }
             }
@@ -205,7 +205,7 @@ struct DebtDashboardView: View {
                             Text("Income & Bills")
                         }
                     } label: {
-                        PlanMenuLabel()
+                        PlanMenuLabel(title: "Plan", titleFont: .headline)
                     }
                 }
             }

@@ -39,7 +39,7 @@ struct NetWorthChartView: View {
             .toolbar {
                 if showsDoneButton {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }
+                        PlanToolbarButton("Done") { dismiss() }
                     }
                 }
             }

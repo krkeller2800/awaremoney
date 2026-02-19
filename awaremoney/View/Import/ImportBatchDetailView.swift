@@ -36,6 +36,12 @@ struct ImportBatchDetailView: View {
     @State private var pendingCSVHeaders: [String] = []
     @State private var pendingCSVRows: [[String]] = []
 
+    @FocusState private var focusedField: FocusedField?
+
+    private enum FocusedField: Hashable {
+        case balanceAmount(UUID)
+    }
+
     var body: some View {
         Group {
             if let batch {
@@ -73,6 +79,24 @@ struct ImportBatchDetailView: View {
                                 showDeleteAlert = true
                             } label: {
                                 Image(systemName: "trash")
+                            }
+                        }
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Button {
+                                focusPreviousField()
+                            } label: {
+                                Image(systemName: "chevron.left")
+                            }
+                            Button {
+                                focusNextField()
+                            } label: {
+                                Image(systemName: "chevron.right")
+                            }
+                            Spacer()
+                            Button {
+                                commitAndDismissKeyboard()
+                            } label: {
+                                Image(systemName: "checkmark")
                             }
                         }
                     }
@@ -191,6 +215,11 @@ struct ImportBatchDetailView: View {
                                 .keyboardType(.decimalPad)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
+                                .focused($focusedField, equals: .balanceAmount(snap.id))
+                                .submitLabel(.done)
+                                .onSubmit {
+                                    commitAndDismissKeyboard()
+                                }
                             }
                             if let apr = snap.interestRateAPR {
                                 Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
@@ -789,6 +818,38 @@ struct ImportBatchDetailView: View {
                 self.showSummaryAlert = true
             }
         }
+    }
+
+    private func orderedBalanceFieldIDs() -> [UUID] {
+        return balances.map { $0.id }
+    }
+
+    private func focusPreviousField() {
+        let ids = orderedBalanceFieldIDs()
+        guard !ids.isEmpty else { return }
+        if case let .balanceAmount(currentID) = focusedField, let idx = ids.firstIndex(of: currentID) {
+            let prev = idx > 0 ? ids[idx - 1] : ids.last!
+            focusedField = .balanceAmount(prev)
+        } else {
+            focusedField = .balanceAmount(ids.last!)
+        }
+    }
+
+    private func focusNextField() {
+        let ids = orderedBalanceFieldIDs()
+        guard !ids.isEmpty else { return }
+        if case let .balanceAmount(currentID) = focusedField, let idx = ids.firstIndex(of: currentID) {
+            let next = idx < ids.count - 1 ? ids[idx + 1] : ids.first!
+            focusedField = .balanceAmount(next)
+        } else {
+            focusedField = .balanceAmount(ids.first!)
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        try? modelContext.save()
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        focusedField = nil
     }
 
     @MainActor
