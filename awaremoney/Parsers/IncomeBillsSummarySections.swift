@@ -3,6 +3,7 @@ import SwiftData
 
 struct IncomeBillsSummarySections: View {
     let items: [CashFlowItem]
+    @EnvironmentObject private var settings: SettingsStore
 
     // MARK: - Computed data
     private var incomes: [CashFlowItem] { items.filter { $0.isIncome } }
@@ -198,7 +199,7 @@ struct IncomeBillsSummarySections: View {
     private func formatCurrency(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 }

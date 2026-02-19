@@ -6,6 +6,7 @@ struct EditTransactionView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
 
     @State private var payee: String
     @State private var memo: String
@@ -222,7 +223,7 @@ struct EditTransactionView: View {
     private func formatCurrency(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 

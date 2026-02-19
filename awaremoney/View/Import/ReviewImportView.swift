@@ -12,6 +12,7 @@ struct ReviewImportView: View {
     var staged: StagedImport
     @ObservedObject var vm: ImportViewModel
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject var settings: SettingsStore
     @Query(sort: [SortDescriptor(\Account.createdAt)]) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
     @State private var showPDFSheet = false
@@ -20,116 +21,30 @@ struct ReviewImportView: View {
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
 
-    @FocusState private var focusedField: Field?
-
-    private enum Field: Hashable {
-        case institution
-        case typicalPayment
-        case apr
-        case balanceAmount(Int)
-    }
-
-    private var focusOrder: [Field] {
-        var order: [Field] = []
-        if selectedAccountId == nil {
-            order.append(.institution)
-        }
-        if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
-            order.append(.typicalPayment)
-            order.append(.apr)
-        }
-        if let balances = vm.staged?.balances, !balances.isEmpty {
-            for idx in balances.indices {
-                order.append(.balanceAmount(idx))
-            }
-        }
-        return order
-    }
-
-    private var canMovePrev: Bool {
-        guard let f = focusedField, let idx = focusOrder.firstIndex(of: f) else { return false }
-        return idx > 0
-    }
-
-    private var canMoveNext: Bool {
-        guard let f = focusedField, let idx = focusOrder.firstIndex(of: f) else { return false }
-        return idx < focusOrder.count - 1
-    }
-
-    private func moveFocus(_ delta: Int) {
-        let order = focusOrder
-        guard !order.isEmpty else { focusedField = nil; return }
-        let currentIndex: Int = {
-            if let f = focusedField, let idx = order.firstIndex(of: f) { return idx }
-            return 0
-        }()
-        let newIndex = max(0, min(order.count - 1, currentIndex + delta))
-        focusedField = order[newIndex]
-    }
-
-    private func commitAndDismissKeyboard() {
-        if let pay = parseCurrencyInput(typicalPaymentInput) {
-            typicalPaymentParsed = pay
-            typicalPaymentInput = formatAmountForInput(pay)
-        }
-        if let (aprFraction, scale) = parsePercentInput(aprInput) {
-            aprScale = scale
-            aprInput = formatPercentForInput(aprFraction, scale: scale)
-        }
-        focusedField = nil
-    }
-
     var body: some View {
-        ZStack {
-            mainList
-            if vm.isImporting {
-                Color.black.opacity(0.2)
-                    .ignoresSafeArea()
-                ProgressView("Importing…")
-                    .progressViewStyle(.circular)
-                    .padding(16)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-        }
-        .sheet(isPresented: $showPDFSheet) {
-            NavigationStack {
-                Group {
-                    if let url = vm.lastPickedLocalURL {
-                        ZStack(alignment: .topTrailing) {
-                            PDFKitView(url: url)
-                                .ignoresSafeArea()
-                            DismissOverlay()
-                                .padding(.top, 12)
-                                .padding(.trailing, 12)
-                        }
-                    } else {
-                        VStack {
-                            Text("File: \(staged.sourceFileName)")
-                                .font(.subheadline)
-                            ContentUnavailableView(
-                                "PDF Viewer",
-                                systemImage: "doc.richtext",
-                                description: Text("Original PDF preview isn't available yet.")
-                            )
-                        }
-                        .padding()
-                    }
+        NavigationStack {
+            ZStack {
+                mainList
+                if vm.isImporting {
+                    Color.black.opacity(0.2)
+                        .ignoresSafeArea()
+                    ProgressView("Importing…")
+                        .progressViewStyle(.circular)
+                        .padding(16)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-            .navigationTitle("View PDF")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { showPDFSheet = false }
-                }
+            .onAppear {
+                let hasStaged = (vm.staged != nil)
+                let balancesCount = vm.staged?.balances.count ?? 0
+                let hasSentinel = vm.staged?.balances.contains(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "__typical_payment__" }) ?? false
+                AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
+                seedTypicalPaymentFromSentinelIfNeeded()
             }
         }
-        .onAppear {
-            let hasStaged = (vm.staged != nil)
-            let balancesCount = vm.staged?.balances.count ?? 0
-            let hasSentinel = vm.staged?.balances.contains(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "__typical_payment__" }) ?? false
-            AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
-            seedTypicalPaymentFromSentinelIfNeeded()
+        .safeAreaInset(edge: .bottom) {
+            bottomBar
         }
     }
     
@@ -177,7 +92,6 @@ struct ReviewImportView: View {
                 if selectedAccountId == nil {
                     TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
                         .textInputAutocapitalization(.words)
-                        .focused($focusedField, equals: .institution)
                     Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
                         ForEach(Account.AccountType.allCases, id: \.self) {
                             Text($0.rawValue)
@@ -208,7 +122,6 @@ struct ReviewImportView: View {
                             .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
                                 typicalPaymentParsed = parseCurrencyInput(newValue)
                             }
-                            .focused($focusedField, equals: .typicalPayment)
                     }
                     Text("Used for payoff estimates and budget projections.")
                         .font(.footnote)
@@ -223,7 +136,6 @@ struct ReviewImportView: View {
                             .keyboardType(.decimalPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                            .focused($focusedField, equals: .apr)
                     }
                     Text("Enter as a percent (e.g., 19.99 for 19.99%).")
                         .font(.footnote)
@@ -293,7 +205,7 @@ struct ReviewImportView: View {
                             }
                         }
                         Spacer()
-                        Text(t.amount as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                        Text(t.amount as NSNumber, formatter: currencyFormatter)
                             .foregroundStyle(t.amount < 0 ? .red : .primary)
                     }
                 }
@@ -310,7 +222,7 @@ struct ReviewImportView: View {
                             Text("\(h.symbol) — \(h.quantity.description)")
                             Spacer()
                             if let mv = h.marketValue {
-                                Text(mv as NSNumber, formatter: ReviewImportView.currencyFormatter)
+                                Text(mv as NSNumber, formatter: currencyFormatter)
                             }
                         }
                     }
@@ -335,7 +247,6 @@ struct ReviewImportView: View {
                                         .keyboardType(.decimalPad)
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
-                                        .focused($focusedField, equals: .balanceAmount(idx))
                                 }
                                 if let label = b.sourceAccountLabel, !label.isEmpty {
                                     Text(label.capitalized)
@@ -381,32 +292,6 @@ struct ReviewImportView: View {
         .onChange(of: selectedAccountId, initial: false) { _, newValue in
             AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Button {
-                    moveFocus(-1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!canMovePrev)
-
-                Button {
-                    moveFocus(1)
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!canMoveNext)
-
-                Spacer()
-
-                Button {
-                    commitAndDismissKeyboard()
-                } label: {
-                    Image(systemName: "checkmark.circle.fill")
-                }
-            }
-        }
-        .safeAreaInset(edge: .bottom) { bottomBar }
     }
 
     private var bottomBar: some View {
@@ -621,6 +506,9 @@ struct ReviewImportView: View {
         if let suggested = staged.suggestedAccountType {
             vm.newAccountType = suggested
         }
+        if vm.newAccountType == .creditCard && vm.creditCardFlipOverride == nil {
+            vm.creditCardFlipOverride = settings.creditCardFlipDefault
+        }
         let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
         AMLogging.log("ReviewImportView.onAppear — parsedInstitution=\(parsed ?? "nil") currentEmpty=\(current.isEmpty)", component: "ReviewImportView")
@@ -690,10 +578,21 @@ struct ReviewImportView: View {
     }
 
     private func parseCurrencyInput(_ s: String) -> Decimal? {
-        let cleaned = s.replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: "$", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Decimal(string: cleaned)
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // Keep only digits, minus sign, and separators
+        let allowed = CharacterSet(charactersIn: "-0123456789.,")
+        let filtered = String(trimmed.unicodeScalars.filter { allowed.contains($0) })
+        guard !filtered.isEmpty else { return nil }
+        var normalized = filtered
+        if filtered.contains(",") && filtered.contains(".") {
+            // Assume commas are thousands separators
+            normalized = filtered.replacingOccurrences(of: ",", with: "")
+        } else if filtered.contains(",") && !filtered.contains(".") {
+            // Treat comma as decimal separator
+            normalized = filtered.replacingOccurrences(of: ",", with: ".")
+        }
+        return Decimal(string: normalized)
     }
     
     private func parsePercentInput(_ s: String) -> (Decimal, Int)? {
@@ -712,26 +611,24 @@ struct ReviewImportView: View {
 
     private func formatAmountForInput(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        nf.minimumFractionDigits = 0
-        nf.maximumFractionDigits = 2
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
     
     private func formatPercentForInput(_ apr: Decimal, scale: Int?) -> String {
-        let percent = apr * 100
         let nf = NumberFormatter()
-        nf.numberStyle = .decimal
+        nf.numberStyle = .percent
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
-        return nf.string(from: NSDecimalNumber(decimal: percent)) ?? "\(percent)"
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr * 100)%"
     }
 
-    private static let currencyFormatter: NumberFormatter = {
+    private var currencyFormatter: NumberFormatter {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf
-    }()
+    }
     
     private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
         let nf = NumberFormatter()

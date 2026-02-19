@@ -42,8 +42,14 @@ struct PaywallView: View {
                     .foregroundStyle(.green)
             } else if purchases.isInTrial {
                 let days = purchases.trialDaysRemaining
-                Label("Free trial active — \(days) day\(days == 1 ? "" : "s") remaining", systemImage: "hourglass")
-                    .foregroundStyle(.blue)
+                if days > 0 {
+                    Label("Free trial active — \(days) day\(days == 1 ? "" : "s") remaining", systemImage: "hourglass")
+                        .foregroundStyle(.blue)
+                } else {
+                    let hours = purchases.trialHoursRemaining
+                    Label("Free trial active — \(hours) hour\(hours == 1 ? "" : "s") remaining", systemImage: "hourglass")
+                        .foregroundStyle(.blue)
+                }
             } else {
                 Label("Free trial expired", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)

@@ -13,6 +13,7 @@ private struct AccountValue: Identifiable {
 struct NetWorthView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @EnvironmentObject private var settings: SettingsStore
     @State private var totalNetWorth: Decimal = 0
     @State private var byAccount: [AccountValue] = []
     @State private var showNetWorthChart = false
@@ -280,7 +281,7 @@ struct NetWorthView: View {
     private func format(amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 

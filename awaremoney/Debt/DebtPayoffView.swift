@@ -6,6 +6,7 @@ import SwiftData
 
 struct DebtPayoffView: View {
     @StateObject var viewModel: DebtPayoffViewModel
+    @EnvironmentObject private var settings: SettingsStore
 
     @State private var aprInput: String = ""
     @State private var typicalPaymentInput: String = ""
@@ -25,7 +26,7 @@ struct DebtPayoffView: View {
                     LabeledContent("Baseline") {
                         VStack(alignment: .trailing) {
                             Text(last.asOfDate, style: .date)
-                            Text(viewModel.currency(abs(last.balance)))
+                            Text(formatCurrency(abs(last.balance)))
                         }
                     }
                 }
@@ -86,7 +87,7 @@ struct DebtPayoffView: View {
                 }
                 if let last = viewModel.projection.last {
                     LabeledContent("Projected balance") {
-                        Text(viewModel.currency(last.balance))
+                        Text(formatCurrency(last.balance))
                     }
                 }
             }
@@ -97,7 +98,7 @@ struct DebtPayoffView: View {
                         HStack {
                             Text(p.date, style: .date)
                             Spacer()
-                            Text(viewModel.currency(p.balance))
+                            Text(formatCurrency(p.balance))
                         }
                     }
                 }
@@ -151,6 +152,13 @@ struct DebtPayoffView: View {
         }
         let nextIndex = max(0, min(order.count - 1, idx + direction))
         focusedField = order[nextIndex]
+    }
+
+    private func formatCurrency(_ amount: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
+        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
     private func label(for mode: CreditCardPaymentMode) -> String {

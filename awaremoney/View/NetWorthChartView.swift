@@ -11,6 +11,7 @@ struct NetWorthChartView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
     var showsDoneButton: Bool = true
 
     @State private var slices: [AccountSlice] = []
@@ -198,7 +199,7 @@ struct NetWorthChartView: View {
     private func format(amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 }

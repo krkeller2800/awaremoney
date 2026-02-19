@@ -7,6 +7,7 @@ import StoreKit
 
 struct ImportFlowView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
     @StateObject private var vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
 
     @State private var batches: [ImportBatch] = []
@@ -532,6 +533,7 @@ struct ImportFlowView: View {
                             Button("Credit Card Statement") {
                                 pickerKind = .pdf
                                 vm.userSelectedDocHint = .creditCard
+                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                 vm.newAccountType = .creditCard
                                 AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                                 isFileImporterPresented = true
@@ -540,6 +542,7 @@ struct ImportFlowView: View {
                             Button("User-defined…") {
                                 // Present a manual staged import so the user can add a balance immediately
                                 vm.userSelectedDocHint = .creditCard
+                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                 vm.newAccountType = .creditCard
                                 let manual = StagedImport(
                                     parserId: "manual.user",
@@ -555,7 +558,7 @@ struct ImportFlowView: View {
                                 AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
                             }
                         } label: {
-                            PlanMenuLabel(title: "Import PDF")
+                            PlanMenuLabel(title: "PDF")
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -581,15 +584,18 @@ struct ImportFlowView: View {
                             Button("Credit Card CSV") {
                                 pickerKind = .csv
                                 vm.userSelectedDocHint = .creditCard
+                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                 AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                 isFileImporterPresented = true
                             }
                         } label: {
-                            PlanMenuLabel(title: "Import CSV")
+                            PlanMenuLabel(title: "CSV")
                         }
                     }
                 }
-                hintBar
+                if settings.showHintBars {
+                    hintBar
+                }
             }
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
@@ -620,7 +626,9 @@ struct ImportFlowView: View {
                 if let session {
                     AMLogging.log("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
                     AMLogging.log("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
-                    autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
+                    if settings.importAutoApplyMappings {
+                        autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
+                    }
                 } else {
                     AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
                 }
@@ -682,7 +690,9 @@ struct ImportFlowView: View {
                 .refreshable { await loadBatches() }
                 .listStyle(.sidebar)
             }
-            hintBar
+            if settings.showHintBars {
+                hintBar
+            }
         }
     }
 
@@ -749,6 +759,7 @@ struct ImportFlowView: View {
                                 Button("Credit Card Statement") {
                                     pickerKind = .pdf
                                     vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                     vm.newAccountType = .creditCard
                                     AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
                                     isFileImporterPresented = true
@@ -756,6 +767,7 @@ struct ImportFlowView: View {
                                 Divider()
                                 Button("User-defined…") {
                                     vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                     vm.newAccountType = .creditCard
                                     let manual = StagedImport(
                                         parserId: "manual.user",
@@ -793,6 +805,7 @@ struct ImportFlowView: View {
                                 Button("Credit Card CSV") {
                                     pickerKind = .csv
                                     vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
                                     AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                     isFileImporterPresented = true
                                 }
@@ -834,7 +847,9 @@ struct ImportFlowView: View {
             if let session {
                 AMLogging.log("ImportFlowView: mapping session started — headers=\(session.headers.count)", component: "Import")
                 AMLogging.log("ImportFlowView: attempting auto-apply mapping from onReceive — headers=\(session.headers), rows=\(session.sampleRows.count)", component: "Import")
-                autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
+                if settings.importAutoApplyMappings {
+                    autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
+                }
             } else {
                 AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
             }

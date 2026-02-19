@@ -1,6 +1,7 @@
 #if DEBUG
 import SwiftUI
 import SwiftData
+import Combine
 
 struct DebugSettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -8,6 +9,7 @@ struct DebugSettingsView: View {
     @State private var verboseEnabled: Bool = AMLogConfig.verbose
     @State private var categoryStates: [String: Bool] = [:]
     @State private var dynamicCategories: [String] = []
+    @State private var resetTrialToggle: Bool = false
     private let seedCategories: [String] = [
         "Import", "ImportViewModel", "PDFStatementExtractor", "PDFSummaryParser",
         "PDFBankTransactionsParser", "BrokerageCSVParser", "FidelityStatementCSVParser",
@@ -63,6 +65,25 @@ struct DebugSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Trial") {
+                    Toggle(isOn: $resetTrialToggle) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Reset Free Trial")
+                            Text("Sets the trial start to now so you have a full trial window again.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: resetTrialToggle) { _, newValue in
+                        if newValue {
+                            let purchases = PurchaseManager.shared
+                            purchases.trialStartDate = Date()
+                            purchases.objectWillChange.send()
+                            resetTrialToggle = false
+                        }
+                    }
+                }
+
                 #if DEBUG
                 Section("Danger Zone") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -114,3 +135,4 @@ struct DebugSettingsView: View {
 }
 // What comes next: Hook this button up to a dedicated Import History screen where users can view batches, delete one, or replace it with a new file. This view will also surface conflicts and user-modified items.
 #endif
+

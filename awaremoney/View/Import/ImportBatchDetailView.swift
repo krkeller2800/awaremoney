@@ -16,6 +16,7 @@ struct ImportBatchDetailView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteAlert = false
 
@@ -198,9 +199,8 @@ struct ImportBatchDetailView: View {
                                 Spacer()
                                 TextField("0.00", text: Binding(get: {
                                     let nf = NumberFormatter()
-                                    nf.numberStyle = .decimal
-                                    nf.minimumFractionDigits = 0
-                                    nf.maximumFractionDigits = 2
+                                    nf.numberStyle = .currency
+                                    nf.currencyCode = settings.currencyCode
                                     return nf.string(from: NSDecimalNumber(decimal: snap.balance)) ?? "\(snap.balance)"
                                 }, set: { newText in
                                     let cleaned = newText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -909,7 +909,7 @@ struct ImportBatchDetailView: View {
     private func format(amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 

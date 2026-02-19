@@ -112,6 +112,14 @@ final class PurchaseManager: ObservableObject {
         return max(0, (comps.day ?? 0))
     }
 
+    var trialHoursRemaining: Int {
+        guard let end = trialEndDate else { return 0 }
+        let seconds = end.timeIntervalSinceNow
+        if seconds <= 0 { return 0 }
+        // Ceil to ensure we never show 0 hours when time remains
+        return Int(ceil(seconds / 3600.0))
+    }
+
     // MARK: - Init
     init() {
         Task { await configure() }

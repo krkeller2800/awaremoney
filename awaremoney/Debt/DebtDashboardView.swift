@@ -13,6 +13,7 @@ struct DebtDashboardView: View {
     @State private var liabilities: [Account] = []
     @State private var selection: Account.ID? = nil
     @State private var showIncomeBillsHost = false
+    @EnvironmentObject private var settings: SettingsStore
 
     var body: some View {
         Group {
@@ -285,7 +286,7 @@ struct DebtDashboardView: View {
         let bal = latestBalance(account)
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: bal)) ?? "\(bal)"
     }
 
@@ -337,6 +338,7 @@ struct DebtDashboardView: View {
 struct DebtDetailView: View {
     let account: Account
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
 
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
@@ -589,7 +591,7 @@ struct DebtDetailView: View {
     private func formatAmount(_ amount: Decimal?) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         guard let amount else { return "—" }
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }

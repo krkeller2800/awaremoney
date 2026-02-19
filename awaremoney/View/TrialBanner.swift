@@ -42,7 +42,12 @@ struct TrialBanner: View {
 
     private var message: String {
         let days = purchases.trialDaysRemaining
-        return "Free trial active — \(days) day\(days == 1 ? "" : "s") remaining"
+        if days > 0 {
+            return "Free trial active — \(days) day\(days == 1 ? "" : "s") remaining"
+        } else {
+            let hours = purchases.trialHoursRemaining
+            return "Free trial active — \(hours) hour\(hours == 1 ? "" : "s") remaining"
+        }
     }
 }
 

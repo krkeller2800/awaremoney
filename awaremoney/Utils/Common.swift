@@ -60,26 +60,49 @@ struct Toolbarbutton: PrimitiveButtonStyle {
 }
 public struct PlanMenuLabel: View {
     public let title: String
+    public let systemImage: String?
     public let backgroundColor: Color
     public let foregroundColor: Color
     public let titleFont: Font
 
     public init(title: String = "Plan", backgroundColor: Color = .blue, foregroundColor: Color = .white, titleFont: Font = .callout) {
         self.title = title
+        self.systemImage = nil
+        self.backgroundColor = backgroundColor
+        self.foregroundColor = foregroundColor
+        self.titleFont = titleFont
+    }
+    public init(title: String = "Plan",
+                systemImage: String,
+                backgroundColor: Color = .blue,
+                foregroundColor: Color = .white,
+                titleFont: Font = .callout) {
+        self.title = title
+        self.systemImage = systemImage
         self.backgroundColor = backgroundColor
         self.foregroundColor = foregroundColor
         self.titleFont = titleFont
     }
 
     public var body: some View {
-        Text(title)
-            .font(titleFont).bold()
-            .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background {
-                Capsule().fill(backgroundColor)
+        Group {
+            if let systemImage {
+                Label {
+                    Text(title)
+                } icon: {
+                    Image(systemName: systemImage)
+                }
+            } else {
+                Text(title)
             }
+        }
+        .font(titleFont).bold()
+        .foregroundStyle(foregroundColor)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background {
+            Capsule().fill(backgroundColor)
+        }
     }
 }
 
@@ -122,6 +145,7 @@ public struct PlanToolbarButtonStyle: PrimitiveButtonStyle {
 
 public struct PlanToolbarButton: View {
     public let title: String
+    public let systemImage: String?
     public let backgroundColor: Color
     public let foregroundColor: Color
     public let titleFont: Font
@@ -135,6 +159,23 @@ public struct PlanToolbarButton: View {
                 fixedWidth: CGFloat? = nil,
                 action: @escaping () -> Void) {
         self.title = title
+        self.systemImage = nil
+        self.backgroundColor = backgroundColor
+        self.foregroundColor = foregroundColor
+        self.titleFont = titleFont
+        self.fixedWidth = fixedWidth
+        self.action = action
+    }
+
+    public init(_ title: String,
+                systemImage: String,
+                backgroundColor: Color = .blue,
+                foregroundColor: Color = .white,
+                titleFont: Font = .callout,
+                fixedWidth: CGFloat? = nil,
+                action: @escaping () -> Void) {
+        self.title = title
+        self.systemImage = systemImage
         self.backgroundColor = backgroundColor
         self.foregroundColor = foregroundColor
         self.titleFont = titleFont
@@ -144,12 +185,16 @@ public struct PlanToolbarButton: View {
 
     public var body: some View {
         Button(action: action) {
-            Text(title)
+            if let systemImage {
+                Label {
+                    Text(title)
+                } icon: {
+                    Image(systemName: systemImage)
+                }
+            } else {
+                Text(title)
+            }
         }
-        .buttonStyle(PlanToolbarButtonStyle(backgroundColor: backgroundColor,
-                                            foregroundColor: foregroundColor,
-                                            titleFont: titleFont,
-                                            fixedWidth: fixedWidth))
     }
 }
 

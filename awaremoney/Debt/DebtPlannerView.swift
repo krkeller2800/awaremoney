@@ -6,6 +6,7 @@ import SwiftData
 
 struct DebtPlannerView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
     @State private var liabilities: [Account] = []
 
     var body: some View {
@@ -55,7 +56,7 @@ struct DebtPlannerView: View {
         let bal = latestBalance(account)
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: bal)) ?? "\(bal)"
     }
 

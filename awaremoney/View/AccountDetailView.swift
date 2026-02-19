@@ -6,6 +6,7 @@ struct AccountDetailView: View {
     let accountID: UUID
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
 
     // Query the account live by ID so we never hold a detached instance
     @Query private var fetchedAccounts: [Account]
@@ -472,7 +473,7 @@ struct AccountDetailView: View {
     private func format(amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 

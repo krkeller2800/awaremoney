@@ -11,6 +11,7 @@ import SwiftData
 @main
 struct awaremoneyApp: App {
     let container: ModelContainer
+    let settings = SettingsStore()
 
     init() {
         let schema = Schema([
@@ -47,6 +48,7 @@ struct awaremoneyApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(PurchaseManager.shared)
+                .environmentObject(settings)
         }
         .modelContainer(container)
     }

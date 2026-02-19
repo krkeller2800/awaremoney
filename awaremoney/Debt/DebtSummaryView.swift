@@ -21,6 +21,7 @@ fileprivate struct Debt: Identifiable, Hashable {
 
 struct DebtSummaryView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: SettingsStore
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [Account] = []
@@ -265,6 +266,19 @@ struct DebtSummaryView: View {
 //                }
 //            }
             .navigationTitle("Adjust Date")
+            .onAppear {
+                // Prefill strategy
+                switch settings.defaultPayoffStrategyRaw {
+                case "snowball": tempStrategy = .snowball
+                case "avalanche": tempStrategy = .avalanche
+                default: tempStrategy = .minimumsOnly
+                }
+                // Prefill budget with Net for Debt if enabled
+                if settings.useNetForDebtBudgetDefault {
+                    let net = computedMonthlyNet
+                    if net > 0 { tempMonthlyBudget = formatAmount(net) }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     PlanToolbarButton("Set Plan") {
@@ -788,7 +802,7 @@ struct DebtSummaryView: View {
     private func formatAmount(_ amount: Decimal?) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         guard let amount = amount else { return "—" }
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }

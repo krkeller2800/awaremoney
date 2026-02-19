@@ -1,11 +1,45 @@
 import SwiftUI
 import SwiftData
 
+#if os(iOS)
+import UIKit
+#endif
+
 fileprivate func monthlyEquivalent(amount: Decimal, frequency: PaymentFrequency) -> Decimal {
     switch frequency {
     default:
         return amount * frequency.monthlyEquivalentFactor
     }
+}
+
+fileprivate func parseDecimalAmount(from text: String) -> Decimal? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    // Try parsing with current locale as currency and decimal first
+    let styles: [NumberFormatter.Style] = [.currency, .decimal]
+    for style in styles {
+        let nf = NumberFormatter()
+        nf.numberStyle = style
+        nf.locale = .current
+        if let number = nf.number(from: trimmed) {
+            return number.decimalValue
+        }
+    }
+
+    // Fallback: keep digits and separators; normalize comma decimal to dot
+    let allowed = CharacterSet(charactersIn: "0123456789.,")
+    let filtered = String(trimmed.unicodeScalars.filter { allowed.contains($0) })
+    guard !filtered.isEmpty else { return nil }
+
+    var normalized = filtered
+    if filtered.contains(",") && filtered.contains(".") {
+        normalized = filtered.replacingOccurrences(of: ",", with: "")
+    } else if filtered.contains(",") && !filtered.contains(".") {
+        normalized = filtered.replacingOccurrences(of: ",", with: ".")
+    }
+
+    return Decimal(string: normalized)
 }
 
 struct IncomeAndBillsView: View {
@@ -17,6 +51,7 @@ struct IncomeAndBillsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.presentationMode) private var presentationMode
+    @EnvironmentObject private var settings: SettingsStore
 
     private enum IPadMode: String, CaseIterable { case incomeBills, summary }
     @State private var ipadMode: IPadMode = .incomeBills
@@ -230,6 +265,7 @@ struct IncomeAndBillsView: View {
                     activeSheet = .edit(item: newItem)
                 }
                 .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
+                .environmentObject(settings)
             case .edit(let item):
                 EditCashFlowItemView(
                     item: item,
@@ -243,6 +279,7 @@ struct IncomeAndBillsView: View {
                         activeSheet = nil
                     }
                 )
+                .environmentObject(settings)
             }
         }
     }
@@ -324,6 +361,7 @@ struct IncomeAndBillsView: View {
                     modelContext.insert(newItem)
                     try? modelContext.save()
                 }
+                .environmentObject(settings)
             }
         }
     }
@@ -391,7 +429,7 @@ struct IncomeAndBillsView: View {
     private func formatCurrency(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
-        nf.currencyCode = "USD"
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
@@ -449,8 +487,9 @@ private struct AddCashFlowItemView: View {
     let initialKind: CashFlowItem.Kind
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
     @State private var name: String = ""
-    @State private var amountText: String = ""
+    @State private var amountValue: Decimal = 0
     @State private var frequency: PaymentFrequency = .monthly
     @State private var dayOfMonth: Int? = nil
     @State private var firstPaymentDate: Date? = nil
@@ -459,7 +498,13 @@ private struct AddCashFlowItemView: View {
 
     enum Field: Hashable { case name, amount, notes }
     @FocusState private var focusedField: Field?
+    @State private var amountIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
+
+    private var isValid: Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedName.isEmpty && amountValue > 0
+    }
 
     private func goPrev() {
         guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
@@ -477,16 +522,37 @@ private struct AddCashFlowItemView: View {
         NavigationStack {
             Form {
                 Section("Details") {
-                    TextField("Name", text: $name)
-                        .focused($focusedField, equals: .name)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .amount }
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focusedField, equals: .amount)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .notes }
+                    Label("Enter a name and a valid amount to enable Add.", systemImage: "info.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .opacity(isValid ? 0 : 1)
+                        .accessibilityHidden(isValid)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        TextField("Name", text: $name)
+                            .focused($focusedField, equals: .name)
+                            .submitLabel(.next)
+                            .onSubmit { amountIsFirstResponder = true }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Name")
+
+                        CurrencyAmountField(
+                            value: $amountValue,
+                            placeholder: "Amount",
+                            currencyCode: settings.currencyCode,
+                            isFirstResponder: $amountIsFirstResponder,
+                            onPrev: {
+                                amountIsFirstResponder = false
+                                focusedField = .name
+                            },
+                            onNext: {
+                                amountIsFirstResponder = false
+                                focusedField = .notes
+                            },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                        .accessibilityLabel("Amount")
+                    }
                     Picker("Frequency", selection: $frequency) {
                         Text("Monthly").tag(PaymentFrequency.monthly)
                         Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -548,8 +614,9 @@ private struct AddCashFlowItemView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        if let amt = Decimal(string: amountText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmedName.isEmpty && amountValue > 0 {
                             let finalNotes: String? = {
                                 let base = notes
                                 let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -562,11 +629,15 @@ private struct AddCashFlowItemView: View {
                                     return cleaned.isEmpty ? nil : cleaned
                                 }
                             }()
-                            let item = CashFlowItem(kind: initialKind, name: name, amount: amt, frequency: frequency, dayOfMonth: dayOfMonth, firstPaymentDate: firstPaymentDate, notes: finalNotes)
+                            let item = CashFlowItem(kind: initialKind, name: trimmedName, amount: amountValue, frequency: frequency, dayOfMonth: dayOfMonth, firstPaymentDate: firstPaymentDate, notes: finalNotes)
                             onAdd(item)
                             dismiss()
                         }
+                    } label: {
+                        PlanMenuLabel(title: "Add", titleFont: .callout)
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!isValid)
                 }
             }
             .toolbar {
@@ -607,12 +678,8 @@ private struct AddCashFlowItemView: View {
     }
 
     private func commitAndDismissKeyboard() {
-        let cleanedAmount = amountText
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: "$", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let amt = Decimal(string: cleanedAmount), !trimmedName.isEmpty {
+        if !trimmedName.isEmpty && amountValue > 0 {
             let finalNotes: String? = {
                 let base = notes
                 let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -627,7 +694,7 @@ private struct AddCashFlowItemView: View {
             let item = CashFlowItem(
                 kind: initialKind,
                 name: trimmedName,
-                amount: amt,
+                amount: amountValue,
                 frequency: frequency,
                 dayOfMonth: dayOfMonth,
                 firstPaymentDate: firstPaymentDate,
@@ -655,9 +722,10 @@ private struct EditCashFlowItemView: View {
     let onSave: () -> Void
     let onDelete: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
 
     @State private var name: String = ""
-    @State private var amountText: String = ""
+    @State private var amountValue: Decimal = 0
     @State private var frequency: PaymentFrequency = .monthly
     @State private var dayOfMonth: Int? = nil
     @State private var firstPaymentDate: Date? = nil
@@ -666,6 +734,7 @@ private struct EditCashFlowItemView: View {
 
     enum Field: Hashable { case name, amount, notes }
     @FocusState private var focusedField: Field?
+    @State private var amountIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
     private func goPrev() {
@@ -684,16 +753,32 @@ private struct EditCashFlowItemView: View {
         NavigationStack {
             Form {
                 Section("Details") {
-                    TextField("Name", text: $name)
-                        .focused($focusedField, equals: .name)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .amount }
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focusedField, equals: .amount)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .notes }
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        TextField("Name", text: $name)
+                            .focused($focusedField, equals: .name)
+                            .submitLabel(.next)
+                            .onSubmit { amountIsFirstResponder = true }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Name")
+
+                        CurrencyAmountField(
+                            value: $amountValue,
+                            placeholder: "Amount",
+                            currencyCode: settings.currencyCode,
+                            isFirstResponder: $amountIsFirstResponder,
+                            onPrev: {
+                                amountIsFirstResponder = false
+                                focusedField = .name
+                            },
+                            onNext: {
+                                amountIsFirstResponder = false
+                                focusedField = .notes
+                            },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                        .accessibilityLabel("Amount")
+                    }
                     Picker("Frequency", selection: $frequency) {
                         Text("Monthly").tag(PaymentFrequency.monthly)
                         Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -756,7 +841,8 @@ private struct EditCashFlowItemView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        if let amt = Decimal(string: amountText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)), !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmedName.isEmpty {
                             let finalNotes: String? = {
                                 let base = notes
                                 let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -770,8 +856,8 @@ private struct EditCashFlowItemView: View {
                                 }
                             }()
                             // Apply edits back to the model
-                            item.name = name
-                            item.amount = amt
+                            item.name = trimmedName
+                            item.amount = amountValue
                             item.frequency = frequency
                             item.dayOfMonth = dayOfMonth
                             item.firstPaymentDate = firstPaymentDate
@@ -822,7 +908,7 @@ private struct EditCashFlowItemView: View {
         .onAppear {
             // Seed state from the existing item
             name = item.name
-            amountText = NSDecimalNumber(decimal: item.amount).stringValue
+            amountValue = item.amount
             frequency = item.frequency
             dayOfMonth = item.dayOfMonth
             firstPaymentDate = item.firstPaymentDate
@@ -839,12 +925,8 @@ private struct EditCashFlowItemView: View {
     }
 
     private func commitAndDismissKeyboard() {
-        let cleanedAmount = amountText
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: "$", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let amt = Decimal(string: cleanedAmount), !trimmedName.isEmpty {
+        if !trimmedName.isEmpty {
             let finalNotes: String? = {
                 let base = notes
                 let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -857,7 +939,7 @@ private struct EditCashFlowItemView: View {
                 }
             }()
             item.name = trimmedName
-            item.amount = amt
+            item.amount = amountValue
             item.frequency = frequency
             item.dayOfMonth = dayOfMonth
             item.firstPaymentDate = firstPaymentDate
@@ -889,4 +971,118 @@ private struct EditCashFlowItemView: View {
         return nil
     }
 }
+
+#if os(iOS)
+private struct CurrencyAmountField: UIViewRepresentable {
+    @Binding var value: Decimal
+    var placeholder: String
+    var currencyCode: String = "USD"
+    @Binding var isFirstResponder: Bool
+    var onPrev: (() -> Void)? = nil
+    var onNext: (() -> Void)? = nil
+    var onDone: (() -> Void)? = nil
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField(frame: .zero)
+        tf.keyboardType = .decimalPad
+        tf.textAlignment = .right
+        tf.placeholder = placeholder
+        tf.delegate = context.coordinator
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        // Seed initial formatted text
+        let formatted = context.coordinator.formatter.string(from: NSDecimalNumber(decimal: value)) ?? ""
+        tf.text = formatted
+
+        // Add keyboard accessory toolbar with Prev/Next/Done
+        let toolbar = UIToolbar()
+        let prev = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), style: .plain, target: context.coordinator, action: #selector(Coordinator.prevTapped))
+        let next = UIBarButtonItem(image: UIImage(systemName: "chevron.right"), style: .plain, target: context.coordinator, action: #selector(Coordinator.nextTapped))
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle.fill"), style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
+        toolbar.items = [prev, next, flex, done]
+        toolbar.sizeToFit()
+        tf.inputAccessoryView = toolbar
+
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        // Keep alignment and placeholder up-to-date
+        uiView.textAlignment = .right
+        uiView.placeholder = placeholder
+        // Manage first responder state
+        if isFirstResponder, !uiView.isFirstResponder {
+            uiView.becomeFirstResponder()
+        } else if !isFirstResponder, uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+        // If not editing, keep text formatted to the current value
+        if !uiView.isFirstResponder && !context.coordinator.isFormatting {
+            let formatted = context.coordinator.formatter.string(from: NSDecimalNumber(decimal: value)) ?? ""
+            if uiView.text != formatted {
+                context.coordinator.isFormatting = true
+                uiView.text = formatted
+                context.coordinator.isFormatting = false
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: CurrencyAmountField
+        let formatter: NumberFormatter
+        var isFormatting = false
+
+        init(_ parent: CurrencyAmountField) {
+            self.parent = parent
+            let nf = NumberFormatter()
+            nf.numberStyle = .currency
+            nf.currencyCode = parent.currencyCode
+            nf.locale = .current
+            self.formatter = nf
+        }
+
+        @objc func editingChanged(_ textField: UITextField) {
+            guard !isFormatting else { return }
+            let text = textField.text ?? ""
+            if let dec = parseDecimalAmount(from: text) {
+                parent.value = dec
+            } else {
+                parent.value = 0
+            }
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            // Select all text when editing begins for quick replacement
+            DispatchQueue.main.async {
+                textField.selectAll(nil)
+            }
+            parent.isFirstResponder = true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            // Reformat to currency when editing ends
+            isFormatting = true
+            let formatted = formatter.string(from: NSDecimalNumber(decimal: parent.value)) ?? ""
+            textField.text = formatted
+            isFormatting = false
+            parent.isFirstResponder = false
+        }
+
+        @objc func prevTapped() {
+            parent.onPrev?()
+        }
+
+        @objc func nextTapped() {
+            parent.onNext?()
+        }
+
+        @objc func doneTapped() {
+            parent.onDone?()
+        }
+    }
+}
+#endif
+
+
 
