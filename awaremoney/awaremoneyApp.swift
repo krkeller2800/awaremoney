@@ -7,11 +7,14 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 @main
 struct awaremoneyApp: App {
     let container: ModelContainer
     let settings = SettingsStore()
+    let importRouter = ImportOpenRouter()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let schema = Schema([
@@ -49,6 +52,14 @@ struct awaremoneyApp: App {
             RootView()
                 .environmentObject(PurchaseManager.shared)
                 .environmentObject(settings)
+                .environmentObject(importRouter)
+                .onOpenURL { url in
+                    importRouter.pendingURL = url
+                    AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
+                }
+                .onChange(of: scenePhase) { newPhase in
+                    AMLogging.log("Scene phase changed to: \(newPhase)", component: "App")
+                }
         }
         .modelContainer(container)
     }

@@ -14,9 +14,9 @@
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "167"
-            endingLineNumber = "167"
-            landmarkName = "deduplicateStagedBalancesPreferringNonZeroSameDay(_:)"
+            startingLineNumber = "171"
+            endingLineNumber = "171"
+            landmarkName = "autoApplyMappingIfPossible(headers:rows:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -30,9 +30,9 @@
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "172"
-            endingLineNumber = "172"
-            landmarkName = "deduplicateStagedBalancesPreferringNonZeroSameDay(_:)"
+            startingLineNumber = "176"
+            endingLineNumber = "176"
+            landmarkName = "autoApplyMappingIfPossible(headers:rows:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -260,9 +260,9 @@
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "236"
-            endingLineNumber = "236"
-            landmarkName = "handlePDFSnapshotImport(url:)"
+            startingLineNumber = "240"
+            endingLineNumber = "240"
+            landmarkName = "deduplicateStagedBalancesForCreditCard(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -276,9 +276,9 @@
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "231"
-            endingLineNumber = "231"
-            landmarkName = "handlePDFSnapshotImport(url:)"
+            startingLineNumber = "235"
+            endingLineNumber = "235"
+            landmarkName = "deduplicateStagedBalancesForCreditCard(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -312,6 +312,22 @@
             endingLineNumber = "172"
             landmarkName = "balancesSection(for:)"
             landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "F9000DB4-1F69-4422-A1EA-FDEBF9B19398"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "awaremoney/View/Import/ImportFlowView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1028"
+            endingLineNumber = "1028"
+            landmarkName = "ipadBody"
+            landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

@@ -8,6 +8,8 @@ import StoreKit
 struct ImportFlowView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var purchases: PurchaseManager
+    @EnvironmentObject private var importRouter: ImportOpenRouter
     @StateObject private var vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
 
     @State private var batches: [ImportBatch] = []
@@ -18,18 +20,51 @@ struct ImportFlowView: View {
     @State private var lastKnownBatchIDs: Set<UUID> = []
     @State private var hasLoadedBatchesOnce: Bool = false
     @State private var suppressNextAutoNavigation: Bool = false
-
-    @EnvironmentObject private var purchases: PurchaseManager
-    @State private var showPaywall = false
-
+    @State private var showPaywall: Bool = false
+    @State private var externalImportActive: Bool = false
+    
+    @State private var pendingExternalURL: URL? = nil
+    @State private var showDocKindPicker: Bool = false
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    
     private enum PickerKind { case csv, pdf }
 
-    private var isPad: Bool {
-        #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .pad
-        #else
-        return false
-        #endif
+    private enum ExternalDocKind: String, CaseIterable, Identifiable {
+        case creditCard = "Credit Card Statement"
+        case loan = "Loan Statement"
+        case checking = "Bank Statement"
+        case brokerage = "Brokerage Statement"
+        case csv = "CSV/Activity"
+        var id: String { rawValue }
+    }
+
+    private func applyExternal(kind: ExternalDocKind, url: URL) {
+        switch kind {
+        case .creditCard:
+            vm.userSelectedDocHint = .creditCard
+            vm.creditCardFlipOverride = settings.creditCardFlipDefault
+            vm.newAccountType = .creditCard
+        case .loan:
+            vm.userSelectedDocHint = .loan
+            vm.newAccountType = .loan
+        case .checking:
+            vm.userSelectedDocHint = .checking
+            vm.newAccountType = .checking
+        case .brokerage:
+            vm.userSelectedDocHint = .brokerage
+            vm.newAccountType = .brokerage
+        case .csv:
+            vm.userSelectedDocHint = nil
+        }
+        let isPDF = url.pathExtension.lowercased() == "pdf"
+        DispatchQueue.main.async {
+            if isPDF {
+                self.handlePDFSnapshotImport(url: url)
+            } else {
+                self.vm.handlePickedURL(url)
+            }
+        }
+        AMLogging.always("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
     }
 
     private func allowedTypesForCurrentPicker() -> [UTType] {
@@ -94,14 +129,14 @@ struct ImportFlowView: View {
     }
 
     private var orderedBatches: [ImportBatch] {
-        batches.sorted { lhs, rhs in
+        batches.sorted(by: { (lhs: ImportBatch, rhs: ImportBatch) -> Bool in
             let lNonEmpty = !lhs.transactions.isEmpty || !lhs.balances.isEmpty || !lhs.holdings.isEmpty
             let rNonEmpty = !rhs.transactions.isEmpty || !rhs.balances.isEmpty || !rhs.holdings.isEmpty
             if lNonEmpty == rNonEmpty {
                 return lhs.createdAt > rhs.createdAt
             }
             return lNonEmpty && !rNonEmpty
-        }
+        })
     }
     
     @ViewBuilder
@@ -109,7 +144,7 @@ struct ImportFlowView: View {
         if batches.isEmpty {
             emptyStateView
         } else {
-            ForEach(orderedBatches, id: \.id) { batch in
+            ForEach(orderedBatches, id: \.id) { (batch: ImportBatch) in
                 NavigationLink(destination: ImportBatchDetailView(batchID: batch.id)) {
                     BatchRowContent(batch: batch)
                 }
@@ -222,116 +257,133 @@ struct ImportFlowView: View {
     }
     
     private func handlePDFSnapshotImport(url: URL) {
-        guard let hint = vm.userSelectedDocHint else {
-            AMLogging.log("ImportFlowView: handlePDFSnapshotImport called without a userSelectedDocHint; falling back to default handler", component: "Import")
-            vm.handlePickedURL(url)
-            return
-        }
-        AMLogging.log("ImportFlowView: handlePDFSnapshotImport hint=\(hint) file=\(url.lastPathComponent)", component: "Import")
-        do {
-            let didStart = url.startAccessingSecurityScopedResource()
-            AMLogging.log("ImportFlowView: security scope started=\(didStart) for file=\(url.path)", component: "Import")
-            defer {
-                if didStart {
-                    url.stopAccessingSecurityScopedResource()
-                    AMLogging.log("ImportFlowView: security scope stopped for file=\(url.path)", component: "Import")
-                }
+        // Show global importing overlay
+        vm.isImporting = true
+        Task {
+            defer { DispatchQueue.main.async { self.vm.isImporting = false } }
+
+            // Capture the current hint on the main actor
+            let hintOpt = await MainActor.run { self.vm.userSelectedDocHint }
+            guard let hint = hintOpt else {
+                AMLogging.log("ImportFlowView: handlePDFSnapshotImport called without a userSelectedDocHint; falling back to default handler", component: "Import")
+                // Fall back to default handler on the main actor
+                await MainActor.run { self.vm.handlePickedURL(url) }
+                return
             }
-            
-            // Cache the picked PDF to the app's Caches directory so we can preview it later
+            AMLogging.log("ImportFlowView: handlePDFSnapshotImport hint=\(hint) file=\(url.lastPathComponent)", component: "Import")
+
             do {
-                let fm = FileManager.default
-                if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                    let dest = caches.appendingPathComponent(url.lastPathComponent)
-                    AMLogging.log("ImportFlowView: caching picked PDF to: \(dest.path)", component: "Import")
-                    // Remove any existing file at the destination to avoid copy errors
-                    try? fm.removeItem(at: dest)
-                    if fm.fileExists(atPath: url.path) {
-                        do {
-                            try fm.copyItem(at: url, to: dest)
-                            vm.lastPickedLocalURL = dest
-                            AMLogging.log("ImportFlowView: cached PDF copied; lastPickedLocalURL set", component: "Import")
-                        } catch {
-                            AMLogging.error("ImportFlowView: failed to cache PDF copy — \(error.localizedDescription)", component: "Import")
-                        }
-                    } else {
-                        AMLogging.log("ImportFlowView: picked PDF path does not exist at \(url.path)", component: "Import")
+                // Start security scoped access
+                let didStart = url.startAccessingSecurityScopedResource()
+                AMLogging.log("ImportFlowView: security scope started=\(didStart) for file=\(url.path)", component: "Import")
+                defer {
+                    if didStart {
+                        url.stopAccessingSecurityScopedResource()
+                        AMLogging.log("ImportFlowView: security scope stopped for file=\(url.path)", component: "Import")
                     }
                 }
-            }
 
-            let importer = StatementImporter()
-            // Prefer Transactions mode for PDF snapshot flows
-            let preferMode: PDFStatementExtractor.Mode = .transactions
-            let result = try importer.importStatement(from: url, prefer: preferMode)
-            AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode)", component: "Import")
-            AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
-
-            // Try PDFSummaryParser first for snapshot-style parsing
-            AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(result.headers.count) rows=\(result.rows.count)", component: "Import")
-            var staged: StagedImport
-            do {
-                let summaryParser = PDFSummaryParser()
-                staged = try summaryParser.parse(rows: result.rows, headers: result.headers)
-                AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
-                AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (success path)", component: "Import")
-            } catch {
-                AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
-                let parsers = ImportViewModel.defaultParsers()
-                let matching = parsers.filter { $0.canParse(headers: result.headers) }
-                if let parser = matching.first {
-                    staged = try parser.parse(rows: result.rows, headers: result.headers)
-                    AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
-                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
-                } else {
-                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
-                    AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
-                    vm.handlePickedURL(url)
-                    return
+                // Cache the picked PDF to the app's Caches directory so we can preview it later
+                do {
+                    let fm = FileManager.default
+                    if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+                        let dest = caches.appendingPathComponent(url.lastPathComponent)
+                        AMLogging.log("ImportFlowView: caching picked PDF to: \(dest.path)", component: "Import")
+                        // Remove any existing file at the destination to avoid copy errors
+                        try? fm.removeItem(at: dest)
+                        if fm.fileExists(atPath: url.path) {
+                            do {
+                                try fm.copyItem(at: url, to: dest)
+                                await MainActor.run { self.vm.lastPickedLocalURL = dest }
+                                AMLogging.log("ImportFlowView: cached PDF copied; lastPickedLocalURL set", component: "Import")
+                            } catch {
+                                AMLogging.error("ImportFlowView: failed to cache PDF copy — \(error.localizedDescription)", component: "Import")
+                            }
+                        } else {
+                            AMLogging.log("ImportFlowView: picked PDF path does not exist at \(url.path)", component: "Import")
+                        }
+                    }
                 }
+
+                // Heavy work: extract and parse
+                let importer = StatementImporter()
+                // Prefer Transactions mode for PDF snapshot flows
+                let preferMode: PDFStatementExtractor.Mode = .transactions
+                let result = try importer.importStatement(from: url, prefer: preferMode)
+                AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode)", component: "Import")
+                AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
+
+                // Try PDFSummaryParser first for snapshot-style parsing
+                AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(result.headers.count) rows=\(result.rows.count)", component: "Import")
+                var staged: StagedImport
+                do {
+                    let summaryParser = PDFSummaryParser()
+                    staged = try summaryParser.parse(rows: result.rows, headers: result.headers)
+                    AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (success path)", component: "Import")
+                } catch {
+                    AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
+                    let parsers = ImportViewModel.defaultParsers()
+                    let matching = parsers.filter { $0.canParse(headers: result.headers) }
+                    if let parser = matching.first {
+                        staged = try parser.parse(rows: result.rows, headers: result.headers)
+                        AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
+                        AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
+                    } else {
+                        AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
+                        AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
+                        await MainActor.run { self.vm.handlePickedURL(url) }
+                        return
+                    }
+                }
+
+                staged.sourceFileName = url.lastPathComponent
+
+                // Prefer non-zero snapshots when multiple exist for the same day
+                let before = staged.balances.count
+                if hint == .creditCard {
+                    staged.balances = deduplicateStagedBalancesForCreditCard(staged.balances)
+                } else {
+                    staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
+                }
+                AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
+
+                // Surface any importer warnings as an info message
+                if !result.warnings.isEmpty {
+                    await MainActor.run { self.vm.infoMessage = result.warnings.joined(separator: "\n") }
+                }
+
+                // Set the default account type based on the user hint
+                await MainActor.run {
+                    switch hint {
+                    case .loan:
+                        self.vm.newAccountType = .loan
+                    case .creditCard:
+                        self.vm.newAccountType = .creditCard
+                    case .brokerage:
+                        self.vm.newAccountType = .brokerage
+                    case .checking:
+                        self.vm.newAccountType = .checking
+                    default:
+                        break
+                    }
+                }
+
+                // Apply liability safety net in credit-card context to relabel ambiguous balances
+                if hint == .creditCard {
+                    await MainActor.run { self.vm.applyLiabilityLabelSafetyNetIfNeeded(to: &staged) }
+                }
+
+                // Commit staged import and clear any mapping session on the main actor
+                await MainActor.run {
+                    self.vm.staged = staged
+                    self.vm.mappingSession = nil
+                }
+                AMLogging.log("ImportFlowView: staged import prepared (PDF snapshot) — balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+            } catch {
+                AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Falling back to default handler.", component: "Import")
+                await MainActor.run { self.vm.handlePickedURL(url) }
             }
-
-            staged.sourceFileName = url.lastPathComponent
-
-            // Prefer non-zero snapshots when multiple exist for the same day
-            let before = staged.balances.count
-            if hint == .creditCard {
-                staged.balances = deduplicateStagedBalancesForCreditCard(staged.balances)
-            } else {
-                staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
-            }
-            AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
-
-            // Surface any importer warnings as an info message
-            if !result.warnings.isEmpty {
-                vm.infoMessage = result.warnings.joined(separator: "\n")
-            }
-
-            // Set the default account type based on the user hint
-            switch hint {
-            case .loan:
-                vm.newAccountType = .loan
-            case .creditCard:
-                vm.newAccountType = .creditCard
-            case .brokerage:
-                vm.newAccountType = .brokerage
-            case .checking:
-                vm.newAccountType = .checking
-            default:
-                break
-            }
-
-            // Apply liability safety net in credit-card context to relabel ambiguous balances
-            if hint == .creditCard {
-                vm.applyLiabilityLabelSafetyNetIfNeeded(to: &staged)
-            }
-
-            vm.staged = staged
-            vm.mappingSession = nil
-            AMLogging.log("ImportFlowView: staged import prepared (PDF snapshot) — balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
-        } catch {
-            AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Falling back to default handler.", component: "Import")
-            vm.handlePickedURL(url)
         }
     }
 
@@ -599,22 +651,23 @@ struct ImportFlowView: View {
             }
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
-                showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+//                showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
             }
             .task { await loadBatches() }
             .refreshable { await loadBatches() }
-            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { (_: Notification) in
                 Task { await loadBatches() }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { (_: Notification) in
                 Task { await loadBatches() }
             }
-            .onChange(of: pickerKind) {
+            .onChange(of: pickerKind) { _ in
                 AMLogging.log("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
             }
-            .onReceive(vm.$staged) { staged in
+            .onReceive(vm.$staged) { (staged: StagedImport?) in
                 if let staged {
                     AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                    externalImportActive = false
                 } else {
                     AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
                     // Ensure mapping session is also cleared so the sheet dismisses
@@ -629,11 +682,21 @@ struct ImportFlowView: View {
                     if settings.importAutoApplyMappings {
                         autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
                     }
+                    externalImportActive = false
                 } else {
                     AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
                 }
             }
-            .onChange(of: purchases.isPremiumUnlocked) { _,newValue in
+            .onReceive(importRouter.$pendingURL) { (url: URL?) in
+                if let url {
+                    externalImportActive = true
+                    pendingExternalURL = url
+                    showDocKindPicker = true
+                    showPaywall = false
+                    AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), presenting doc kind picker", component: "Import")
+                }
+            }
+            .onChange(of: purchases.isPremiumUnlocked) { newValue in
                 if newValue {
                     showPaywall = false
                 }
@@ -642,7 +705,7 @@ struct ImportFlowView: View {
                 isPresented: $isFileImporterPresented,
                 allowedContentTypes: allowedTypesForCurrentPicker(),
                 allowsMultipleSelection: false
-            ) { result in
+            ) { (result: Result<[URL], Error>) in
                 switch result {
                 case .success(let urls):
                     if let url = urls.first {
@@ -651,7 +714,13 @@ struct ImportFlowView: View {
                         if isPDF {
                             handlePDFSnapshotImport(url: url)
                         } else {
-                            vm.handlePickedURL(url)
+                            vm.isImporting = true
+                            Task {
+                                defer { DispatchQueue.main.async { self.vm.isImporting = false } }
+                                await MainActor.run {
+                                    vm.handlePickedURL(url)
+                                }
+                            }
                         }
                     }
                 case .failure:
@@ -661,12 +730,34 @@ struct ImportFlowView: View {
             .sheet(isPresented: isSheetPresentedBinding) {
                 sheetContent()
             }
-            .sheet(isPresented: $showPaywall) {
+            .sheet(
+                isPresented: Binding(
+                    get: { showPaywall && !externalImportActive && vm.staged == nil && vm.mappingSession == nil },
+                    set: { showPaywall = $0 }
+                )
+            ) {
                 PaywallView()
                     .environmentObject(purchases)
             }
+            .confirmationDialog("What kind of statement is this?", isPresented: $showDocKindPicker, presenting: pendingExternalURL) { url in
+                ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
+                    Button(kind.rawValue) {
+                        showDocKindPicker = false
+                        applyExternal(kind: kind, url: url)
+                        importRouter.pendingURL = nil
+                        pendingExternalURL = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    importRouter.pendingURL = nil
+                    pendingExternalURL = nil
+                    externalImportActive = false
+                }
+            } message: {_ in 
+                Text("We’ll tailor parsing for best results.")
+            }
         }
-        .navigationDestination(item: $phoneRoute) { route in
+        .navigationDestination(item: $phoneRoute) { (route: BatchRoute) in
             ImportBatchDetailView(batchID: route.id)
         }
     }
@@ -679,7 +770,7 @@ struct ImportFlowView: View {
             } else {
                 List(selection: $selectedBatchID) {
                     Section {
-                        ForEach(orderedBatches, id: \.persistentModelID) { batch in
+                        ForEach(orderedBatches, id: \.persistentModelID) { (batch: ImportBatch) in
                             BatchRowContent(batch: batch)
                                 .tag(batch.persistentModelID)
                         }
@@ -823,20 +914,24 @@ struct ImportFlowView: View {
         // Shared modifiers remain attached to the container so behavior remains the same
         .onAppear {
             AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
-            showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+            let shouldShow = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+            if shouldShow && !externalImportActive && importRouter.pendingURL == nil && vm.staged == nil && vm.mappingSession == nil {
+                showPaywall = true
+            }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { (_: Notification) in
             Task { await loadBatches() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { (_: Notification) in
             Task { await loadBatches() }
         }
-        .onChange(of: pickerKind) {
+        .onChange(of: pickerKind) { _ in
             AMLogging.log("ImportFlowView: pickerKind changed to \(String(describing: pickerKind))", component: "Import")
         }
-        .onReceive(vm.$staged) { staged in
+        .onReceive(vm.$staged) { (staged: StagedImport?) in
             if let staged {
                 AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                externalImportActive = false
             } else {
                 AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
                 vm.mappingSession = nil
@@ -850,11 +945,12 @@ struct ImportFlowView: View {
                 if settings.importAutoApplyMappings {
                     autoApplyMappingIfPossible(headers: session.headers, rows: session.sampleRows)
                 }
+                externalImportActive = false
             } else {
                 AMLogging.log("ImportFlowView: mapping session cleared", component: "Import")
             }
         }
-        .onChange(of: batches) {
+        .onChange(of: batches) { _ in
             if isPad {
                 let preferred = preferredSelectionID(in: batches)
                 if let sel = selectedBatchID, !batches.contains(where: { $0.persistentModelID == sel }) {
@@ -869,7 +965,7 @@ struct ImportFlowView: View {
                 }
             }
         }
-        .onChange(of: selectedBatchID) {
+        .onChange(of: selectedBatchID) { _ in
             if let pid = selectedBatchID {
                 let resolved = batches.first(where: { $0.persistentModelID == pid })
                 AMLogging.log("ImportFlowView: selectedBatchID changed pid=\(pid) resolved=\(resolved != nil ? "yes" : "no")", component: "Import")
@@ -877,16 +973,25 @@ struct ImportFlowView: View {
                 AMLogging.log("ImportFlowView: selectedBatchID cleared", component: "Import")
             }
         }
-        .onChange(of: purchases.isPremiumUnlocked) {
-            if purchases.isPremiumUnlocked {
+        .onChange(of: purchases.isPremiumUnlocked) { newValue in
+            if newValue {
                 showPaywall = false
+            }
+        }
+        .onReceive(importRouter.$pendingURL) { (url: URL?) in
+            if let url {
+                externalImportActive = true
+                pendingExternalURL = url
+                showDocKindPicker = true
+                showPaywall = false
+                AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), presenting doc kind picker", component: "Import")
             }
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
             allowedContentTypes: allowedTypesForCurrentPicker(),
             allowsMultipleSelection: false
-        ) { result in
+        ) { (result: Result<[URL], Error>) in
             switch result {
             case .success(let urls):
                 if let url = urls.first {
@@ -895,7 +1000,13 @@ struct ImportFlowView: View {
                     if isPDF {
                         handlePDFSnapshotImport(url: url)
                     } else {
-                        vm.handlePickedURL(url)
+                        vm.isImporting = true
+                        Task {
+                            defer { DispatchQueue.main.async { self.vm.isImporting = false } }
+                            await MainActor.run {
+                                vm.handlePickedURL(url)
+                            }
+                        }
                     }
                 }
             case .failure:
@@ -905,18 +1016,52 @@ struct ImportFlowView: View {
         .sheet(isPresented: isSheetPresentedBinding) {
             sheetContent()
         }
-        .sheet(isPresented: $showPaywall) {
+        .sheet(
+            isPresented: Binding(
+                get: { showPaywall && !externalImportActive && vm.staged == nil && vm.mappingSession == nil },
+                set: { showPaywall = $0 }
+            )
+        ) {
             PaywallView()
                 .environmentObject(purchases)
+        }
+        .confirmationDialog("What kind of statement is this?", isPresented: $showDocKindPicker, presenting: pendingExternalURL) { url in
+            ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
+                Button(kind.rawValue) {
+                    showDocKindPicker = false
+                    applyExternal(kind: kind, url: url)
+                    importRouter.pendingURL = nil
+                    pendingExternalURL = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                importRouter.pendingURL = nil
+                pendingExternalURL = nil
+                externalImportActive = false
+            }
+        }
+        message: { _ in
+            Text("We’ll tailor parsing for best results.")
         }
         .task { await loadBatches() }
     }
 
     var body: some View {
-        if isPad {
-            ipadBody
-        } else {
-            phoneBody
+        ZStack {
+            if isPad {
+                ipadBody
+            } else {
+                phoneBody
+            }
+            if vm.isImporting {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                ProgressView("Importing…")
+                    .progressViewStyle(.circular)
+                    .padding(16)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
         }
     }
 

@@ -11,6 +11,7 @@ struct RootView: View {
     @State private var selectedTab: Int = 0
     @State private var lastNonSettingsTab: Int = 0
     @State private var showSettings: Bool = false
+    @EnvironmentObject private var importRouter: ImportOpenRouter
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -40,6 +41,13 @@ struct RootView: View {
                 showSettings = true
             } else {
                 lastNonSettingsTab = newValue
+            }
+        }
+        .onReceive(importRouter.$pendingURL) { url in
+            if let url = url {
+                selectedTab = 3
+                lastNonSettingsTab = 3
+                AMLogging.always("RootView", component: "Received import URL: \(url.lastPathComponent)")
             }
         }
         .sheet(isPresented: $showSettings) {
