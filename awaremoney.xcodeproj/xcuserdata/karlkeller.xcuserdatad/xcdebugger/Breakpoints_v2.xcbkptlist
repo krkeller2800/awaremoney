@@ -46,8 +46,8 @@
             filePath = "awaremoney/Parsers/PDFSummaryParser.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "639"
-            endingLineNumber = "639"
+            startingLineNumber = "647"
+            endingLineNumber = "647"
             landmarkName = "parse(rows:headers:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -104,30 +104,6 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "B7D0A07E-A58F-451C-BC0F-28EBB7AD449A"
-            shouldBeEnabled = "Yes"
-            ignoreCount = "0"
-            continueAfterRunningActions = "Yes"
-            filePath = "awaremoney/Parsers/PDFStatementExtractor.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1378"
-            endingLineNumber = "1378"
-            landmarkName = "findBalancesPerAccount(in:useSectionFilter:)"
-            landmarkType = "9">
-            <Actions>
-               <BreakpointActionProxy
-                  ActionExtensionID = "Xcode.BreakpointAction.DebuggerCommand">
-                  <ActionContent
-                     consoleCommand = "po result.map { &quot;\($0.key): begin=\($0.value.begin ?? &quot;nil&quot;), end=\($0.value.end ?? &quot;nil&quot;)&quot; }">
-                  </ActionContent>
-               </BreakpointActionProxy>
-            </Actions>
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
             uuid = "322246F9-353F-4E11-A47D-8BDF0D88515F"
             shouldBeEnabled = "No"
             ignoreCount = "0"
@@ -144,38 +120,6 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "3D7A86AE-EB6A-45D2-91D8-B320C694D32B"
-            shouldBeEnabled = "No"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "awaremoney/Parsers/PDFSummaryParser.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "761"
-            endingLineNumber = "761"
-            landmarkName = "parse(rows:headers:)"
-            landmarkType = "7">
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
-            uuid = "FFDF2A0E-831A-4C4C-A9A1-18DE0C4CC82E"
-            shouldBeEnabled = "No"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "awaremoney/Parsers/PDFSummaryParser.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1548"
-            endingLineNumber = "1548"
-            landmarkName = "parse(rows:headers:)"
-            landmarkType = "7">
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
             uuid = "CD239A2E-EE7B-4790-856C-ABD976E21C56"
             shouldBeEnabled = "No"
             ignoreCount = "0"
@@ -183,8 +127,8 @@
             filePath = "awaremoney/Parsers/PDFSummaryParser.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "703"
-            endingLineNumber = "703"
+            startingLineNumber = "712"
+            endingLineNumber = "712"
             landmarkName = "parse(rows:headers:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -324,9 +268,9 @@
             filePath = "awaremoney/View/Import/ImportFlowView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1028"
-            endingLineNumber = "1028"
-            landmarkName = "ipadBody"
+            startingLineNumber = "1062"
+            endingLineNumber = "1062"
+            landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>

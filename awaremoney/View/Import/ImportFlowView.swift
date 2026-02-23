@@ -307,10 +307,27 @@ struct ImportFlowView: View {
 
                 // Heavy work: extract and parse
                 let importer = StatementImporter()
-                // Prefer Transactions mode for PDF snapshot flows
+                // Request Summary behavior for bank/loan/brokerage, but fall back to .transactions if summary mode isn't available
+                let requestedSummary: Bool = {
+                    switch hint {
+                    case .creditCard: return false
+                    case .loan, .brokerage, .checking: return true
+                    default: return true
+                    }
+                }()
+                // Current extractor doesn't expose a .summary case; use .transactions and rely on augmentation + PDFSummaryParser
                 let preferMode: PDFStatementExtractor.Mode = .transactions
-                let result = try importer.importStatement(from: url, prefer: preferMode)
-                AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode)", component: "Import")
+                let userOverride: StatementImporter.UserOverride? = {
+                    switch hint {
+                    case .creditCard: return .creditCard
+                    case .loan: return .loan
+                    case .brokerage: return .brokerage
+                    case .checking: return .bank
+                    default: return nil
+                    }
+                }()
+                let result = try importer.importStatement(from: url, prefer: preferMode, userOverride: userOverride)
+                AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode) requestedSummary=\(requestedSummary) userOverride=\(String(describing: userOverride))", component: "Import")
                 AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
 
                 // Try PDFSummaryParser first for snapshot-style parsing
@@ -339,6 +356,39 @@ struct ImportFlowView: View {
 
                 staged.sourceFileName = url.lastPathComponent
 
+                // In non-liability contexts (bank/brokerage), normalize balances to positive values
+                if hint != .creditCard && hint != .loan {
+                    var flipped = 0
+                    for i in staged.balances.indices {
+                        if staged.balances[i].balance < 0 {
+                            staged.balances[i].balance = -staged.balances[i].balance
+                            flipped += 1
+                        }
+                    }
+                    if flipped > 0 {
+                        AMLogging.log("ImportFlowView: normalized \(flipped) negative balances to positive for non-liability context", component: "Import")
+                    }
+                }
+
+                // If the user hinted this is a loan statement, suppress any document-level CC coercion by relabeling snapshots
+                if hint == .loan {
+                    var relabeled = 0
+                    for i in staged.balances.indices {
+                        let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if lbl == "creditcard" {
+                            staged.balances[i].sourceAccountLabel = "loan"
+                            relabeled += 1
+                        }
+                    }
+                    if relabeled > 0 {
+                        AMLogging.log("ImportFlowView: suppressed CC coercion per .loan hint — relabeled \(relabeled) snapshot(s) to 'loan'", component: "Import")
+                    }
+                }
+
+                AMLogging.log("Pre-dedupe balances: " + staged.balances.map { b in
+                    let lbl = (b.sourceAccountLabel ?? "nil")
+                    return "[date=\(b.asOfDate), amt=\(b.balance), label=\(lbl)]"
+                }.joined(separator: ", "), component: "Import")
                 // Prefer non-zero snapshots when multiple exist for the same day
                 let before = staged.balances.count
                 if hint == .creditCard {

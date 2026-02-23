@@ -136,6 +136,7 @@ struct PDFSummaryParser: StatementParser {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
             if s.contains("savings") { return "savings" }
+            if s.contains("credit card") || s.contains("card ending") { return "creditcard" }
             // Recognize brokerage/investment-related labels
             if s.contains("brokerage") || s.contains("investment") || s.contains("ira") || s.contains("roth") || s.contains("401k") || s.contains("stock") || s.contains("options") || s.contains("portfolio") {
                 return "brokerage"
@@ -241,18 +242,25 @@ struct PDFSummaryParser: StatementParser {
 
                 let hasBankingContext = bankingWords.contains(where: { ctx.contains($0) })
                 let hasLiabilityContext = liabilityWords.contains(where: { ctx.contains($0) })
-                let hasAprToken = ctx.contains("apr") || ctx.contains("annual percentage rate")
+
+                // Treat APR as a strict header token: allow "annual percentage rate" or an APR word not followed by a date-like number
+                let aprWordRegex = try? NSRegularExpression(pattern: #"\bapr\b(?!\s+\d{1,2}\b)"#, options: [.caseInsensitive])
+                let hasAprWordStrict: Bool = {
+                    guard let rx = aprWordRegex else { return false }
+                    let r = NSRange(location: 0, length: (ctx as NSString).length)
+                    return rx.firstMatch(in: ctx, options: [], range: r) != nil
+                }()
+                let hasAprHeaderStrict = ctx.contains("annual percentage rate") || hasAprWordStrict
 
                 AMLogging.log(
-                    "APR eval: token=\(token) val=\(val) scale=\(scale) source=\(source) hdr=\(hasHeaderContext) purch=\(hasPurchaseContext) rewards=\(hasRewardContext) fx=\(hasFXContext) fee=\(hasFeeContext) bank=\(hasBankingContext) penaltyDoc=\(docHasPenalty) ctx='\(ctxPreview)'",
+                    "APR eval: token=\(token) val=\(val) scale=\(scale) source=\(source) hdr=\(hasHeaderContext) purch=\(hasPurchaseContext) rewards=\(hasRewardContext) fx=\(hasFXContext) fee=\(hasFeeContext) bank=\(hasBankingContext) aprStrict=\(hasAprHeaderStrict) penaltyDoc=\(docHasPenalty) ctx='\(ctxPreview)'",
                     component: LOG_COMPONENT
                 )
 
-                // Reject clear banking/deposit contexts unless APR/purchases cues exist,
-                // or we have a liability context (loan/mortgage) where 'interest rate' is expected.
-                // Modified per instructions to allow header context to exempt rejection
-                if hasBankingContext && !hasPurchaseContext && !hasAprToken && !hasLiabilityContext && !hasHeaderContext {
-                    AMLogging.log("extractAPRAndScale: rejecting candidate due to banking context without APR/purchases/liability/header: token=\(token)", component: LOG_COMPONENT)
+                // Reject clear banking/deposit contexts unless strict APR cues or liability context exist.
+                // Do NOT allow a generic "interest rate" header to exempt rejection in banking contexts.
+                if hasBankingContext && !hasPurchaseContext && !hasLiabilityContext && !hasAprHeaderStrict {
+                    AMLogging.log("extractAPRAndScale: rejecting candidate due to banking context without strict APR/purchases/liability: token=\(token)", component: LOG_COMPONENT)
                     return
                 }
 
@@ -590,8 +598,8 @@ struct PDFSummaryParser: StatementParser {
             }
             return nil
         }()
-        AMLogging.log("PDFSummaryParser: globalAPR=\(String(describing: globalAPR))", component: LOG_COMPONENT)
-
+        
+        // Revert credit-card detection to the original simple boolean closure
         // Pre-scan all rows for credit card context indicators
         let hasCreditCardIndicators: Bool = {
             let tokens = [
@@ -663,7 +671,7 @@ struct PDFSummaryParser: StatementParser {
             return nil
         }
 
-        // Update the rolling context using either an explicit account field or a section-like description
+        // Revert the updateContext function body to its original behavior (no extra logging)
         func updateContext(from desc: String?, accountField: String?) {
             // Prefer explicit account column when present
             if let ctx = detectAccountContext(in: accountField) {
@@ -671,8 +679,9 @@ struct PDFSummaryParser: StatementParser {
                 return
             }
             guard let desc = desc, !desc.isEmpty else { return }
-            let looksLikeHeader = isAllCapsHeader(desc) || desc.lowercased().contains("summary")
-            if looksLikeHeader, let ctx = detectAccountContext(in: desc) {
+            let lower = desc.lowercased()
+            let looksLikeHeader = isAllCapsHeader(desc) || lower.contains("summary")
+            if let ctx = detectAccountContext(in: desc), looksLikeHeader || lower.contains("account") {
                 currentAccountContext = ctx
             }
         }
@@ -701,12 +710,14 @@ struct PDFSummaryParser: StatementParser {
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
             let descRawOriginal = value(row, map, key: "description")
+            let rowCombinedRaw = normalizeSpaces(row.joined(separator: " "))
             let desc = descRawOriginal?.lowercased() ?? ""
-            let lower = desc
             let rowCombinedNorm = normalizeSpaces(row.joined(separator: " ")).lowercased()
+            let lower = rowCombinedNorm
 
             // Update rolling section/account context from description or account field
             updateContext(from: descRawOriginal, accountField: value(row, map, key: "account"))
+            updateContext(from: rowCombinedRaw, accountField: value(row, map, key: "account"))
 
             // Detect credit-card style summary lines
             let isCCNewBalance = rowCombinedNorm.contains("new balance")
@@ -718,8 +729,8 @@ struct PDFSummaryParser: StatementParser {
                 || rowCombinedNorm.contains("available credit")
                 || rowCombinedNorm.contains("card ending")
 
-            let isStatementSummary = lower.contains("statement ending balance") || (!hasCreditCardIndicators && lower.contains("statement beginning balance"))
-            let isLoanSummary = lower.contains("beginning balance") || lower.contains("ending balance") || lower.contains("current amount due") || lower.contains("amount due") || lower.contains("payment due") || lower.contains("principal balance") || lower.contains("outstanding principal")
+            let isStatementSummary = rowCombinedNorm.contains("statement ending balance") || (!hasCreditCardIndicators && rowCombinedNorm.contains("statement beginning balance"))
+            let isLoanSummary = rowCombinedNorm.contains("beginning balance") || rowCombinedNorm.contains("ending balance") || rowCombinedNorm.contains("current amount due") || rowCombinedNorm.contains("amount due") || rowCombinedNorm.contains("payment due") || rowCombinedNorm.contains("principal balance") || rowCombinedNorm.contains("outstanding principal")
 
             // Only accept CC "New Balance" (avoid multiple snapshots); keep other statement/loan summaries as before
             // In credit card documents, ignore generic loan-like summaries (beginning/ending/current due) to avoid picking the wrong balance
@@ -843,6 +854,13 @@ struct PDFSummaryParser: StatementParser {
                 sb.sourceAccountLabel = "creditcard"
             } else {
                 var accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
+                // Suppress stray creditcard labels in non-CC documents for summary-like rows
+                if (accountKey == "creditcard") && !hasCreditCardIndicators {
+                    if isStatementSummary || isLoanSummary || isCreditCardSummary || isCCNewBalance {
+                        AMLogging.log("RowSummary: suppressing stray 'creditcard' label in non-CC document for summary row desc='" + (descRawOriginal ?? "") + "'", component: LOG_COMPONENT)
+                        accountKey = nil
+                    }
+                }
                 // Fallback to rolling section context when explicit labels are absent
                 if accountKey == nil, let ctx = currentAccountContext { accountKey = ctx }
                 // Bias to loan when loan phrases are present
@@ -1090,7 +1108,7 @@ struct PDFSummaryParser: StatementParser {
             let vanityPhonePattern = #"\b(?:\d{3}[-.\s]?)?\d{2,4}[-.\s]?[A-Za-z]{3,}\b"#
             let timePattern = #"\b(?:[0-1]?\d|2[0-3])(?::[0-5]\d)?\s?(?:am|pm)\b"#
             // Address patterns: PO Box / P.O. Box and ZIP codes
-            let poBoxPattern = #"\b(?:p\.?\s*o\.\?\s*)?box\s+\d+\b"#
+            let poBoxPattern = #"\b(?:p\s*\.?\s*o\s*\.?\s*box)\s+\d+\b"#
             let zipPattern = #"\b\d{5}(?:-\d{4})?\b"#
             
             // Date patterns: spelled-out month with day and year, month with year, and slash-separated dates
@@ -1269,24 +1287,62 @@ struct PDFSummaryParser: StatementParser {
             } else {
                 AMLogging.log("BalanceSummary: extractTypicalPayment returned nil for this section", component: LOG_COMPONENT)
             }
-            // In credit card documents, only use this section to capture Typical Payment; skip balance extraction.
-            if hasCreditCardIndicators {
-                continue
-            }
+            // Revert the Balance Summary section skip and filtering logic:
+            // 1) In the Balance Summary section loop, find the line `if hasCreditCardIndicators {` that currently logs and continues.
+            // Replace that whole if-block with the single line:
+            if hasCreditCardIndicators { continue }
+
+            var sectionLabel: String? = nil
+
             for raw in ls {
+                // 2) In the inner loop `for raw in ls {`, revert the header/product filtering to skip any line containing "account" regardless of values,
+                // and move `values` extraction back after label detection.
                 let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if s.isEmpty { continue }
                 let lower = s.lowercased()
+                // Detect an explicit section header like "Checking Account — 3360" to seed a rolling label
+                let labelProbe = normalizedLabel(s)
+                // Extract currency values first
+                let headerValues = extractCurrencyValues(from: s)
+                // Treat as header if it contains 'account' and either has no currency values
+                // OR the only numeric tokens look like short account suffixes (2–6 digits) without '$' or '.'
+                let nsLine = s as NSString
+                let fullRange = NSRange(location: 0, length: nsLine.length)
+                let digitRegex = try? NSRegularExpression(pattern: #"\d+"#, options: [])
+                let digitMatches = digitRegex?.matches(in: s, options: [], range: fullRange) ?? []
+                let hasDollarSymbol = s.contains("$")
+                let hasDecimalPoint = s.contains(".")
+                let allShortDigitRuns = !digitMatches.isEmpty && digitMatches.allSatisfy { $0.range.length >= 2 && $0.range.length <= 6 }
+                let looksLikeAccountSuffixOnly = !hasDollarSymbol && !hasDecimalPoint && allShortDigitRuns
+
+                if lower.contains("account") && (headerValues.isEmpty || looksLikeAccountSuffixOnly) {
+                    if let lp = labelProbe { sectionLabel = lp; AMLogging.log("BalanceSummary: detected section header label=\(lp) line='" + s + "'", component: LOG_COMPONENT) }
+                    continue
+                }
                 // Skip headers and rollups; keep product lines
-                if lower.contains("summary") || lower.contains("assets") || lower.contains("account") || lower.hasPrefix("total") {
+                if lower.contains("summary") || lower.contains("assets") || lower.hasPrefix("total") {
                     AMLogging.log("BalanceSummary: skipping non-product line '" + s + "'", component: LOG_COMPONENT)
                     continue
                 }
-                // Detect a generic label (checking/savings/brokerage/loan/creditcard) if present
-                let label = normalizedLabel(s)
-                // Extract all currency-like values on the line; many balance summary tables have both beginning and ending columns
-                let values = extractCurrencyValues(from: s)
+                // Brokerage-only filtering: skip address-like and page-marker lines without currency symbols
+                let hasDollarSymbolInLine = s.contains("$")
+                let isPageMarker = (s.range(of: #"\b\d+\s+of\s+\d+\b"#, options: .regularExpression) != nil)
+                let isCityStateZip = (s.range(of: #",\s+[A-Za-z]{2}\s+\d{5}(?:-\d{4})?\b"#, options: .regularExpression) != nil)
+                if !hasDollarSymbolInLine && (isPageMarker || isCityStateZip) {
+                    AMLogging.log("BalanceSummary: skipping address/page-marker line '" + s + "'", component: LOG_COMPONENT)
+                    continue
+                }
+                // Extract values after header detection
+                let values = headerValues.isEmpty ? extractCurrencyValues(from: s) : headerValues
+                // If the line contains 'account' but has no amounts and no recognizable label, treat it as a header and skip it
+                if lower.contains("account") && values.isEmpty && labelProbe == nil {
+                    AMLogging.log("BalanceSummary: skipping header-like 'account' line without amounts '" + s + "'", component: LOG_COMPONENT)
+                    continue
+                }
+                // Use detected label or fall back to rolling section label
+                var label = labelProbe ?? sectionLabel
                 AMLogging.log("BalanceSummary: line values=\(values.map { $0.description }.joined(separator: ", ")) label=\(label ?? "nil")", component: LOG_COMPONENT)
+
                 if values.count >= 2 {
                     // Heuristic: first numeric token is Beginning Balance, last is Ending Balance
                     let begin = values.first!
@@ -1330,6 +1386,168 @@ struct PDFSummaryParser: StatementParser {
                     AMLogging.log("BalanceSummary: added SINGLE label=\(label ?? "nil") date=\(date) amount=\(amount) line='" + s + "'", component: LOG_COMPONENT)
                 } else {
                     AMLogging.log("BalanceSummary: no currency values found in product line '" + s + "'", component: LOG_COMPONENT)
+                }
+            }
+        }
+
+        // Detect deposit account 'current balance' lines across the document (outside Balance Summary)
+        do {
+            if !hasCreditCardIndicators {
+                let lines = rows.map { normalizeSpaces($0.joined(separator: " ")) }
+                let docJoined = lines.joined(separator: "\n")
+                let docLower = docJoined.lowercased()
+                let depositWords = ["savings", "checking", "money market"]
+                let nsLower = docLower as NSString
+                let fullRange = NSRange(location: 0, length: nsLower.length)
+                if let rx = try? NSRegularExpression(pattern: "\\bcurrent\\s+balance\\b", options: [.caseInsensitive]) {
+                    let matches = rx.matches(in: docLower, options: [], range: fullRange)
+                    AMLogging.log("DepositScan: 'current balance' occurrences=\(matches.count)", component: LOG_COMPONENT)
+                    var addedCurrentLabels: Set<String> = []
+                    for m in matches {
+                        let start = max(0, m.range.location - 180)
+                        let end = min(nsLower.length, m.range.location + m.range.length + 220)
+                        let winRange = NSRange(location: start, length: end - start)
+                        let windowLower = nsLower.substring(with: winRange).lowercased()
+                        guard depositWords.contains(where: { windowLower.contains($0) }) else { continue }
+                        let window = (docJoined as NSString).substring(with: winRange)
+
+                        // 1) Find the anchor location within this window (offset of "current balance" in window)
+                        let anchorOffsetInDoc = m.range.location
+                        let windowStartInDoc = winRange.location
+                        let anchorOffsetInWindow = max(0, anchorOffsetInDoc - windowStartInDoc)
+
+                        // 2) Compute the single line containing the anchor (to prefer same-line amounts)
+                        let windowNSString = window as NSString
+                        let beforeAnchorRange = NSRange(location: 0, length: min(anchorOffsetInWindow, windowNSString.length))
+                        let afterAnchorRange = NSRange(location: anchorOffsetInWindow, length: max(0, windowNSString.length - anchorOffsetInWindow))
+                        let prevNL = windowNSString.range(of: "\n", options: [.backwards], range: beforeAnchorRange)
+                        let nextNL = windowNSString.range(of: "\n", options: [], range: afterAnchorRange)
+                        let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
+                        let lineEnd = nextNL.location == NSNotFound ? windowNSString.length : nextNL.location
+                        let anchorLineRange = NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+
+                        // 3) Regex for currency tokens (mirrors extractCurrencyValues normalization)
+                        let currencyPattern = #"\(\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?\s*\)|[-+]?\s*\$\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{1,3})*|[0-9]+)(?:\.[0-9]{1,4})?(?:-)?|[-+]?(?:[0-9]{1,3}(?:,[0-9]{1,3})*|[0-9]+)(?:\.[0-9]{1,4})?(?:-)?\b"#
+                        let currencyRx = try? NSRegularExpression(pattern: currencyPattern, options: [])
+
+                        // Helper to normalize a currency token into Decimal (keeps your parentheses/"-" handling)
+                        func parseCurrencyToken(_ raw: String) -> (value: Decimal, isZero: Bool)? {
+                            var token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                            var isNegative = false
+                            if token.hasPrefix("(") && token.hasSuffix(")") { isNegative = true; token.removeFirst(); token.removeLast() }
+                            token = token.replacingOccurrences(of: "$", with: "")
+                                         .replacingOccurrences(of: ",", with: "")
+                                         .replacingOccurrences(of: " ", with: "")
+                            if token.hasSuffix("-") { isNegative = true; token.removeLast() }
+                            if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
+                            guard let dec = Decimal(string: token) else { return nil }
+                            let val = isNegative ? -dec : dec
+                            return (val, val == .zero)
+                        }
+
+                        // 4) Collect currency matches with position info in this window
+                        struct CCandidate { let value: Decimal; let loc: Int; let sameLine: Bool; let after: Bool; let distance: Int }
+                        var ccands: [CCandidate] = []
+                        if let rx = currencyRx {
+                            let full = NSRange(location: 0, length: windowNSString.length)
+                            rx.enumerateMatches(in: window, options: [], range: full) { match, _, _ in
+                                guard let match, match.range.location != NSNotFound else { return }
+                                let tokRange = match.range
+                                let tok = windowNSString.substring(with: tokRange)
+                                guard let parsed = parseCurrencyToken(tok), !parsed.isZero else { return }
+
+                                let sameLine = NSIntersectionRange(tokRange, anchorLineRange).length > 0
+                                let after = tokRange.location >= anchorOffsetInWindow
+                                let distance = abs(tokRange.location - anchorOffsetInWindow)
+                                ccands.append(CCandidate(value: parsed.value, loc: tokRange.location, sameLine: sameLine, after: after, distance: distance))
+                            }
+                        }
+
+                        // 5) Choose the best candidate by buckets:
+                        //    a) same line + after, nearest
+                        //    b) anywhere after, nearest
+                        //    c) same line + before, nearest
+                        //    d) anywhere before, nearest
+                        let pick: CCandidate? =
+                            ccands.filter { $0.sameLine && $0.after }.min(by: { $0.distance < $1.distance }) ??
+                            ccands.filter { $0.after }.min(by: { $0.distance < $1.distance }) ??
+                            ccands.filter { $0.sameLine && !$0.after }.min(by: { $0.distance < $1.distance }) ??
+                            ccands.min(by: { $0.distance < $1.distance })
+
+                        let amount: Decimal? = pick?.value ?? extractCurrencyValues(from: window).last
+                        guard let amount = amount else { continue }
+
+                        // Disambiguate label when both 'checking' and 'savings' appear
+                        var label = normalizedLabel(window.lowercased()) ?? normalizedLabel(window)
+                        if windowLower.contains("checking") && windowLower.contains("savings") {
+                            if let cbRange = windowLower.range(of: "current balance") {
+                                let cbIdx = windowLower.distance(from: windowLower.startIndex, to: cbRange.lowerBound)
+                                func dist(_ token: String) -> Int {
+                                    if let r = windowLower.range(of: token) {
+                                        let idx = windowLower.distance(from: windowLower.startIndex, to: r.lowerBound)
+                                        return abs(idx - cbIdx)
+                                    }
+                                    return Int.max
+                                }
+                                let dCheck = dist("checking")
+                                let dSave = dist("savings")
+                                label = (dCheck <= dSave) ? "checking" : "savings"
+                                AMLogging.log("DepositScan: disambiguated label near 'current balance' — chosen=\(label ?? "nil")", component: LOG_COMPONENT)
+                            } else {
+                                // If we can't anchor to 'current balance', avoid a wrong pick by leaving label unchanged
+                                AMLogging.log("DepositScan: both 'checking' and 'savings' present but no 'current balance' anchor — leaving label as \(label ?? "nil")", component: LOG_COMPONENT)
+                            }
+                        }
+                        let labelKey = (label ?? "default")
+                        if addedCurrentLabels.contains(labelKey) { continue }
+                        let date = asOfForSummaryEnd ?? asOfForSummaryStart ?? statementClosingDate ?? Date()
+                        var sb = StagedBalance(asOfDate: date, balance: amount)
+                        sb.sourceAccountLabel = label
+                        balances.append(sb)
+                        addedCurrentLabels.insert(labelKey)
+                        AMLogging.log("DepositScan: added snapshot from window label=\(label ?? "nil") amount=\(amount) date=\(date) window='" + String(windowLower.prefix(160)) + "'", component: LOG_COMPONENT)
+                    }
+                }
+                if let rxBegin = try? NSRegularExpression(pattern: "\\bbeginning\\s+balance\\b", options: [.caseInsensitive]) {
+                    let beginMatches = rxBegin.matches(in: docLower, options: [], range: fullRange)
+                    AMLogging.log("DepositScan: 'beginning balance' occurrences=\(beginMatches.count)", component: LOG_COMPONENT)
+                    var addedBeginLabels: Set<String> = []
+                    for m in beginMatches {
+                        let start = max(0, m.range.location - 180)
+                        let end = min(nsLower.length, m.range.location + m.range.length + 220)
+                        let winRange = NSRange(location: start, length: end - start)
+                        let windowLower = nsLower.substring(with: winRange).lowercased()
+                        guard depositWords.contains(where: { windowLower.contains($0) }) else { continue }
+                        let window = (docJoined as NSString).substring(with: winRange)
+                        let values = extractCurrencyValues(from: window)
+                        guard let amount = values.last else { continue }
+                        // Disambiguate label when both 'checking' and 'savings' appear
+                        var label = normalizedLabel(window.lowercased()) ?? normalizedLabel(window)
+                        if windowLower.contains("checking") && windowLower.contains("savings") {
+                            if let cbRange = windowLower.range(of: "beginning balance") {
+                                let cbIdx = windowLower.distance(from: windowLower.startIndex, to: cbRange.lowerBound)
+                                func dist(_ token: String) -> Int {
+                                    if let r = windowLower.range(of: token) {
+                                        let idx = windowLower.distance(from: windowLower.startIndex, to: r.lowerBound)
+                                        return abs(idx - cbIdx)
+                                    }
+                                    return Int.max
+                                }
+                                let dCheck = dist("checking")
+                                let dSave = dist("savings")
+                                label = (dCheck <= dSave) ? "checking" : "savings"
+                                AMLogging.log("DepositScan: disambiguated label near 'beginning balance' — chosen=\(label ?? "nil")", component: LOG_COMPONENT)
+                            }
+                        }
+                        let labelKey = (label ?? "default") + "|begin"
+                        if addedBeginLabels.contains(labelKey) { continue }
+                        let date = asOfForSummaryStart ?? asOfForSummaryEnd ?? statementClosingDate ?? Date()
+                        var sb = StagedBalance(asOfDate: date, balance: amount)
+                        sb.sourceAccountLabel = label
+                        balances.append(sb)
+                        addedBeginLabels.insert(labelKey)
+                        AMLogging.log("DepositScan: added BEGIN snapshot from window label=\(label ?? "nil") amount=\(amount) date=\(date) window='" + String(windowLower.prefix(160)) + "'", component: LOG_COMPONENT)
+                    }
                 }
             }
         }
@@ -1438,27 +1656,72 @@ struct PDFSummaryParser: StatementParser {
                         let existingVal = (ebal.balance as NSDecimalNumber).doubleValue
                         let sameMagnitude = abs(abs(existingVal) - abs(incomingVal)) <= eps
                         let oppositeSign = (existingVal < 0 && incomingVal > 0) || (existingVal > 0 && incomingVal < 0)
-                        if !(sameMagnitude && oppositeSign) { continue }
+
+                        // Handle same-sign, same-magnitude duplicates across labels: prefer labeled over unlabeled
+                        if sameMagnitude && !oppositeSign {
+                            let existingLabelFromKey = String(parts[0])
+                            let incomingLabel = label
+                            let existingIsDefault = (existingLabelFromKey == "default")
+                            let incomingIsDefault = (incomingLabel == "default")
+                            if existingIsDefault && !incomingIsDefault {
+                                var incomingUpdated = b
+                                if incomingUpdated.typicalPaymentAmount == nil, let pay = ebal.typicalPaymentAmount {
+                                    incomingUpdated.typicalPaymentAmount = pay
+                                    AMLogging.log("DeDup: (same-sign) carried typicalPaymentAmount=\(pay) to incoming for key=\(ekey) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                                }
+                                AMLogging.log("DeDup: (same-sign) replacing unlabeled existing with labeled incoming — existingLabel=default incomingLabel=\(incomingLabel) amount=\(incomingUpdated.balance) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                                chosen[ekey] = incomingUpdated
+                                handledCross = true
+                                break
+                            } else if !existingIsDefault && incomingIsDefault {
+                                AMLogging.log("DeDup: (same-sign) keeping existing labeled snapshot and discarding incoming unlabeled duplicate — label=\(existingLabelFromKey) amount=\(ebal.balance) day=\(Int(dayStart))", component: LOG_COMPONENT)
+                                handledCross = true
+                                break
+                            }
+                        }
+
+                        if !(sameMagnitude && oppositeSign) {
+                            continue
+                        }
 
                         let existingHasAPR = (ebal.interestRateAPR != nil)
                         let incomingHasAPR = (b.interestRateAPR != nil)
                         let existingLabelFromKey = String(parts[0])
 
                         var keepIncoming = false
-                        // Never let an unlabeled snapshot replace a labeled one; allow labeled to replace unlabeled
-                        if existingLabelFromKey != "default" && label == "default" {
-                            keepIncoming = false
-                        } else if existingLabelFromKey == "default" && label != "default" {
-                            keepIncoming = true
-                        } else if existingHasAPR != incomingHasAPR {
-                            // Prefer the one with APR
-                            keepIncoming = incomingHasAPR
-                        } else if existingLabelFromKey == "loan" || label == "loan" {
-                            // For loans, prefer negative value
-                            keepIncoming = (incomingVal < 0)
-                        } else {
-                            // Default: keep existing
-                            keepIncoming = false
+                        var decided = false
+                        if !hasCreditCardIndicators {
+                            let bankSet: Set<String> = ["checking", "savings"]
+                            let isExistingCC = (existingLabelFromKey == "creditcard")
+                            let isIncomingCC = (label == "creditcard")
+                            let isExistingBank = bankSet.contains(existingLabelFromKey)
+                            let isIncomingBank = bankSet.contains(label)
+                            if isExistingCC && isIncomingBank {
+                                keepIncoming = true
+                                decided = true
+                                AMLogging.log("DeDup: (cross-label opp-sign) preferring bank label over creditcard in non-CC doc — existing=creditcard incoming=\(label)", component: LOG_COMPONENT)
+                            } else if isIncomingCC && isExistingBank {
+                                keepIncoming = false
+                                decided = true
+                                AMLogging.log("DeDup: (cross-label opp-sign) preferring existing bank label over incoming creditcard in non-CC doc — existing=\(existingLabelFromKey)", component: LOG_COMPONENT)
+                            }
+                        }
+                        if !decided {
+                            // Never let an unlabeled snapshot replace a labeled one; allow labeled to replace unlabeled
+                            if existingLabelFromKey != "default" && label == "default" {
+                                keepIncoming = false
+                            } else if existingLabelFromKey == "default" && label != "default" {
+                                keepIncoming = true
+                            } else if existingHasAPR != incomingHasAPR {
+                                // Prefer the one with APR
+                                keepIncoming = incomingHasAPR
+                            } else if existingLabelFromKey == "loan" || label == "loan" {
+                                // For loans, prefer negative value
+                                keepIncoming = (incomingVal < 0)
+                            } else {
+                                // Default: keep existing
+                                keepIncoming = false
+                            }
                         }
 
                         if keepIncoming {

@@ -2,8 +2,11 @@ import Foundation
 
 struct StatementImporter {
 
+    enum UserOverride { case creditCard, loan, bank, brokerage }
+
     func importStatement(from url: URL,
-                         prefer mode: PDFStatementExtractor.Mode = .transactions) throws -> StatementImportResult {
+                         prefer mode: PDFStatementExtractor.Mode = .transactions,
+                         userOverride: UserOverride? = nil) throws -> StatementImportResult {
         switch detectKind(url) {
         case .csv:
             let (rows, headers) = try CSVStatementExtractor.parse(url: url)
@@ -18,7 +21,8 @@ struct StatementImporter {
                     AMLogging.log("StatementImporter: security scope stopped for file=\(url.path)", component: "StatementImporter")
                 }
             }
-            let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: mode)
+            AMLogging.log("StatementImporter: invoking PDF extractor with mode=\(mode) override=\(String(describing: userOverride))", component: "StatementImporter")
+            let (rows, headers) = try PDFStatementExtractor.parse(url: url, mode: mode, override: userOverride)
             AMLogging.log("StatementImporter: PDF extractor returned rows=\(rows.count) headers=\(headers)", component: "StatementImporter")
             var augmentedRows = rows
 
