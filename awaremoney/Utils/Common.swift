@@ -191,10 +191,15 @@ public struct PlanToolbarButton: View {
                 } icon: {
                     Image(systemName: systemImage)
                 }
+                .labelStyle(.titleAndIcon)
             } else {
                 Text(title)
             }
         }
+        .buttonStyle(PlanToolbarButtonStyle(backgroundColor: backgroundColor,
+                                            foregroundColor: foregroundColor,
+                                            titleFont: titleFont,
+                                            fixedWidth: fixedWidth))
     }
 }
 

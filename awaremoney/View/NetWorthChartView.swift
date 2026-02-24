@@ -6,6 +6,7 @@ struct NetWorthChartView: View {
     private enum ChartMode: String, CaseIterable, Identifiable {
         case assets = "Assets"
         case liabilities = "Liabilities"
+        case debtVsAssets = "Debt vs Assets"
         var id: String { rawValue }
     }
 
@@ -15,6 +16,8 @@ struct NetWorthChartView: View {
     var showsDoneButton: Bool = true
 
     @State private var slices: [AccountSlice] = []
+    @State private var totalAssetsValue: Decimal = 0
+    @State private var totalLiabilitiesValue: Decimal = 0
     @State private var mode: ChartMode = .assets
     @State private var initializedMode = false
 
@@ -66,6 +69,16 @@ struct NetWorthChartView: View {
         let totalDouble = NSDecimalNumber(decimal: total).doubleValue
 
         return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text(titlePrefix(for: mode))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Text(format(amount: titleAmount(for: mode)))
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(titleColor(for: mode))
+            }
             Chart {
                 ForEach(data) { s in
                     SectorMark(
@@ -96,6 +109,36 @@ struct NetWorthChartView: View {
         return "\(slice.name) \(pctStr)"
     }
 
+    private func titlePrefix(for mode: ChartMode) -> String {
+        switch mode {
+        case .assets:
+            return "Total Assets ="
+        case .liabilities:
+            return "Total Liabilities ="
+        case .debtVsAssets:
+            return "Total Net Worth ="
+        }
+    }
+
+    private func titleAmount(for mode: ChartMode) -> Decimal {
+        switch mode {
+        case .assets:
+            // Sum of current slices (assets mode only includes positive values)
+            return slices.reduce(Decimal.zero) { $0 + $1.value }
+        case .liabilities:
+            // Sum of current slices (liabilities mode uses magnitudes)
+            return slices.reduce(Decimal.zero) { $0 + $1.value }
+        case .debtVsAssets:
+            // Net worth = assets - liabilities
+            return totalAssetsValue - totalLiabilitiesValue
+        }
+    }
+
+    private func titleColor(for mode: ChartMode) -> Color {
+        let amount = titleAmount(for: mode)
+        return amount < 0 ? .red : .primary
+    }
+
     private func typeDisplayName(_ type: Account.AccountType) -> String {
         switch type {
         case .checking: return "checking"
@@ -104,6 +147,7 @@ struct NetWorthChartView: View {
         case .loan: return "loan"
         case .cash: return "cash"
         case .brokerage: return "brokerage"
+        case .property: return "property"
         case .other: return "other"
         }
     }
@@ -114,8 +158,11 @@ struct NetWorthChartView: View {
             let accounts = try modelContext.fetch(FetchDescriptor<Account>())
 
             var out: [AccountSlice] = []
+            var totalAssets: Decimal = .zero
+            var totalLiabilities: Decimal = .zero
+
             for acct in accounts {
-                // Use the most recent non-excluded balance snapshot as a base, plus transactions after that date.
+                // Use the most recent non-excluded balance snapshot as a base, plus non-excluded transactions after that date.
                 let snapshots = acct.balanceSnapshots.filter { !$0.isExcluded }
                 let last = snapshots.sorted { $0.asOfDate > $1.asOfDate }.first
                 let txs = acct.transactions.filter { !$0.isExcluded }
@@ -130,30 +177,57 @@ struct NetWorthChartView: View {
                     }
                 }()
 
-                let include: Bool
-                let magnitude: Decimal
+                // Tally overall totals for the comparison mode
+                if value > 0 { totalAssets += value }
+                if value < 0 { totalLiabilities += (-value) }
+
+                // Existing per-account composition behavior for assets and liabilities modes
                 switch mode {
                 case .assets:
-                    include = value > 0
-                    magnitude = value
+                    if value > 0 {
+                        let baseName: String = {
+                            if acct.type == .property { return acct.name }
+                            let inst = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                            return inst.isEmpty ? acct.name : inst
+                        }()
+                        let displayName = "\(baseName) \(typeDisplayName(acct.type))"
+                        out.append(AccountSlice(id: acct.id.uuidString, name: displayName, value: value, currencyCode: acct.currencyCode, type: acct.type))
+                    }
                 case .liabilities:
-                    include = value < 0
-                    magnitude = value < 0 ? -value : value
+                    if value < 0 {
+                        let magnitude = -value
+                        let baseName: String = {
+                            if acct.type == .property { return acct.name }
+                            let inst = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                            return inst.isEmpty ? acct.name : inst
+                        }()
+                        let displayName = "\(baseName) \(typeDisplayName(acct.type))"
+                        out.append(AccountSlice(id: acct.id.uuidString, name: displayName, value: magnitude, currencyCode: acct.currencyCode, type: acct.type))
+                    }
+                case .debtVsAssets:
+                    // Defer; we'll build the two slices after the loop
+                    break
                 }
-                if include {
-                    let baseName: String = {
-                        let inst = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                        return inst.isEmpty ? acct.name : inst
-                    }()
-                    let displayName = "\(baseName) \(typeDisplayName(acct.type))"
-                    out.append(AccountSlice(id: acct.id.uuidString, name: displayName, value: magnitude, currencyCode: acct.currencyCode, type: acct.type))
+            }
+
+            if mode == .debtVsAssets {
+                out = []
+                if totalAssets > 0 {
+                    out.append(AccountSlice(id: "assets", name: "Assets", value: totalAssets, currencyCode: settings.currencyCode, type: .other))
+                }
+                if totalLiabilities > 0 {
+                    out.append(AccountSlice(id: "liabilities", name: "Debt", value: totalLiabilities, currencyCode: settings.currencyCode, type: .other))
                 }
             }
 
             // Sort descending by value for stable legend ordering
             out.sort { $0.doubleValue > $1.doubleValue }
 
-            await MainActor.run { self.slices = out }
+            await MainActor.run {
+                self.slices = out
+                self.totalAssetsValue = totalAssets
+                self.totalLiabilitiesValue = totalLiabilities
+            }
         } catch {
             await MainActor.run { self.slices = [] }
         }

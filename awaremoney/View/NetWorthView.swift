@@ -20,6 +20,7 @@ struct NetWorthView: View {
     @State private var totalAssets: Decimal = 0
     @State private var totalLiabilities: Decimal = 0
     @State private var monthToDateDelta: Decimal = 0
+    @State private var showAddAssetSheet = false
 
     var body: some View {
         Group {
@@ -27,6 +28,11 @@ struct NetWorthView: View {
                 NavigationSplitView {
                     primaryList
                         .navigationTitle("Net Worth")
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) {
+                                PlanToolbarButton("Asset",systemImage: "plus", titleFont: .caption) { showAddAssetSheet = true }
+                            }
+                        }
                 } detail: {
                     dashboardDetail
                 }
@@ -34,11 +40,27 @@ struct NetWorthView: View {
                 NavigationStack {
                     primaryList
                         .navigationTitle("Net Worth")
+                        .toolbar {
+                            ToolbarItem(placement: .primaryAction) {
+                                PlanToolbarButton("Asset",systemImage: "plus") { showAddAssetSheet = true }
+//                                Button {
+//                                    showAddAssetSheet = true
+//                                } label: {
+//                                    HStack(spacing: 6) {
+//                                        Image(systemName: "plus")
+//                                        Text("Add Asset")
+//                                    }
+//                                }
+                            }
+                        }
                 }
                 .sheet(isPresented: $showNetWorthChart) {
                     NetWorthChartView(showsDoneButton: true)
                 }
             }
+        }
+        .sheet(isPresented: $showAddAssetSheet) {
+            ManualAssetSheet()
         }
     }
 
@@ -89,25 +111,17 @@ struct NetWorthView: View {
 
             // Overall total
             Section("Total") {
-                Button {
+                HStack {
+                    Text("Net Worth")
+                    Spacer()
                     if hSizeClass == .compact {
-                        showNetWorthChart = true
+                        PlanToolbarButton("Chart",systemImage: "chart.pie") { showNetWorthChart = true }
                     }
-                } label: {
-                    HStack {
-                        Text("Net Worth")
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Text(format(amount: totalNetWorth))
-                                .font(.headline)
-                                .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
-                            Image(systemName: "chevron.up")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    Spacer()
+                    Text(format(amount: totalNetWorth))
+                        .font(.headline)
+                        .foregroundStyle(totalNetWorth < .zero ? .red : .primary)
                 }
-                .buttonStyle(.plain)
             }
         }
         .task { await load() }
@@ -235,10 +249,10 @@ struct NetWorthView: View {
             }
         }
 
-        // Find latest snapshot date if any
+        // Find latest non-excluded snapshot date if any
         let latestSnapDate: Date? = try {
             let id = account.id
-            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id }
+            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id && snap.isExcluded == false }
             var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
             desc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
             desc.fetchLimit = 1
@@ -247,20 +261,20 @@ struct NetWorthView: View {
         }()
 
         if let snapDate = latestSnapDate {
-            // Get latest snapshot balance
+            // Get latest non-excluded snapshot balance
             let id = account.id
-            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id && snap.asOfDate == snapDate }
+            let pred = #Predicate<BalanceSnapshot> { snap in snap.account?.id == id && snap.asOfDate == snapDate && snap.isExcluded == false }
             var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
             desc.fetchLimit = 1
             let snaps = try modelContext.fetch(desc)
             let base = snaps.first?.balance ?? 0
-            // Sum transactions strictly after snapshot date
-            let txAfter = account.transactions.filter { $0.datePosted > snapDate }
+            // Sum non-excluded transactions strictly after snapshot date
+            let txAfter = account.transactions.filter { $0.datePosted > snapDate && $0.isExcluded == false }
             let delta = txAfter.reduce(Decimal.zero) { $0 + $1.amount }
             return adjustForLiability(base + delta, for: account)
         } else {
-            // No snapshots: sum all transactions
-            let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+            // No snapshots: sum non-excluded transactions
+            let sum = account.transactions.filter { $0.isExcluded == false }.reduce(Decimal.zero) { $0 + $1.amount }
             return adjustForLiability(sum, for: account)
         }
     }
@@ -272,7 +286,7 @@ struct NetWorthView: View {
         }
         var delta: Decimal = .zero
         for account in accounts {
-            let tx = account.transactions.filter { $0.datePosted >= startOfMonth }
+            let tx = account.transactions.filter { $0.datePosted >= startOfMonth && $0.isExcluded == false }
             delta += tx.reduce(.zero) { $0 + $1.amount }
         }
         return delta
@@ -287,7 +301,7 @@ struct NetWorthView: View {
 
     // Preferred order of account types in the UI
     private var accountTypeOrder: [Account.AccountType] {
-        [.checking, .savings, .creditCard, .loan, .brokerage, .cash, .other]
+        [.checking, .savings, .creditCard, .loan, .brokerage, .cash, .property, .other]
     }
     private func typeDisplayName(_ type: Account.AccountType) -> String {
         switch type {
@@ -297,6 +311,7 @@ struct NetWorthView: View {
         case .loan: return "Loans"
         case .brokerage: return "Stocks"
         case .cash: return "Cash"
+        case .property: return "Property"
         case .other: return "Other"
         }
     }
@@ -305,11 +320,15 @@ struct NetWorthView: View {
     private func groupsFor(type: Account.AccountType) -> [(institution: String, value: Decimal)] {
         // Filter by type
         let rows = byAccount.filter { $0.type == type }
-        // Group by institution (fallback to Unknown)
+        // Group label: use property name for properties; institution for others (fallback to Unknown)
         var buckets: [String: Decimal] = [:]
         for row in rows {
-            let inst = (row.institutionName?.isEmpty == false) ? row.institutionName! : "Unknown"
-            buckets[inst, default: .zero] += row.value
+            let label: String = {
+                if type == .property { return row.displayName }
+                let inst = (row.institutionName?.isEmpty == false) ? row.institutionName! : "Unknown"
+                return inst
+            }()
+            buckets[label, default: .zero] += row.value
         }
         // Sort alphabetically by institution name
         return buckets.keys.sorted().map { key in (institution: key, value: buckets[key] ?? .zero) }

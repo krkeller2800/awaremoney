@@ -46,7 +46,7 @@ enum CreditCardPaymentMode: String, Codable, CaseIterable {
 @Model
 final class Account {
     enum AccountType: String, Codable, CaseIterable {
-        case checking, savings, creditCard, loan, cash, brokerage, other
+        case checking, savings, creditCard, loan, cash, brokerage, property, other
     }
 
     @Attribute(.unique) var id: UUID

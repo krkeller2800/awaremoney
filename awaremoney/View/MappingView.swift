@@ -28,7 +28,7 @@ struct MappingView: View {
         .navigationTitle("Map Columns")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                PlanToolbarButton("Cancel",fixedWidth: 70) {
                     vm.mappingSession = nil
                 }
             }

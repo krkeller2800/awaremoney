@@ -52,7 +52,11 @@ struct ImportBatchDetailView: View {
                     .navigationTitle("Update Transactions")
                     .onAppear { AMLogging.log("ImportBatchDetailView appear batchID=\(batchID)", component: "ImportBatchDetailView") }
                     .task(id: batchID) { await load() }
-                    .safeAreaInset(edge: .bottom) { bottomBar() }
+                    .safeAreaInset(edge: .bottom) {
+                        if focusedField == nil {
+                            bottomBar()
+                        }
+                    }
                     .fileImporter(
                         isPresented: $isImporterPresented,
                         allowedContentTypes: [UTType.commaSeparatedText, .tabSeparatedText, .text, .plainText, .pdf],

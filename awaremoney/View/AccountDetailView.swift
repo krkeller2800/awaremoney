@@ -17,6 +17,7 @@ struct AccountDetailView: View {
     @State private var mergeTargetID: UUID?
     @State private var cachedDerivedBalance: Decimal? = nil
     @State private var cachedEarliestTransactionDate: Date? = nil
+    @State private var showDeleteAlert = false
 
     @FocusState private var focusedField: Field?
 
@@ -38,14 +39,16 @@ struct AccountDetailView: View {
                 List {
                     Section(header: GroupedSectionHeader("Details")) {
                         LabeledContent("Name", value: account.name)
-                        LabeledContent("Institution") {
-                            TextField("Institution name", text: Binding<String>(
+                        LabeledContent(account.type == .property ? "Description" : "Institution") {
+                            TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
                                 get: { account.institutionName ?? "" },
                                 set: { newVal in
                                     let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
                                     account.institutionName = trimmed
-                                    // Keep account name in sync with institution when edited here
-                                    if account.name != trimmed { account.name = trimmed }
+                                    // Keep account name in sync with institution when edited here (non-property accounts only)
+                                    if account.type != .property, account.name != trimmed {
+                                        account.name = trimmed
+                                    }
                                     do { try modelContext.save() } catch {}
                                     NotificationCenter.default.post(name: .accountsDidChange, object: nil)
                                 }
@@ -55,7 +58,7 @@ struct AccountDetailView: View {
                             .autocorrectionDisabled()
                             .focused($focusedField, equals: .institution)
                         }
-                        if isInvalidInstitutionName(account.institutionName) {
+                        if account.type != .property && isInvalidInstitutionName(account.institutionName) {
                             Text("Required. We couldn't derive this from your import.")
                                 .font(.footnote)
                                 .foregroundStyle(.red)
@@ -274,6 +277,14 @@ struct AccountDetailView: View {
                             .environment(\.modelContext, modelContext)
                     }
                 }
+                .alert("Delete this property?", isPresented: $showDeleteAlert) {
+                    Button("Delete", role: .destructive) {
+                        deleteAccount(account)
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("This will permanently delete the property and all associated balances and transactions.")
+                }
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         if isIPadLandscape {
@@ -287,6 +298,17 @@ struct AccountDetailView: View {
                             .simultaneousGesture(TapGesture().onEnded {
                                 AMLogging.log("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
                             })
+                        }
+                    }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if account.type == .property {
+                            Button(role: .destructive) {
+                                showDeleteAlert = true
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .accessibilityLabel("Delete Property")
                         }
                     }
 
@@ -507,6 +529,19 @@ struct AccountDetailView: View {
         nf.minimumFractionDigits = 0
         nf.maximumFractionDigits = 2
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
+    private func deleteAccount(_ account: Account) {
+        AMLogging.log("Deleting account id=\(account.id) name=\(account.name)", component: "AccountDetailView")
+        modelContext.delete(account)
+        do {
+            try modelContext.save()
+        } catch {
+            AMLogging.error("Failed to delete account: \(error.localizedDescription)", component: "AccountDetailView")
+        }
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        dismiss()
     }
 }
 

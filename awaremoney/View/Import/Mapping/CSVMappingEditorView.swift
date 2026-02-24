@@ -260,7 +260,7 @@ struct CSVMappingEditorView: View {
         .navigationTitle(isImportFallback ? "Map Columns" : "Edit Mapping")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                PlanToolbarButton("Cancel",fixedWidth: 70) {
                     if let onCancelAction { onCancelAction() }
                     else { dismiss() }
                 }

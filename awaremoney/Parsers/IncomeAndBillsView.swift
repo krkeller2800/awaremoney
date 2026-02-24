@@ -303,7 +303,16 @@ struct IncomeAndBillsView: View {
                     } else {
                         Section("Income") {
                             ForEach(incomes) { item in
-                                NavigationLink(destination: CashFlowItemEditorView(item: item)) {
+                                NavigationLink(destination: EditCashFlowItemView(
+                                    item: item,
+                                    onSave: {
+                                        try? modelContext.save()
+                                    },
+                                    onDelete: {
+                                        modelContext.delete(item)
+                                        try? modelContext.save()
+                                    }
+                                )) {
                                     row(for: item)
                                 }
                             }
@@ -316,7 +325,16 @@ struct IncomeAndBillsView: View {
                         }
                         Section("Bills") {
                             ForEach(bills) { item in
-                                NavigationLink(destination: CashFlowItemEditorView(item: item)) {
+                                NavigationLink(destination: EditCashFlowItemView(
+                                    item: item,
+                                    onSave: {
+                                        try? modelContext.save()
+                                    },
+                                    onDelete: {
+                                        modelContext.delete(item)
+                                        try? modelContext.save()
+                                    }
+                                )) {
                                     row(for: item)
                                 }
                             }
@@ -334,13 +352,6 @@ struct IncomeAndBillsView: View {
             }
             .navigationTitle("Income & Bills")
             .toolbar {
-                if presentationMode.wrappedValue.isPresented {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "chevron.left")
-                        }
-                    }
-                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Add Income") {
@@ -611,7 +622,7 @@ private struct AddCashFlowItemView: View {
             .navigationTitle(initialKind == .income ? "Add Income" : "Add Bill")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
@@ -837,7 +848,7 @@ private struct EditCashFlowItemView: View {
             .navigationTitle(isIncome ? "Edit Income" : "Edit Bill")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
@@ -1083,6 +1094,8 @@ private struct CurrencyAmountField: UIViewRepresentable {
     }
 }
 #endif
+
+
 
 
 

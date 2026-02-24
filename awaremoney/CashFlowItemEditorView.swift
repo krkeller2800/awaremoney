@@ -7,7 +7,6 @@ public struct CashFlowItemEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     // Editable state
-    @State private var kind: CashFlowItem.Kind = .bill
     @State private var name: String = ""
     @State private var amountText: String = ""
     @State private var frequency: PaymentFrequency = .monthly
@@ -19,6 +18,7 @@ public struct CashFlowItemEditorView: View {
     @State private var initialized = false
 
     @FocusState private var focusedField: FocusField?
+    @State private var amountIsFirstResponder: Bool = false
 
     private enum FocusField: Hashable {
         case name, amount, notes
@@ -28,51 +28,57 @@ public struct CashFlowItemEditorView: View {
 
     private func moveFocus(_ direction: Int) {
         guard !focusOrder.isEmpty else { return }
+        func activate(_ field: FocusField) {
+            switch field {
+            case .name:
+                amountIsFirstResponder = false
+                focusedField = .name
+            case .amount:
+                focusedField = .amount
+                amountIsFirstResponder = true
+            case .notes:
+                amountIsFirstResponder = false
+                focusedField = .notes
+            }
+        }
         guard let current = focusedField else {
-            focusedField = focusOrder.first
+            activate(focusOrder.first!)
             return
         }
         if let idx = focusOrder.firstIndex(of: current) {
             let newIdx = max(focusOrder.startIndex, min(focusOrder.index(before: focusOrder.endIndex), idx + direction))
-            focusedField = focusOrder[newIdx]
+            activate(focusOrder[newIdx])
         }
     }
 
     private func commitAndDismiss() {
         applyChanges()
+        amountIsFirstResponder = false
         focusedField = nil
     }
 
     public var body: some View {
         Form {
-            Section("Type") {
-                Picker("Kind", selection: $kind) {
-                    Text("Income").tag(CashFlowItem.Kind.income)
-                    Text("Bill").tag(CashFlowItem.Kind.bill)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: kind) { _, newKind in
-                    if newKind == .income {
-                        switch frequency.normalized {
-                        case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                            if dayOfMonth == nil { dayOfMonth = 1 }
-                            firstPaymentDate = nil
-                        default:
-                            break
-                        }
-                    }
-                    applyChanges()
-                }
-            }
             Section("Details") {
-                TextField("Name", text: $name)
-                    .onChange(of: name) { applyChanges() }
-                    .focused($focusedField, equals: .name)
-                TextField("Amount", text: $amountText)
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .onChange(of: amountText) { applyChanges() }
-                    .focused($focusedField, equals: .amount)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    TextField("Name", text: $name)
+                        .submitLabel(.next)
+                        .onSubmit {
+                            amountIsFirstResponder = true
+                            focusedField = .amount
+                        }
+                        .onChange(of: name) { applyChanges() }
+                        .focused($focusedField, equals: .name)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SelectAllAmountField(
+                        text: $amountText,
+                        placeholder: "Amount",
+                        isFirstResponder: $amountIsFirstResponder,
+                        onBeginEditing: { focusedField = .amount },
+                        onEndEditing: { }
+                    )
+                    .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                }
                 Picker("Frequency", selection: $frequency) {
                     Text("Monthly").tag(PaymentFrequency.monthly)
                     Text("Twice per month").tag(PaymentFrequency.semimonthly)
@@ -84,7 +90,7 @@ public struct CashFlowItemEditorView: View {
                     Text("One-time").tag(PaymentFrequency.oneTime)
                 }
                 .onChange(of: frequency) { _, newValue in
-                    if kind == .income {
+                    if item.kind == .income {
                         switch newValue.normalized {
                         case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
                             if dayOfMonth == nil { dayOfMonth = 1 }
@@ -96,7 +102,7 @@ public struct CashFlowItemEditorView: View {
                     applyChanges()
                 }
 
-                if kind == .income && frequency == .monthly {
+                if item.kind == .income && frequency == .monthly {
                     Picker("SSA Wednesday", selection: Binding<Int?>(
                         get: { ssaWednesday },
                         set: { ssaWednesday = $0; applyChanges() }
@@ -159,7 +165,7 @@ public struct CashFlowItemEditorView: View {
                 .accessibilityLabel("Done")
             }
         }
-        .navigationTitle("Edit \(kind == .income ? "Income" : "Bill")")
+        .navigationTitle("Edit \(item.kind == .income ? "Income" : "Bill")")
         .onAppear { initializeFromItemIfNeeded() }
         .toolbar {
             ToolbarItem(placement: .destructiveAction) {
@@ -176,7 +182,6 @@ public struct CashFlowItemEditorView: View {
 
     private func initializeFromItemIfNeeded() {
         guard !initialized else { return }
-        self.kind = item.kind
         self.name = item.name
         self.amountText = formatAmountForInput(item.amount)
         self.frequency = item.frequency
@@ -188,7 +193,7 @@ public struct CashFlowItemEditorView: View {
     }
 
     private func applyChanges() {
-        item.kind = kind
+        // item.kind = kind  // Removed as per instructions
         item.name = name
         if let amt = parseCurrency(amountText) {
             item.amount = amt
@@ -241,6 +246,65 @@ public struct CashFlowItemEditorView: View {
         return nil
     }
 }
+
+#if os(iOS)
+import UIKit
+
+private struct SelectAllAmountField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    @Binding var isFirstResponder: Bool
+    var onBeginEditing: (() -> Void)? = nil
+    var onEndEditing: (() -> Void)? = nil
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField(frame: .zero)
+        tf.keyboardType = .decimalPad
+        tf.textAlignment = .right
+        tf.placeholder = placeholder
+        tf.delegate = context.coordinator
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        tf.text = text
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        uiView.placeholder = placeholder
+        uiView.textAlignment = .right
+        uiView.keyboardType = .decimalPad
+        if uiView.text != text && !uiView.isFirstResponder {
+            uiView.text = text
+        }
+        if isFirstResponder && !uiView.isFirstResponder {
+            uiView.becomeFirstResponder()
+        } else if !isFirstResponder && uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: SelectAllAmountField
+        init(_ parent: SelectAllAmountField) { self.parent = parent }
+
+        @objc func editingChanged(_ textField: UITextField) {
+            parent.text = textField.text ?? ""
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            DispatchQueue.main.async { textField.selectAll(nil) }
+            parent.isFirstResponder = true
+            parent.onBeginEditing?()
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            parent.isFirstResponder = false
+            parent.onEndEditing?()
+        }
+    }
+}
+#endif
 
 #Preview {
     Text("Editor preview requires a CashFlowItem instance")

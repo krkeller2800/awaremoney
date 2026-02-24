@@ -213,8 +213,15 @@ struct DebtDashboardView: View {
         }
         .task { await load() }
         .fullScreenCover(isPresented: $showIncomeBillsHost) {
-            IncomeAndBillsView()
-                .environment(\.modelContext, modelContext)
+            NavigationStack {
+                IncomeAndBillsView()
+                    .environment(\.modelContext, modelContext)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            PlanToolbarButton("Done", fixedWidth: 65) { showIncomeBillsHost = false }
+                        }
+                    }
+            }
         }
     }
 
@@ -494,6 +501,13 @@ struct DebtDetailView: View {
 
     private func commitAndDismissKeyboard() {
         saveTerms()
+        // Reformat displayed inputs to match currency/percent styles based on saved values
+        if let apr = account.loanTerms?.apr {
+            self.aprInput = formatPercentForInput(apr, scale: account.loanTerms?.aprScale)
+        }
+        if let pay = account.loanTerms?.paymentAmount {
+            self.paymentInput = formatAmountForInput(pay)
+        }
         focusedField = nil
     }
 
@@ -689,19 +703,17 @@ struct DebtDetailView: View {
 
     private func formatAmountForInput(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        nf.minimumFractionDigits = 0
-        nf.maximumFractionDigits = 2
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
     private func formatPercentForInput(_ apr: Decimal, scale: Int?) -> String {
-        // Convert fraction to percent for input field
-        let percent = apr * 100
+        // APR is stored as a fraction (e.g., 0.1999). Use percent style so it renders like 19.99%.
         let nf = NumberFormatter()
-        nf.numberStyle = .decimal
+        nf.numberStyle = .percent
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
-        return nf.string(from: NSDecimalNumber(decimal: percent)) ?? "\(percent)"
+        return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr * 100)%"
     }
 
     private func monthlyPayment(for account: Account, balance: Decimal) -> Decimal {

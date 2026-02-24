@@ -62,7 +62,7 @@ struct ConflictsReviewView: View {
             .navigationTitle("Resolve Conflicts")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(role: .destructive) {
