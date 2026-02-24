@@ -382,6 +382,12 @@ struct AccountDetailView: View {
         .onAppear {
             AMLogging.log("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
         }
+        .onChange(of: focusedField) { _, newValue in
+            guard let field = newValue else { return }
+            if field == .institution || field == .paymentAmount {
+                selectAllInFirstResponder()
+            }
+        }
     }
 
     private var isIPadLandscape: Bool {
@@ -517,18 +523,36 @@ struct AccountDetailView: View {
     }
 
     private func parseCurrencyInput(_ s: String) -> Decimal? {
-        let cleaned = s.replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: "$", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Decimal(string: cleaned)
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        // Keep only digits, minus sign, and common separators
+        let allowed = CharacterSet(charactersIn: "-0123456789.,")
+        let filtered = String(trimmed.unicodeScalars.filter { allowed.contains($0) })
+        guard !filtered.isEmpty else { return nil }
+        var normalized = filtered
+        if filtered.contains(",") && filtered.contains(".") {
+            // Assume commas are thousands separators
+            normalized = filtered.replacingOccurrences(of: ",", with: "")
+        } else if filtered.contains(",") && !filtered.contains(".") {
+            // Treat comma as decimal separator
+            normalized = filtered.replacingOccurrences(of: ",", with: ".")
+        }
+        return Decimal(string: normalized)
     }
 
     private func formatAmountForInput(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        nf.minimumFractionDigits = 0
-        nf.maximumFractionDigits = 2
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
+        #if os(iOS)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 
     private func deleteAccount(_ account: Account) {

@@ -3,10 +3,12 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct DebtPayoffView: View {
     @StateObject var viewModel: DebtPayoffViewModel
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.locale) private var locale
 
     @State private var aprInput: String = ""
     @State private var typicalPaymentInput: String = ""
@@ -57,7 +59,7 @@ struct DebtPayoffView: View {
 
                 HStack {
                     Text("Typical payment")
-                    TextField("0.00", text: Binding(
+                    TextField(formatCurrency(0), text: Binding(
                         get: { typicalPaymentInputForUI() },
                         set: { new in typicalPaymentInput = new; applyPaymentIfParsable() }
                     ))
@@ -142,6 +144,13 @@ struct DebtPayoffView: View {
             typicalPaymentInput = typicalPaymentInputForUI()
             viewModel.computeVarianceAgainstLatestStatement()
         }
+        .onChange(of: focusedField) { newValue in
+            guard let newValue = newValue else { return }
+            switch newValue {
+            case .apr, .typical:
+                selectAllInFirstResponder()
+            }
+        }
     }
 
     private func moveFocus(direction: Int) {
@@ -156,6 +165,7 @@ struct DebtPayoffView: View {
 
     private func formatCurrency(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
+        nf.locale = locale
         nf.numberStyle = .currency
         nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
@@ -183,9 +193,9 @@ struct DebtPayoffView: View {
     private func typicalPaymentInputForUI() -> String {
         if let amt = viewModel.account.loanTerms?.paymentAmount, amt > 0 {
             let nf = NumberFormatter()
-            nf.numberStyle = .decimal
-            nf.maximumFractionDigits = 2
-            nf.minimumFractionDigits = 0
+            nf.locale = locale
+            nf.numberStyle = .currency
+            nf.currencyCode = settings.currencyCode
             return nf.string(from: NSDecimalNumber(decimal: amt)) ?? ""
         }
         return typicalPaymentInput
@@ -201,9 +211,64 @@ struct DebtPayoffView: View {
     }
 
     private func applyPaymentIfParsable() {
-        let cleaned = typicalPaymentInput.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespaces)
-        if let val = Decimal(string: cleaned) {
+        // Prefer parsing with currency formatter respecting locale and settings
+        let currencyFormatter = NumberFormatter()
+        currencyFormatter.locale = locale
+        currencyFormatter.numberStyle = .currency
+        currencyFormatter.currencyCode = settings.currencyCode
+
+        if let number = currencyFormatter.number(from: typicalPaymentInput) {
+            let value = number.decimalValue
+            viewModel.setTypicalPaymentAmount(value)
+            if let formatted = currencyFormatter.string(from: number), formatted != typicalPaymentInput {
+                typicalPaymentInput = formatted
+            }
+            return
+        }
+
+        // Fallback to decimal formatter
+        let decimalFormatter = NumberFormatter()
+        decimalFormatter.locale = locale
+        decimalFormatter.numberStyle = .decimal
+        if let number = decimalFormatter.number(from: typicalPaymentInput) {
+            let value = number.decimalValue
+            viewModel.setTypicalPaymentAmount(value)
+            if let formatted = currencyFormatter.string(from: number) {
+                typicalPaymentInput = formatted
+            }
+            return
+        }
+
+        // Last resort: sanitize input by keeping digits and decimal separator
+        let decimalSeparator = locale.decimalSeparator ?? "."
+        let allowedChars = Set("0123456789" + decimalSeparator)
+        let sanitized = typicalPaymentInput.filter { allowedChars.contains($0) }
+            .replacingOccurrences(of: decimalSeparator, with: ".")
+            .trimmingCharacters(in: .whitespaces)
+
+        if let val = Decimal(string: sanitized) {
             viewModel.setTypicalPaymentAmount(val)
+            if let formatted = currencyFormatter.string(from: NSDecimalNumber(decimal: val)) {
+                typicalPaymentInput = formatted
+            }
+        }
+    }
+
+    // Select-all helpers for UIKit-backed TextFields
+    private func selectAllInFirstResponder() {
+        DispatchQueue.main.async {
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first(where: { $0.isKeyWindow })
+
+            guard let window = keyWindow, let responder = window.findFirstResponder() else { return }
+
+            if let tf = responder as? UITextField {
+                tf.selectAll(nil)
+            } else if let tv = responder as? UITextView {
+                tv.selectAll(nil)
+            }
         }
     }
 }

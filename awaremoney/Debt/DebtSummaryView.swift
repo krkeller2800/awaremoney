@@ -8,6 +8,10 @@
 import SwiftUI
 import SwiftData
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+
 // Uses DebtPayoffEngine
 
 // Lightweight model used for planning
@@ -47,10 +51,10 @@ struct DebtSummaryView: View {
     @State private var planErrorMessage: String? = nil
 //    @State private var showIncomeBillsHost = false
 
-//    @FocusState private var focusedField: FocusField?
-//    private enum FocusField: Hashable {
-//        case monthlyBudget
-//    }
+    @FocusState private var focusedField: FocusField?
+    private enum FocusField: Hashable {
+        case monthlyBudget
+    }
 
     var body: some View {
         NavigationStack {
@@ -182,14 +186,49 @@ struct DebtSummaryView: View {
                 }
                 Section {
                     LabeledContent("Monthly budget") {
-                        TextField("", text: $tempMonthlyBudget)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-//                            .focused($focusedField, equals: .monthlyBudget)
-//                            .submitLabel(.done)
-//                            .onSubmit {
-//                                commitAndDismissKeyboard()
-//                            }
+                        TextField(
+                            "$0.00",
+                            text: Binding<String>(
+                                get: {
+                                    let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    if trimmed.isEmpty { return "" }
+                                    if let value = parseCurrencyInput(trimmed) {
+                                        return formatAmount(value)
+                                    } else {
+                                        return trimmed
+                                    }
+                                },
+                                set: { newValue in
+                                    // Always store a cleaned numeric string so parsing stays stable
+                                    let filtered = newValue
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                                        .replacingOccurrences(of: "$", with: "")
+                                        .replacingOccurrences(of: ",", with: "")
+                                    tempMonthlyBudget = filtered
+                                }
+                            )
+                        )
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .monthlyBudget)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            commitAndDismissKeyboard()
+                        }
+                        .onTapGesture {
+                            focusedField = .monthlyBudget
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                selectAllInFirstResponderTextField()
+                            }
+                        }
+                        .onChange(of: tempMonthlyBudget) { _, newValue in
+                            // Normalize to a valid numeric string or empty
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if trimmed.isEmpty { return }
+                            if parseCurrencyInput(trimmed) == nil {
+                                // If not parsable, keep as-is to allow user to correct
+                            }
+                        }
                     }
                 } header: {
                     Text("Payoff Plan")
@@ -253,19 +292,6 @@ struct DebtSummaryView: View {
                     }
                 }
             }
-//            .toolbar {
-//                if focusedField == .monthlyBudget {
-//                    ToolbarItemGroup(placement: .keyboard) {
-//                        Spacer()
-//                        Button {
-//                            commitAndDismissKeyboard()
-//                        } label: {
-//                            Image(systemName: "checkmark")
-//                        }
-//                    }
-//                }
-//            }
-            .navigationTitle("Adjust Date")
             .onAppear {
                 // Prefill strategy
                 switch settings.defaultPayoffStrategyRaw {
@@ -277,6 +303,18 @@ struct DebtSummaryView: View {
                 if settings.useNetForDebtBudgetDefault {
                     let net = computedMonthlyNet
                     if net > 0 { tempMonthlyBudget = formatAmount(net) }
+                }
+                // Ensure any prefilled numeric budget is formatted to the user's currency
+                let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let d = parseCurrencyInput(trimmed) {
+                    tempMonthlyBudget = formatAmount(d)
+                }
+            }
+            .onChange(of: focusedField) { _, newValue in
+                if newValue == .monthlyBudget {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        selectAllInFirstResponderTextField()
+                    }
                 }
             }
             .toolbar {
@@ -400,6 +438,14 @@ struct DebtSummaryView: View {
                         planErrorMessage = nil
                     }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button { focusPrevious() } label: { Image(systemName: "chevron.up") }
+                    .disabled(true)
+                    Button { focusNext() } label: { Image(systemName: "chevron.down") }
+                    .disabled(true)
+                    Spacer()
+                    Button { commitAndDismissKeyboard() } label: { Image(systemName: "checkmark") }
+                }
             }
             .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
                 Button("OK", role: .cancel) { }
@@ -411,40 +457,48 @@ struct DebtSummaryView: View {
 
     // MARK: - Keyboard handling
 
-//    private var focusOrder: [FocusField] { [.monthlyBudget] }
-//
-//    private func focusPrevious() {
-//        guard !focusOrder.isEmpty else { return }
-//        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
-//            let newIdx = (idx - 1 + focusOrder.count) % focusOrder.count
-//            focusedField = focusOrder[newIdx]
-//        } else {
-//            focusedField = focusOrder.last
-//        }
-//    }
-//
-//    private func focusNext() {
-//        guard !focusOrder.isEmpty else { return }
-//        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
-//            let newIdx = (idx + 1) % focusOrder.count
-//            focusedField = focusOrder[newIdx]
-//        } else {
-//            focusedField = focusOrder.first
-//        }
-//    }
-//
-//    private func commitAndDismissKeyboard() {
-//        switch focusedField {
-//        case .monthlyBudget:
-//            let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
-//            if let d = parseCurrencyInput(trimmed) {
-//                tempMonthlyBudget = formatAmount(d)
-//            }
-//        case .none:
-//            break
-//        }
-//        focusedField = nil
-//    }
+    private var focusOrder: [FocusField] { [.monthlyBudget] }
+
+    private func focusPrevious() {
+        guard !focusOrder.isEmpty else { return }
+        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
+            let newIdx = (idx - 1 + focusOrder.count) % focusOrder.count
+            focusedField = focusOrder[newIdx]
+        } else {
+            focusedField = focusOrder.last
+        }
+    }
+
+    private func focusNext() {
+        guard !focusOrder.isEmpty else { return }
+        if let current = focusedField, let idx = focusOrder.firstIndex(of: current) {
+            let newIdx = (idx + 1) % focusOrder.count
+            focusedField = focusOrder[newIdx]
+        } else {
+            focusedField = focusOrder.first
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let d = parseCurrencyInput(trimmed) {
+            tempMonthlyBudget = formatAmount(d)
+        }
+        focusedField = nil
+    }
+
+    private func selectAllInFirstResponderTextField() {
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        if let view = keyWindow?.rootViewController?.view,
+           let tf = view.findFirstResponder() as? UITextField {
+            tf.selectAll(nil)
+        }
+        #endif
+    }
 
     // MARK: - Rows
 
@@ -1020,3 +1074,16 @@ private extension Decimal {
     }
 }
 
+#if canImport(UIKit)
+extension UIView {
+    func findFirstResponder() -> UIResponder? {
+        if self.isFirstResponder { return self }
+        for sub in subviews {
+            if let responder = sub.findFirstResponder() {
+                return responder
+            }
+        }
+        return nil
+    }
+}
+#endif

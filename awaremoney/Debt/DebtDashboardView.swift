@@ -8,6 +8,24 @@
 import SwiftUI
 import SwiftData
 
+#if canImport(UIKit)
+import UIKit
+
+private extension UIResponder {
+    private static weak var am_current: UIResponder?
+
+    static func am_currentFirstResponder() -> UIResponder? {
+        am_current = nil
+        UIApplication.shared.sendAction(#selector(am_captureFirstResponder), to: nil, from: nil, for: nil)
+        return am_current
+    }
+
+    @objc func am_captureFirstResponder() {
+        UIResponder.am_current = self
+    }
+}
+#endif
+
 struct DebtDashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var liabilities: [Account] = []
@@ -446,6 +464,9 @@ struct DebtDetailView: View {
         .onChange(of: paymentInput) { saveTerms() }
         .onChange(of: paymentDay) { saveTerms() }
         .onChange(of: ccMode) { saveTerms() }
+        .onChange(of: focusedField) { newField in
+            selectAllOnFocus(newField)
+        }
         .sheet(isPresented: $showProjection) {
             NavigationStack {
                 List {
@@ -509,6 +530,18 @@ struct DebtDetailView: View {
             self.paymentInput = formatAmountForInput(pay)
         }
         focusedField = nil
+    }
+
+    @MainActor private func selectAllOnFocus(_ field: Field?) {
+        guard field == .payment || field == .apr else { return }
+        #if canImport(UIKit)
+        // Delay to ensure the text field has become first responder before selecting
+        DispatchQueue.main.async {
+            if let tf = UIResponder.am_currentFirstResponder() as? UITextField {
+                tf.selectAll(nil)
+            }
+        }
+        #endif
     }
 
     private func payoffDate(for account: Account) -> Date? {

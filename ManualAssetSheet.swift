@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Foundation
+import UIKit
 
 struct ManualAssetSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -11,6 +12,51 @@ struct ManualAssetSheet: View {
     @State private var valueText: String = ""
     @State private var asOfDate: Date = Date()
     @State private var institution: String = ""
+    @State private var wasValueFocused: Bool = false
+
+    // Focus management for keyboard navigation
+    @FocusState private var focusedField: FocusedField?
+    private enum FocusedField: Hashable { case name, institution, value }
+
+    private var canGoPrevious: Bool {
+        switch focusedField {
+        case .institution, .value:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var canGoNext: Bool {
+        switch focusedField {
+        case .name, .institution:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func previousField() {
+        switch focusedField {
+        case .institution:
+            focusedField = .name
+        case .value:
+            focusedField = .institution
+        default:
+            break
+        }
+    }
+
+    private func nextField() {
+        switch focusedField {
+        case .name:
+            focusedField = .institution
+        case .institution:
+            focusedField = .value
+        default:
+            break
+        }
+    }
 
     // Liability linking support
     @Query(filter: #Predicate<Account> { $0.typeRaw == "loan" }) private var liabilityAccounts: [Account]
@@ -56,7 +102,11 @@ struct ManualAssetSheet: View {
             Form {
                 Section("Details") {
                     TextField("Name", text: $name)
+                        .focused($focusedField, equals: .name)
+                        .selectAllOnFocus()
                     TextField("Description (optional)", text: $institution)
+                        .focused($focusedField, equals: .institution)
+                        .selectAllOnFocus()
                     Label("Use this to add assets like a home, car, or other property you track manually.", systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundColor(.secondary)
@@ -71,10 +121,12 @@ struct ManualAssetSheet: View {
                                 .datePickerStyle(.compact)
                                 .fixedSize()
                             TextField("Value", text: $valueText)
+                                .focused($focusedField, equals: .value)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(minWidth: 110, idealWidth: 130, maxWidth: 160, alignment: .trailing)
                                 .fixedSize(horizontal: true, vertical: false)
+                                .selectAllOnFocus()
                         }
                     }
 
@@ -117,6 +169,40 @@ struct ManualAssetSheet: View {
                     }
                     .disabled(!isValid)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button(action: { previousField() }) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .disabled(!canGoPrevious)
+
+                    Button(action: { nextField() }) {
+                        Image(systemName: "chevron.right")
+                    }
+                    .disabled(!canGoNext)
+
+                    Spacer()
+
+                    Button(action: {
+                        if isValid {
+                            focusedField = nil
+                            save()
+                        } else {
+                            focusedField = nil
+                        }
+                    }) {
+                        Image(systemName: "checkmark.circle.fill")
+                    }
+                    .disabled(!isValid)
+                }
+            }
+            .onChange(of: focusedField) { newValue in
+                if wasValueFocused && newValue != .value {
+                    formatValueTextForDisplay()
+                }
+                wasValueFocused = (newValue == .value)
+            }
+            .onChange(of: settings.currencyCode) { _ in
+                formatValueTextForDisplay()
             }
         }
     }
@@ -137,11 +223,40 @@ struct ManualAssetSheet: View {
     }
 
     private func parseDecimal(from string: String) -> Decimal? {
+        // First try parsing with a currency-aware formatter using the user's currency code
+        let currency = NumberFormatter()
+        currency.numberStyle = .currency
+        currency.currencyCode = settings.currencyCode
+        currency.isLenient = true
+        currency.generatesDecimalNumbers = true
+        if let number = currency.number(from: string) as? NSDecimalNumber {
+            return number.decimalValue
+        }
+
+        // Fallback: parse as a plain decimal using the current locale
+        let decimal = NumberFormatter()
+        decimal.numberStyle = .decimal
+        decimal.generatesDecimalNumbers = true
+        if let number = decimal.number(from: string) as? NSDecimalNumber {
+            return number.decimalValue
+        }
+
+        // Last resort: strip common currency symbols and grouping separators
+        let separators = CharacterSet(charactersIn: ", .\u{00A0}") // comma, dot, non-breaking space
         let filtered = string
-            .replacingOccurrences(of: "$", with: "")
-            .replacingOccurrences(of: ",", with: "")
+            .components(separatedBy: CharacterSet(charactersIn: "0123456789-" ).inverted)
+            .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return Decimal(string: filtered)
+    }
+
+    private func formatValueTextForDisplay() {
+        guard !valueText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let value = parseDecimal(from: valueText) else { return }
+        let number = NSDecimalNumber(decimal: value)
+        if let formatted = currencyFormatter.string(from: number) {
+            valueText = formatted
+        }
     }
 
     private func save() {
@@ -182,3 +297,56 @@ struct ManualAssetSheet: View {
 #Preview {
     Text("ManualAssetSheet requires a model container and environment object for preview.")
 }
+
+extension View {
+    func selectAllOnFocus() -> some View {
+        background(TextFieldSelectAllIntrospector())
+    }
+}
+
+private struct TextFieldSelectAllIntrospector: UIViewRepresentable {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            if let textField = self.findTextField(from: uiView) {
+                context.coordinator.attachIfNeeded(to: textField)
+            }
+        }
+    }
+
+    private func findTextField(from view: UIView) -> UITextField? {
+        var current: UIView? = view
+        // Walk up a few levels and search down for a UITextField
+        for _ in 0..<6 {
+            if let container = current {
+                if let tf = search(in: container) { return tf }
+                current = container.superview
+            } else { break }
+        }
+        return nil
+    }
+
+    private func search(in view: UIView) -> UITextField? {
+        for sub in view.subviews {
+            if let tf = sub as? UITextField { return tf }
+            if let found = search(in: sub) { return found }
+        }
+        return nil
+    }
+
+    class Coordinator: NSObject {
+        weak var attachedTo: UITextField?
+
+        @objc func handleEditingDidBegin(_ sender: UITextField) {
+            sender.selectAll(nil)
+        }
+
+        func attachIfNeeded(to textField: UITextField) {
+            guard attachedTo !== textField else { return }
+            attachedTo = textField
+            textField.addTarget(self, action: #selector(handleEditingDidBegin(_:)), for: .editingDidBegin)
+        }
+    }
+}
+
