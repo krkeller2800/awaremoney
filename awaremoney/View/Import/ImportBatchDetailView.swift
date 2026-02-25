@@ -2,6 +2,9 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import PDFKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ImportBatchDetailView: View {
     let batchID: UUID
@@ -224,6 +227,15 @@ struct ImportBatchDetailView: View {
                                 .onSubmit {
                                     commitAndDismissKeyboard()
                                 }
+    #if canImport(UIKit)
+                                .selectAllOnFocus()
+                                .onTapGesture {
+                                    // Ensure select-all even if already focused
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+                                    }
+                                }
+    #endif
                             }
                             if let apr = snap.interestRateAPR {
                                 Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")

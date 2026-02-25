@@ -57,7 +57,7 @@ struct awaremoneyApp: App {
                     importRouter.pendingURL = url
                     AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
                 }
-                .onChange(of: scenePhase) { newPhase in
+                .onChange(of: scenePhase) { _, newPhase in
                     AMLogging.log("Scene phase changed to: \(newPhase)", component: "App")
                 }
         }

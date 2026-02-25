@@ -439,10 +439,8 @@ struct DebtSummaryView: View {
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
-                    Button { focusPrevious() } label: { Image(systemName: "chevron.up") }
-                    .disabled(true)
-                    Button { focusNext() } label: { Image(systemName: "chevron.down") }
-                    .disabled(true)
+                    Button { focusPrevious() } label: { Image(systemName: "chevron.left") }
+                    Button { focusNext() } label: { Image(systemName: "chevron.right") }
                     Spacer()
                     Button { commitAndDismissKeyboard() } label: { Image(systemName: "checkmark") }
                 }
@@ -485,6 +483,13 @@ struct DebtSummaryView: View {
             tempMonthlyBudget = formatAmount(d)
         }
         focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
     }
 
     private func selectAllInFirstResponderTextField() {
@@ -1087,3 +1092,4 @@ extension UIView {
     }
 }
 #endif
+

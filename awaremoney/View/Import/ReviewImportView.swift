@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct ReviewImportView: View {
     var staged: StagedImport
@@ -20,6 +21,10 @@ struct ReviewImportView: View {
     @State private var typicalPaymentParsed: Decimal? = nil
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
+
+    @FocusState private var focusedField: FocusedField?
+    private enum FocusedField: Hashable { case institution, typicalPayment, apr, balance(Int) }
+    @State private var isKeyboardVisible: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -42,9 +47,45 @@ struct ReviewImportView: View {
                 AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                 seedTypicalPaymentFromSentinelIfNeeded()
             }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button(action: { moveFocus(-1) }) {
+                        Image(systemName: "chevron.left")
+                    }
+                    Button(action: { moveFocus(1) }) {
+                        Image(systemName: "chevron.right")
+                    }
+                    Spacer()
+                    Button(action: { commitAndDismissKeyboard() }) {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+            }
+            .onChange(of: focusedField) { _, newValue in
+                switch newValue {
+                case .some(.institution), .some(.typicalPayment), .some(.apr):
+                    selectAllInFirstResponder()
+                case .some(.balance(_)):
+                    selectAllInFirstResponder()
+                default:
+                    break
+                }
+            }
+            .onDisappear {
+                // Ensure institution does not carry over to the next import
+                vm.userInstitutionName = ""
+            }
         }
         .safeAreaInset(edge: .bottom) {
-            bottomBar
+            if !isKeyboardVisible {
+                bottomBar
+            }
         }
     }
     
@@ -92,6 +133,10 @@ struct ReviewImportView: View {
                 if selectedAccountId == nil {
                     TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
                         .textInputAutocapitalization(.words)
+                        .focused($focusedField, equals: .institution)
+                        .submitLabel(.next)
+                        .onSubmit { moveFocus(1) }
+                        .onTapGesture { selectAllInFirstResponder() }
                     Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
                         ForEach(Account.AccountType.allCases, id: \.self) {
                             Text($0.rawValue)
@@ -122,6 +167,10 @@ struct ReviewImportView: View {
                             .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
                                 typicalPaymentParsed = parseCurrencyInput(newValue)
                             }
+                            .focused($focusedField, equals: .typicalPayment)
+                            .submitLabel(.next)
+                            .onSubmit { moveFocus(1) }
+                            .onTapGesture { selectAllInFirstResponder() }
                     }
                     Text("Used for payoff estimates and budget projections.")
                         .font(.footnote)
@@ -136,6 +185,10 @@ struct ReviewImportView: View {
                             .keyboardType(.decimalPad)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .focused($focusedField, equals: .apr)
+                            .submitLabel(.done)
+                            .onSubmit { commitAndDismissKeyboard() }
+                            .onTapGesture { selectAllInFirstResponder() }
                     }
                     Text("Enter as a percent (e.g., 19.99 for 19.99%).")
                         .font(.footnote)
@@ -247,6 +300,10 @@ struct ReviewImportView: View {
                                         .keyboardType(.decimalPad)
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
+                                        .focused($focusedField, equals: .balance(idx))
+                                        .submitLabel(.next)
+                                        .onSubmit { moveFocus(1) }
+                                        .onTapGesture { selectAllInFirstResponder() }
                                 }
                                 if let label = b.sourceAccountLabel, !label.isEmpty {
                                     Text(label.capitalized)
@@ -302,6 +359,7 @@ struct ReviewImportView: View {
                     vm.staged = nil
                     vm.infoMessage = nil
                     typicalPaymentInput = ""
+                    vm.userInstitutionName = ""
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark.circle")
@@ -391,6 +449,7 @@ struct ReviewImportView: View {
                             AMLogging.log("ReviewImportView: Not persisting APR — input empty or invalid", component: "ReviewImportView")
                         }
                         
+                        vm.userInstitutionName = ""
                     } catch {
                         vm.errorMessage = error.localizedDescription
                     }
@@ -674,6 +733,64 @@ struct ReviewImportView: View {
                 }
             }
         )
+    }
+    
+    private var focusOrder: [FocusedField] {
+        var order: [FocusedField] = []
+        if selectedAccountId == nil {
+            order.append(.institution)
+        }
+        if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+            order.append(.typicalPayment)
+            order.append(.apr)
+        }
+        if let count = vm.staged?.balances.count, count > 0 {
+            for idx in 0..<count {
+                order.append(.balance(idx))
+            }
+        }
+        return order
+    }
+
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { return }
+        if let current = focusedField, let idx = order.firstIndex(of: current) {
+            let nextIdx = (idx + delta + order.count) % order.count
+            focusedField = order[nextIdx]
+        } else {
+            focusedField = order.first
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        // Reformat Typical Payment
+        if let dec = parseCurrencyInput(typicalPaymentInput) {
+            typicalPaymentInput = formatAmountForInput(dec)
+            typicalPaymentParsed = dec
+        }
+        // Reformat APR
+        if let (fraction, scale) = parsePercentInput(aprInput) {
+            aprInput = formatPercentForInput(fraction, scale: scale)
+            aprScale = scale
+        }
+        focusedField = nil
+        #if canImport(UIKit)
+        // Dismiss any active first responder to ensure the keyboard hides for fields not tracked by FocusState
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
+    }
+    
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
+        #if canImport(UIKit)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 }
 

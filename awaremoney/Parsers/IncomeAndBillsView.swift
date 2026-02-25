@@ -508,23 +508,34 @@ private struct AddCashFlowItemView: View {
     @State private var ssaWednesday: Int? = nil
 
     enum Field: Hashable { case name, amount, notes }
-    @FocusState private var focusedField: Field?
     @State private var amountIsFirstResponder: Bool = false
+    @State private var nameIsFirstResponder: Bool = false
+    @State private var notesIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
-    private var isValid: Bool {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedName.isEmpty && amountValue > 0
+    // Removed: @FocusState private var focusedField: Field?
+
+    private func focus(_ field: Field) {
+        nameIsFirstResponder = (field == .name)
+        amountIsFirstResponder = (field == .amount)
+        notesIsFirstResponder = (field == .notes)
+    }
+
+    private func currentField() -> Field? {
+        if nameIsFirstResponder { return .name }
+        if amountIsFirstResponder { return .amount }
+        if notesIsFirstResponder { return .notes }
+        return nil
     }
 
     private func goPrev() {
-        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
-        focusedField = fieldOrder[idx - 1]
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
+        focus(fieldOrder[idx - 1])
     }
 
     private func goNext() {
-        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
-        focusedField = fieldOrder[idx + 1]
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
+        focus(fieldOrder[idx + 1])
     }
 
     let onAdd: (CashFlowItem) -> Void
@@ -539,26 +550,25 @@ private struct AddCashFlowItemView: View {
                         .opacity(isValid ? 0 : 1)
                         .accessibilityHidden(isValid)
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        TextField("Name", text: $name)
-                            .focused($focusedField, equals: .name)
-                            .submitLabel(.next)
-                            .onSubmit { amountIsFirstResponder = true }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Name")
+                        SelectAllTextField(
+                            text: $name,
+                            placeholder: "Name",
+                            isFirstResponder: $nameIsFirstResponder,
+                            returnKeyType: .next,
+                            onPrev: { goPrev() },
+                            onNext: { focus(.amount) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Name")
 
                         CurrencyAmountField(
                             value: $amountValue,
                             placeholder: "Amount",
                             currencyCode: settings.currencyCode,
                             isFirstResponder: $amountIsFirstResponder,
-                            onPrev: {
-                                amountIsFirstResponder = false
-                                focusedField = .name
-                            },
-                            onNext: {
-                                amountIsFirstResponder = false
-                                focusedField = .notes
-                            },
+                            onPrev: { focus(.name) },
+                            onNext: { focus(.notes) },
                             onDone: { commitAndDismissKeyboard() }
                         )
                         .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
@@ -613,10 +623,15 @@ private struct AddCashFlowItemView: View {
                             ), displayedComponents: .date)
                         }
                     }
-                    TextField("Notes", text: $notes)
-                        .focused($focusedField, equals: .notes)
-                        .submitLabel(.done)
-                        .onSubmit { commitAndDismissKeyboard() }
+                    SelectAllTextField(
+                        text: $notes,
+                        placeholder: "Notes",
+                        isFirstResponder: $notesIsFirstResponder,
+                        returnKeyType: .done,
+                        onPrev: { focus(.amount) },
+                        onNext: { goNext() },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
                 }
             }
             .navigationTitle(initialKind == .income ? "Add Income" : "Add Bill")
@@ -642,6 +657,9 @@ private struct AddCashFlowItemView: View {
                             }()
                             let item = CashFlowItem(kind: initialKind, name: trimmedName, amount: amountValue, frequency: frequency, dayOfMonth: dayOfMonth, firstPaymentDate: firstPaymentDate, notes: finalNotes)
                             onAdd(item)
+                            nameIsFirstResponder = false
+                            amountIsFirstResponder = false
+                            notesIsFirstResponder = false
                             dismiss()
                         }
                     } label: {
@@ -657,7 +675,7 @@ private struct AddCashFlowItemView: View {
                         Image(systemName: "chevron.left")
                     }
                     .disabled({
-                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
                         return idx == 0
                     }())
 
@@ -665,7 +683,7 @@ private struct AddCashFlowItemView: View {
                         Image(systemName: "chevron.right")
                     }
                     .disabled({
-                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
                         return idx >= fieldOrder.count - 1
                     }())
 
@@ -677,6 +695,10 @@ private struct AddCashFlowItemView: View {
                 }
             }
         }
+        // Removed: .onChange(of: focusedField) { ... }
+        // Removed: .onChange(of: nameIsFirstResponder) { ... }
+        // Removed: .onChange(of: amountIsFirstResponder) { ... }
+        // Removed: .onChange(of: notesIsFirstResponder) { ... }
         .onAppear {
             if initialKind == .income {
                 switch frequency.normalized {
@@ -686,6 +708,11 @@ private struct AddCashFlowItemView: View {
                 }
             }
         }
+    }
+
+    private var isValid: Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedName.isEmpty && amountValue > 0
     }
 
     private func commitAndDismissKeyboard() {
@@ -712,11 +739,15 @@ private struct AddCashFlowItemView: View {
                 notes: finalNotes
             )
             onAdd(item)
-            focusedField = nil
+            nameIsFirstResponder = false
+            amountIsFirstResponder = false
+            notesIsFirstResponder = false
             dismiss()
         } else {
             // If invalid, just dismiss the keyboard
-            focusedField = nil
+            nameIsFirstResponder = false
+            amountIsFirstResponder = false
+            notesIsFirstResponder = false
         }
     }
 
@@ -744,18 +775,34 @@ private struct EditCashFlowItemView: View {
     @State private var ssaWednesday: Int? = nil
 
     enum Field: Hashable { case name, amount, notes }
-    @FocusState private var focusedField: Field?
     @State private var amountIsFirstResponder: Bool = false
+    @State private var nameIsFirstResponder: Bool = false
+    @State private var notesIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
+    // Removed: @FocusState private var focusedField: Field?
+
+    private func focus(_ field: Field) {
+        nameIsFirstResponder = (field == .name)
+        amountIsFirstResponder = (field == .amount)
+        notesIsFirstResponder = (field == .notes)
+    }
+
+    private func currentField() -> Field? {
+        if nameIsFirstResponder { return .name }
+        if amountIsFirstResponder { return .amount }
+        if notesIsFirstResponder { return .notes }
+        return nil
+    }
+
     private func goPrev() {
-        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
-        focusedField = fieldOrder[idx - 1]
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current), idx > 0 else { return }
+        focus(fieldOrder[idx - 1])
     }
 
     private func goNext() {
-        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
-        focusedField = fieldOrder[idx + 1]
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current), idx < fieldOrder.count - 1 else { return }
+        focus(fieldOrder[idx + 1])
     }
 
     private var isIncome: Bool { item.kind == .income }
@@ -765,26 +812,25 @@ private struct EditCashFlowItemView: View {
             Form {
                 Section("Details") {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        TextField("Name", text: $name)
-                            .focused($focusedField, equals: .name)
-                            .submitLabel(.next)
-                            .onSubmit { amountIsFirstResponder = true }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Name")
+                        SelectAllTextField(
+                            text: $name,
+                            placeholder: "Name",
+                            isFirstResponder: $nameIsFirstResponder,
+                            returnKeyType: .next,
+                            onPrev: { goPrev() },
+                            onNext: { focus(.amount) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Name")
 
                         CurrencyAmountField(
                             value: $amountValue,
                             placeholder: "Amount",
                             currencyCode: settings.currencyCode,
                             isFirstResponder: $amountIsFirstResponder,
-                            onPrev: {
-                                amountIsFirstResponder = false
-                                focusedField = .name
-                            },
-                            onNext: {
-                                amountIsFirstResponder = false
-                                focusedField = .notes
-                            },
+                            onPrev: { focus(.name) },
+                            onNext: { focus(.notes) },
                             onDone: { commitAndDismissKeyboard() }
                         )
                         .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
@@ -839,10 +885,15 @@ private struct EditCashFlowItemView: View {
                             ), displayedComponents: .date)
                         }
                     }
-                    TextField("Notes", text: $notes)
-                        .focused($focusedField, equals: .notes)
-                        .submitLabel(.done)
-                        .onSubmit { commitAndDismissKeyboard() }
+                    SelectAllTextField(
+                        text: $notes,
+                        placeholder: "Notes",
+                        isFirstResponder: $notesIsFirstResponder,
+                        returnKeyType: .done,
+                        onPrev: { focus(.amount) },
+                        onNext: { goNext() },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
                 }
             }
             .navigationTitle(isIncome ? "Edit Income" : "Edit Bill")
@@ -879,7 +930,7 @@ private struct EditCashFlowItemView: View {
                     } label: {
                         PlanMenuLabel(title: "Save", titleFont: .callout)
                     }
-                    .buttonStyle(.plain)   // may remove chrome in some contexts
+                    .buttonStyle(.plain)
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(role: .destructive) {
@@ -896,7 +947,7 @@ private struct EditCashFlowItemView: View {
                         Image(systemName: "chevron.left")
                     }
                     .disabled({
-                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
                         return idx == 0
                     }())
 
@@ -904,7 +955,7 @@ private struct EditCashFlowItemView: View {
                         Image(systemName: "chevron.right")
                     }
                     .disabled({
-                        guard let current = focusedField, let idx = fieldOrder.firstIndex(of: current) else { return true }
+                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
                         return idx >= fieldOrder.count - 1
                     }())
 
@@ -916,6 +967,10 @@ private struct EditCashFlowItemView: View {
                 }
             }
         }
+        // Removed: .onChange(of: focusedField) { ... }
+        // Removed: .onChange(of: nameIsFirstResponder) { ... }
+        // Removed: .onChange(of: amountIsFirstResponder) { ... }
+        // Removed: .onChange(of: notesIsFirstResponder) { ... }
         .onAppear {
             // Seed state from the existing item
             name = item.name
@@ -956,11 +1011,9 @@ private struct EditCashFlowItemView: View {
             item.firstPaymentDate = firstPaymentDate
             item.notes = finalNotes
             onSave()
-            focusedField = nil
             dismiss()
         } else {
             // If invalid, just dismiss the keyboard
-            focusedField = nil
         }
     }
 
@@ -1093,7 +1146,95 @@ private struct CurrencyAmountField: UIViewRepresentable {
         }
     }
 }
+
+private struct SelectAllTextField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    @Binding var isFirstResponder: Bool
+    var returnKeyType: UIReturnKeyType = .default
+    var onPrev: (() -> Void)? = nil
+    var onNext: (() -> Void)? = nil
+    var onDone: (() -> Void)? = nil
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField(frame: .zero)
+        tf.placeholder = placeholder
+        tf.text = text
+        tf.delegate = context.coordinator
+        tf.returnKeyType = returnKeyType
+        tf.borderStyle = .none
+
+        // Add keyboard accessory toolbar with Prev/Next/Done
+        let toolbar = UIToolbar()
+        let prev = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), style: .plain, target: context.coordinator, action: #selector(Coordinator.prevTapped))
+        let next = UIBarButtonItem(image: UIImage(systemName: "chevron.right"), style: .plain, target: context.coordinator, action: #selector(Coordinator.nextTapped))
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle.fill"), style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
+        toolbar.items = [prev, next, flex, done]
+        toolbar.sizeToFit()
+        tf.inputAccessoryView = toolbar
+
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        uiView.placeholder = placeholder
+        // Manage first responder state
+        if isFirstResponder, !uiView.isFirstResponder {
+            uiView.becomeFirstResponder()
+        } else if !isFirstResponder, uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+        // Keep text in sync if not editing
+        if !uiView.isFirstResponder {
+            if uiView.text != text {
+                uiView.text = text
+            }
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: SelectAllTextField
+
+        init(_ parent: SelectAllTextField) {
+            self.parent = parent
+        }
+
+        @objc func prevTapped() { parent.onPrev?() }
+        @objc func nextTapped() { parent.onNext?() }
+        @objc func doneTapped() { parent.onDone?() }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            DispatchQueue.main.async { textField.selectAll(nil) }
+            parent.isFirstResponder = true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            parent.isFirstResponder = false
+        }
+
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            if let current = textField.text as NSString? {
+                let newText = current.replacingCharacters(in: range, with: string)
+                parent.text = newText
+            }
+            return true
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            switch parent.returnKeyType {
+            case .next:
+                parent.onNext?()
+            default:
+                parent.onDone?()
+            }
+            return false
+        }
+    }
+}
 #endif
+
 
 
 

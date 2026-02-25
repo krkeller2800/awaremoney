@@ -111,7 +111,58 @@ struct DebtDashboardView: View {
             //.safeAreaInset(edge: .top) { TrialBanner() }
                 .navigationTitle("Debt")
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
+                    if #available(iOS 18.0, *) {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Menu {
+                                NavigationLink(destination: DebtPlannerView()) {
+                                    Text("Planning")
+                                }
+                                NavigationLink(destination: DebtSummaryView()) {
+                                    Text("Summary")
+                                }
+                                Button {
+                                    showIncomeBillsHost = true
+                                } label: {
+                                    Text("Income & Bills")
+                                }
+                            } label: {
+                                PlanMenuLabel(title: "Plan", titleFont: .callout)
+                            }
+                        }
+                    } else {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Menu {
+                                NavigationLink(destination: DebtPlannerView()) {
+                                    Text("Planning")
+                                }
+                                NavigationLink(destination: DebtSummaryView()) {
+                                    Text("Summary")
+                                }
+                                Button {
+                                    showIncomeBillsHost = true
+                                } label: {
+                                    Text("Income & Bills")
+                                }
+                            } label: {
+                                PlanMenuLabel(title: "Plan", titleFont: .callout)
+                            }
+                        }
+                    }
+                }
+        } else {
+            List(selection: $selection) {
+                Section("Institutions") {
+                    ForEach(liabilities, id: \.id) { acct in
+                        debtRowContent(for: acct)
+                            .tag(acct.id)
+                    }
+                }
+            }
+            .refreshable { await load() }
+            .navigationTitle("Debt")
+            .toolbar {
+                if #available(iOS 18.0, *) {
+                    ToolbarItem(placement: .topBarLeading) {
                         Menu {
                             NavigationLink(destination: DebtPlannerView()) {
                                 Text("Planning")
@@ -128,34 +179,23 @@ struct DebtDashboardView: View {
                             PlanMenuLabel(title: "Plan", titleFont: .callout)
                         }
                     }
-                }
-        } else {
-            List(selection: $selection) {
-                Section("Institutions") {
-                    ForEach(liabilities, id: \.id) { acct in
-                        debtRowContent(for: acct)
-                            .tag(acct.id)
-                    }
-                }
-            }
-            .refreshable { await load() }
-            .navigationTitle("Debt")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        NavigationLink(destination: DebtPlannerView()) {
-                            Text("Planning")
-                        }
-                        NavigationLink(destination: DebtSummaryView()) {
-                            Text("Summary")
-                        }
-                        Button {
-                            showIncomeBillsHost = true
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            NavigationLink(destination: DebtPlannerView()) {
+                                Text("Planning")
+                            }
+                            NavigationLink(destination: DebtSummaryView()) {
+                                Text("Summary")
+                            }
+                            Button {
+                                showIncomeBillsHost = true
+                            } label: {
+                                Text("Income & Bills")
+                            }
                         } label: {
-                            Text("Income & Bills")
+                            PlanMenuLabel(title: "Plan", titleFont: .callout)
                         }
-                    } label: {
-                        PlanMenuLabel(title: "Plan", titleFont: .callout)
                     }
                 }
             }
@@ -210,21 +250,41 @@ struct DebtDashboardView: View {
             }
             .navigationTitle("Debt")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        NavigationLink(destination: DebtPlannerView()) {
-                            Text("Planning")
-                        }
-                        NavigationLink(destination: DebtSummaryView()) {
-                            Text("Summary")
-                        }
-                        Button {
-                            showIncomeBillsHost = true
+                if #available(iOS 18.0, *) {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            NavigationLink(destination: DebtPlannerView()) {
+                                Text("Planning")
+                            }
+                            NavigationLink(destination: DebtSummaryView()) {
+                                Text("Summary")
+                            }
+                            Button {
+                                showIncomeBillsHost = true
+                            } label: {
+                                Text("Income & Bills")
+                            }
                         } label: {
-                            Text("Income & Bills")
+                            PlanMenuLabel(title: "Plan", titleFont: .headline)
                         }
-                    } label: {
-                        PlanMenuLabel(title: "Plan", titleFont: .headline)
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            NavigationLink(destination: DebtPlannerView()) {
+                                Text("Planning")
+                            }
+                            NavigationLink(destination: DebtSummaryView()) {
+                                Text("Summary")
+                            }
+                            Button {
+                                showIncomeBillsHost = true
+                            } label: {
+                                Text("Income & Bills")
+                            }
+                        } label: {
+                            PlanMenuLabel(title: "Plan", titleFont: .headline)
+                        }
                     }
                 }
             }
@@ -464,7 +524,7 @@ struct DebtDetailView: View {
         .onChange(of: paymentInput) { saveTerms() }
         .onChange(of: paymentDay) { saveTerms() }
         .onChange(of: ccMode) { saveTerms() }
-        .onChange(of: focusedField) { newField in
+        .onChange(of: focusedField) { _, newField in
             selectAllOnFocus(newField)
         }
         .sheet(isPresented: $showProjection) {

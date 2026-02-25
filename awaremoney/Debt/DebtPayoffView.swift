@@ -144,7 +144,7 @@ struct DebtPayoffView: View {
             typicalPaymentInput = typicalPaymentInputForUI()
             viewModel.computeVarianceAgainstLatestStatement()
         }
-        .onChange(of: focusedField) { newValue in
+        .onChange(of: focusedField) { _, newValue in
             guard let newValue = newValue else { return }
             switch newValue {
             case .apr, .typical:

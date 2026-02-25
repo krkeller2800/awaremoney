@@ -1340,7 +1340,7 @@ struct PDFSummaryParser: StatementParser {
                     continue
                 }
                 // Use detected label or fall back to rolling section label
-                var label = labelProbe ?? sectionLabel
+                let label = labelProbe ?? sectionLabel
                 AMLogging.log("BalanceSummary: line values=\(values.map { $0.description }.joined(separator: ", ")) label=\(label ?? "nil")", component: LOG_COMPONENT)
 
                 if values.count >= 2 {

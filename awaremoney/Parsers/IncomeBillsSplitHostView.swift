@@ -27,16 +27,28 @@ struct IncomeBillsSplitHostView: View {
                 ToolbarItem(placement: .principal) {
                     Text("Debt Budget")
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss()
-                    } label: {
-                        Text("Done")
-                      }
-                    .buttonStyle(Toolbarbutton())
+                if #available(iOS 18.0, *) {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Done")
+                        }
+                        .buttonStyle(Toolbarbutton())
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Text("Done")
+                        }
+                        .buttonStyle(Toolbarbutton())
+                    }
                 }
             }
         } detail: {
-            Group {
+            VStack(spacing: 0) {
                 switch selection {
                 case .summary:
                     List {

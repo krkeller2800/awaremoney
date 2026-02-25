@@ -6,12 +6,25 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct RootView: View {
     @State private var selectedTab: Int = 0
     @State private var lastNonSettingsTab: Int = 0
     @State private var showSettings: Bool = false
     @EnvironmentObject private var importRouter: ImportOpenRouter
+
+    #if canImport(UIKit)
+    private func configureTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground() // opaque background
+        appearance.shadowColor = UIColor.separator   // visible top border
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+    #endif
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -52,6 +65,11 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .onAppear {
+            #if canImport(UIKit)
+            configureTabBarAppearance()
+            #endif
         }
     }
 }

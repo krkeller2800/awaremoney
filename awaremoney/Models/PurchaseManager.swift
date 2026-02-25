@@ -189,7 +189,7 @@ final class PurchaseManager: ObservableObject {
 
     private func updatePurchasedStatus() async {
         // Prefer latest transaction API for the specific product
-        if let latest = try? await StoreKit.Transaction.latest(for: productID) {
+        if let latest = await StoreKit.Transaction.latest(for: productID) {
             switch latest {
             case .verified(let transaction):
                 // Non-consumable remains entitled unless revoked

@@ -195,13 +195,13 @@ struct ManualAssetSheet: View {
                     .disabled(!isValid)
                 }
             }
-            .onChange(of: focusedField) { newValue in
+            .onChange(of: focusedField) { _, newValue in
                 if wasValueFocused && newValue != .value {
                     formatValueTextForDisplay()
                 }
                 wasValueFocused = (newValue == .value)
             }
-            .onChange(of: settings.currencyCode) { _ in
+            .onChange(of: settings.currencyCode) { 
                 formatValueTextForDisplay()
             }
         }
@@ -242,7 +242,7 @@ struct ManualAssetSheet: View {
         }
 
         // Last resort: strip common currency symbols and grouping separators
-        let separators = CharacterSet(charactersIn: ", .\u{00A0}") // comma, dot, non-breaking space
+        _ = CharacterSet(charactersIn: ", .\u{00A0}") // comma, dot, non-breaking space
         let filtered = string
             .components(separatedBy: CharacterSet(charactersIn: "0123456789-" ).inverted)
             .joined()
