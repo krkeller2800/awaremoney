@@ -42,6 +42,18 @@ struct StatementImporter {
                 } else {
                     AMLogging.log("StatementImporter: Balance Summary section not found in raw text", component: "StatementImporter")
                 }
+
+                // Try to extract account-specific summary sections (e.g., Checking/Savings)
+                let accountSummaries = PDFTextExtractor.extractAccountSummarySections(from: fullText)
+                if !accountSummaries.isEmpty {
+                    AMLogging.log("StatementImporter: Account Summary sections found — count=\(accountSummaries.count)", component: "StatementImporter")
+                    for section in accountSummaries {
+                        augmentedRows.append([section])
+                    }
+                } else {
+                    AMLogging.log("StatementImporter: Account Summary sections not found in raw text", component: "StatementImporter")
+                }
+
                 AMLogging.log("StatementImporter: appending full document text as synthetic row", component: "StatementImporter")
                 augmentedRows.append([fullText])
             } else {
@@ -69,6 +81,10 @@ struct StatementImporter {
     // MARK: - Gating & confidence
 
     private func gatePDF(rows: [[String]], headers: [String], mode: PDFStatementExtractor.Mode) -> StatementImportResult {
+        AMLogging.log("StatementImporter: selection context — mode=\(mode) headers=\(headers) rows=\(rows.count)", component: "StatementImporter")
+        let bankCandidate = PDFBankTransactionsParser().canParse(headers: headers)
+        let summaryCandidate = PDFSummaryParser().canParse(headers: headers)
+        AMLogging.log("StatementImporter: parser candidates — pdf.transactions=\(bankCandidate), pdf.summary=\(summaryCandidate)", component: "StatementImporter")
         let confidence = confidenceForPDF(rows: rows)
         var warnings: [String] = []
         if confidence <= .low {

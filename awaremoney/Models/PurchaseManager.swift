@@ -99,25 +99,40 @@ final class PurchaseManager: ObservableObject {
     }
 
     var isInTrial: Bool {
+        #if DEBUG
+        // In debug builds, keep the trial active indefinitely
+        return true
+        #else
         guard let end = trialEndDate else { return false }
         return Date() < end
+        #endif
     }
 
     var trialDaysRemaining: Int {
+        #if DEBUG
+        // Keep UI stable in debug by always showing the full trial length
+        return trialLengthDays
+        #else
         guard let end = trialEndDate else { return 0 }
         let cal = Calendar(identifier: .gregorian)
         let startOfToday = cal.startOfDay(for: Date())
         let startOfEnd = cal.startOfDay(for: end)
         let comps = cal.dateComponents([.day], from: startOfToday, to: startOfEnd)
         return max(0, (comps.day ?? 0))
+        #endif
     }
 
     var trialHoursRemaining: Int {
+        #if DEBUG
+        // Not used when showing days, but provide a sensible fallback
+        return 24
+        #else
         guard let end = trialEndDate else { return 0 }
         let seconds = end.timeIntervalSinceNow
         if seconds <= 0 { return 0 }
         // Ceil to ensure we never show 0 hours when time remains
         return Int(ceil(seconds / 3600.0))
+        #endif
     }
 
     // MARK: - Init

@@ -155,5 +155,84 @@ enum PDFTextExtractor {
         let joined = collected.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return joined.isEmpty ? nil : joined
     }
+
+    /// Extracts account-specific summary sections (e.g., "CHECKING SUMMARY", "SAVINGS SUMMARY")
+    /// and returns each section's text as a separate string. This helps downstream parsers
+    /// capture multiple account balances from a single statement.
+    static func extractAccountSummarySections(from fullText: String) -> [String] {
+        // Normalize line endings
+        let text = fullText.replacingOccurrences(of: "\r", with: "\n")
+        let rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+        func isAllCapsHeader(_ s: String) -> Bool {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            let scalars = trimmed.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+            guard !scalars.isEmpty else { return false }
+            let uppers = scalars.filter { CharacterSet.uppercaseLetters.contains($0) }
+            return Double(uppers.count) / Double(scalars.count) >= 0.85
+        }
+
+        let accountTokens: [String] = [
+            "checking",
+            "savings",
+            "money market",
+            "mmda"
+        ]
+
+        var sections: [String] = []
+        var i = 0
+        while i < rawLines.count {
+            let header = rawLines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = header.lowercased()
+            let looksLikeSummaryHeader = (lower.contains("summary") && accountTokens.contains(where: { lower.contains($0) }))
+            let headerish = isAllCapsHeader(header) || header.count <= 64
+            if looksLikeSummaryHeader && headerish {
+                // Collect lines until the next header that appears to start a new section
+                var collected: [String] = []
+                var j = i
+                let cap = min(rawLines.count, i + 200) // generous cap to avoid runaway
+                while j < cap {
+                    let line = rawLines[j]
+                    if j > i {
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let l = trimmed.lowercased()
+                        // Stop at the next all-caps header that is a different section
+                        if isAllCapsHeader(trimmed) {
+                            // If it looks like another SUMMARY header, definitely stop
+                            if l.contains("summary") && !l.contains("amount") {
+                                break
+                            }
+                            // Also stop for unrelated major headers (avoid cutting on sub-headers like AMOUNT)
+                            if !(l.contains("amount") || l.contains("deposits") || l.contains("withdrawals") || l.contains("interest") || l.contains("balance")) {
+                                break
+                            }
+                        }
+                    }
+                    collected.append(String(line))
+                    j += 1
+                }
+                let joined = collected.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                // Require a strong signal that this is an account summary: must contain an Ending Balance
+                let hasEndingBalance = joined.lowercased().contains("ending balance")
+                if !joined.isEmpty && hasEndingBalance {
+                    sections.append(joined)
+                }
+                i = j
+                continue
+            }
+            i += 1
+        }
+
+        // Deduplicate exact duplicates while preserving order
+        var seen: Set<String> = []
+        var unique: [String] = []
+        for s in sections {
+            if !seen.contains(s) {
+                unique.append(s)
+                seen.insert(s)
+            }
+        }
+        return unique
+    }
 }
 

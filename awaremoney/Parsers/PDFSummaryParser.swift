@@ -602,30 +602,47 @@ struct PDFSummaryParser: StatementParser {
         // Revert credit-card detection to the original simple boolean closure
         // Pre-scan all rows for credit card context indicators
         let hasCreditCardIndicators: Bool = {
-            let tokens = [
-                "new balance",
-                "previous balance",
-                "minimum payment due",
-                "payment due date",
-                "credit limit",
-                "available credit",
-                "card ending",
-                // Interest Charges table indicators
-                "interest charges",
-                "annual percentage rate",
-                "balance type"
-            ]
-            for row in rows {
-                let joined = row.joined(separator: " ").lowercased()
-                if tokens.contains(where: { joined.contains($0) }) {
-                    return true
-                }
-            }
-            // Secondary check across full document text
+            // Classify as credit card only with strong cues; ignore weak/ambiguous tokens on their own.
+            // Strong document-level tokens
             let docTextLower = rows.flatMap { $0 }.joined(separator: " ").lowercased()
             if docTextLower.contains("interest charges") || docTextLower.contains("annual percentage rate") {
+                AMLogging.log("CCDetect: document-level strong token detected", component: LOG_COMPONENT)
                 return true
             }
+
+            // Strong row-level tokens (typically appear in CC summaries/tables)
+            var foundStrongRow = false
+            var sawWeakOnly = false
+            var sawCardEnding = false
+
+            for row in rows {
+                let joined = row.joined(separator: " ").lowercased()
+
+                if joined.contains("credit limit") || joined.contains("available credit") || joined.contains("balance type") {
+                    foundStrongRow = true
+                }
+                // Track but do not classify on these alone
+                if joined.contains("minimum payment due") || joined.contains("payment due date") {
+                    sawWeakOnly = true
+                }
+                // Track but never classify on this alone (too noisy in transactions/headers)
+                if joined.contains("card ending") {
+                    sawCardEnding = true
+                }
+            }
+
+            if foundStrongRow {
+                AMLogging.log("CCDetect: strong row-level token detected", component: LOG_COMPONENT)
+                return true
+            }
+
+            if sawCardEnding {
+                AMLogging.log("CCDetect: ignoring 'card ending' as sole indicator", component: LOG_COMPONENT)
+            }
+            if sawWeakOnly {
+                AMLogging.log("CCDetect: found due-date/minimum without strong CC tokens — not classifying as CC", component: LOG_COMPONENT)
+            }
+
             return false
         }()
         AMLogging.log("PDFSummaryParser: ccIndicators=\(hasCreditCardIndicators)", component: LOG_COMPONENT)
@@ -953,6 +970,11 @@ struct PDFSummaryParser: StatementParser {
                     guard let m, m.range.location != NSNotFound, let r = Range(m.range, in: lower) else { return }
 
                     var token = String(lower[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawToken = token
+                    let rawHasDollar = rawToken.contains("$")
+                    let rawHasDot = rawToken.contains(".")
+                    let rawDigitCount = rawToken.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) }.count
+
                     var isNegative = false
                     if token.hasPrefix("(") && token.hasSuffix(")") { isNegative = true; token.removeFirst(); token.removeLast() }
                     token = token.replacingOccurrences(of: "$", with: "")
@@ -982,6 +1004,13 @@ struct PDFSummaryParser: StatementParser {
                     let lineHasNewBalance = lineLower.contains("new balance")
                     let lineHasMinimum = lineLower.contains("minimum payment") || lineLower.contains("minimum amount due")
                     let lineHasDueDate = lineLower.contains("payment due date")
+
+                    // Skip long plain integers (likely reference IDs) when the line also contains an explicit amount
+                    let lineHasDecimalNumber = (line.range(of: #"(?:^|\s)[-+]?\d{1,3}(?:,\d{3})*\.\d{1,4}(?:\s|$)"#, options: .regularExpression) != nil) ||
+                                               (line.range(of: #"(?:^|\s)[-+]?\d+\.\d{1,4}(?:\s|$)"#, options: .regularExpression) != nil)
+                    if !rawHasDollar && !rawHasDot && rawDigitCount >= 6 && (line.contains("$") || lineHasDecimalNumber) {
+                        return
+                    }
 
                     // Score by proximity to trigger and positivity
                     var score = 100 - min(distance, 100) // clamp contribution
@@ -1115,6 +1144,7 @@ struct PDFSummaryParser: StatementParser {
             let dateMonthDayYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*|\s+)\d{4}\b"#
             let dateMonthYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b"#
             let dateSlashPattern = #"\b\d{1,2}/\d{1,2}/\d{2,4}\b"#
+            let dateSlashNoYearPattern = #"\b\d{1,2}/\d{1,2}\b"#
             
             let phoneRx = try? NSRegularExpression(pattern: phonePattern, options: [.caseInsensitive])
             let vanityRx = try? NSRegularExpression(pattern: vanityPhonePattern, options: [.caseInsensitive])
@@ -1125,6 +1155,7 @@ struct PDFSummaryParser: StatementParser {
             let dateMonthDayYearRx = try? NSRegularExpression(pattern: dateMonthDayYearPattern, options: [.caseInsensitive])
             let dateMonthYearRx = try? NSRegularExpression(pattern: dateMonthYearPattern, options: [.caseInsensitive])
             let dateSlashRx = try? NSRegularExpression(pattern: dateSlashPattern, options: [.caseInsensitive])
+            let dateSlashNoYearRx = try? NSRegularExpression(pattern: dateSlashNoYearPattern, options: [.caseInsensitive])
             
             let phoneMatches = phoneRx?.matches(in: line, options: [], range: fullRange) ?? []
             let vanityMatches = vanityRx?.matches(in: line, options: [], range: fullRange) ?? []
@@ -1135,6 +1166,7 @@ struct PDFSummaryParser: StatementParser {
             let dateMonthDayYearMatches = dateMonthDayYearRx?.matches(in: line, options: [], range: fullRange) ?? []
             let dateMonthYearMatches = dateMonthYearRx?.matches(in: line, options: [], range: fullRange) ?? []
             let dateSlashMatches = dateSlashRx?.matches(in: line, options: [], range: fullRange) ?? []
+            let dateSlashNoYearMatches = dateSlashNoYearRx?.matches(in: line, options: [], range: fullRange) ?? []
             
             func intersects(_ r: NSRange, with matches: [NSTextCheckingResult]) -> Bool {
                 for m in matches {
@@ -1191,6 +1223,7 @@ struct PDFSummaryParser: StatementParser {
                 if intersects(m.range, with: dateMonthDayYearMatches) { return }
                 if intersects(m.range, with: dateMonthYearMatches) { return }
                 if intersects(m.range, with: dateSlashMatches) { return }
+                if intersects(m.range, with: dateSlashNoYearMatches) { return }
 
                 // Skip numbers embedded within a single non-whitespace token that mixes letters and digits (e.g., "(833-59-SLOAN)")
                 let tokRange = tokenRange(containing: m.range)
@@ -1438,8 +1471,6 @@ struct PDFSummaryParser: StatementParser {
                             token = token.replacingOccurrences(of: "$", with: "")
                                          .replacingOccurrences(of: ",", with: "")
                                          .replacingOccurrences(of: " ", with: "")
-                            if token.hasSuffix("-") { isNegative = true; token.removeLast() }
-                            if token.hasPrefix("-") { isNegative = true; token.removeFirst() }
                             guard let dec = Decimal(string: token) else { return nil }
                             let val = isNegative ? -dec : dec
                             return (val, val == .zero)

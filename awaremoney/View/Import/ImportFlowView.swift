@@ -384,6 +384,20 @@ struct ImportFlowView: View {
                         AMLogging.log("ImportFlowView: suppressed CC coercion per .loan hint — relabeled \(relabeled) snapshot(s) to 'loan'", component: "Import")
                     }
                 }
+                // If the user hinted this is a bank/checking statement, suppress any document-level CC coercion by relabeling snapshots
+                if hint == .checking {
+                    var relabeled = 0
+                    for i in staged.balances.indices {
+                        let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if lbl == "creditcard" || lbl == "credit card" {
+                            staged.balances[i].sourceAccountLabel = "checking"
+                            relabeled += 1
+                        }
+                    }
+                    if relabeled > 0 {
+                        AMLogging.log("ImportFlowView: suppressed CC coercion per .checking hint — relabeled \(relabeled) snapshot(s) to 'checking'", component: "Import")
+                    }
+                }
 
                 AMLogging.log("Pre-dedupe balances: " + staged.balances.map { b in
                     let lbl = (b.sourceAccountLabel ?? "nil")

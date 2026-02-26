@@ -14,7 +14,9 @@ struct PDFBankTransactionsParser: StatementParser {
         // balance is optional but helpful for sign inference
         let _ = lower.contains(where: { $0.contains("balance") })
         // account column is optional; no logic change needed
-        return hasDate && hasDesc && hasAmount
+        let result = hasDate && hasDesc && hasAmount
+        AMLogging.log("canParse? headers: \(lower) -> \(result)", component: LOG_COMPONENT)
+        return result
     }
 
     func parse(rows: [[String]], headers: [String]) throws -> StagedImport {

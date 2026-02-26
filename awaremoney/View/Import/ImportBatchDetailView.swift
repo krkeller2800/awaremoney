@@ -644,6 +644,35 @@ struct ImportBatchDetailView: View {
                     var staged = try parser.parse(rows: rows, headers: headers)
                     staged.sourceFileName = url.lastPathComponent
 
+                    // Safety net: if this is a bank/checking context, relabel any misclassified 'creditcard' snapshots to 'checking'
+                    if fileExtension == "pdf" {
+                        // Try to infer bank/checking context from existing batch content or label; fallback to treating non-liability as bank
+                        let isBankContext: Bool = {
+                            if let acctType = batch.transactions.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            if let acctType = batch.balances.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            if let acctType = batch.holdings.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            // Heuristic: if parserId suggests bank or batch label contains checking/savings
+                            let pid = (batch.parserId ?? "").lowercased()
+                            let lbl = batch.label.lowercased()
+                            if pid.contains("bank") || pid.contains("checking") || pid.contains("savings") { return true }
+                            if lbl.contains("checking") || lbl.contains("savings") { return true }
+                            return true // default to bank-safe behavior when ambiguous in replace flow
+                        }()
+                        if isBankContext {
+                            var relabeled = 0
+                            for i in staged.balances.indices {
+                                let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                                if lbl == "creditcard" || lbl == "credit card" {
+                                    staged.balances[i].sourceAccountLabel = "checking"
+                                    relabeled += 1
+                                }
+                            }
+                            if relabeled > 0 {
+                                AMLogging.log("ImportBatchDetailView: suppressed CC coercion in replace flow — relabeled \(relabeled) snapshot(s) to 'checking'", component: "ImportBatchDetailView")
+                            }
+                        }
+                    }
+
                     // Maintain a local copy for PDF preview
                     if fileExtension == "pdf" {
                         let fm = FileManager.default
@@ -735,6 +764,35 @@ struct ImportBatchDetailView: View {
                 do {
                     var staged = try parser.parse(rows: rows, headers: headers)
                     staged.sourceFileName = url.lastPathComponent
+
+                    // Safety net: if this is a bank/checking context, relabel any misclassified 'creditcard' snapshots to 'checking'
+                    if fileExtension == "pdf" {
+                        // Try to infer bank/checking context from existing batch content or label; fallback to treating non-liability as bank
+                        let isBankContext: Bool = {
+                            if let acctType = batch.transactions.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            if let acctType = batch.balances.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            if let acctType = batch.holdings.first?.account?.type { return acctType != .creditCard && acctType != .loan }
+                            // Heuristic: if parserId suggests bank or batch label contains checking/savings
+                            let pid = (batch.parserId ?? "").lowercased()
+                            let lbl = batch.label.lowercased()
+                            if pid.contains("bank") || pid.contains("checking") || pid.contains("savings") { return true }
+                            if lbl.contains("checking") || lbl.contains("savings") { return true }
+                            return true // default to bank-safe behavior when ambiguous in replace flow
+                        }()
+                        if isBankContext {
+                            var relabeled = 0
+                            for i in staged.balances.indices {
+                                let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                                if lbl == "creditcard" || lbl == "credit card" {
+                                    staged.balances[i].sourceAccountLabel = "checking"
+                                    relabeled += 1
+                                }
+                            }
+                            if relabeled > 0 {
+                                AMLogging.log("ImportBatchDetailView: suppressed CC coercion in replace flow — relabeled \(relabeled) snapshot(s) to 'checking'", component: "ImportBatchDetailView")
+                            }
+                        }
+                    }
 
                     // Maintain a local copy for PDF preview
                     if fileExtension == "pdf" {
@@ -916,7 +974,14 @@ struct ImportBatchDetailView: View {
             self.batch = nil
 
             try ImportViewModel.hardDelete(batch: batch, context: modelContext)
+
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                dismiss()
+            }
+            #else
             dismiss()
+            #endif
         } catch {
             AMLogging.error("Hard delete failed: \(error.localizedDescription)", component: "ImportBatchDetailView")
         }
