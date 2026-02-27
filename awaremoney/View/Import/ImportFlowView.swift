@@ -22,9 +22,13 @@ struct ImportFlowView: View {
     @State private var suppressNextAutoNavigation: Bool = false
     @State private var showPaywall: Bool = false
     @State private var externalImportActive: Bool = false
-    
+    @State private var showImportError: Bool = false
+
     @State private var pendingExternalURL: URL? = nil
     @State private var showDocKindPicker: Bool = false
+    @State private var showDocKindSheet: Bool = false
+    @State private var isActive: Bool = false
+
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     
     private enum PickerKind { case csv, pdf }
@@ -330,26 +334,53 @@ struct ImportFlowView: View {
                 AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode) requestedSummary=\(requestedSummary) userOverride=\(String(describing: userOverride))", component: "Import")
                 AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
 
-                // Try PDFSummaryParser first for snapshot-style parsing
-                AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(result.headers.count) rows=\(result.rows.count)", component: "Import")
+                // Augment extractor output with raw PDF text and synthetic sections (mirrors Replace flow behavior)
+                var augmentedRows = result.rows
+                let augmentedHeaders = result.headers
+                if let fullText = PDFTextExtractor.extractText(from: url) {
+                    AMLogging.log("ImportFlowView: PDF raw text length=\(fullText.count)", component: "Import")
+                    if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: fullText) {
+                        AMLogging.log("ImportFlowView: Interest Charges section found — length=\(interestSection.count)", component: "Import")
+                        augmentedRows.append([interestSection])
+                    } else {
+                        AMLogging.log("ImportFlowView: Interest Charges section not found in raw text", component: "Import")
+                    }
+                    if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
+                        AMLogging.log("ImportFlowView: Balance Summary section found — length=\(balanceSection.count)", component: "Import")
+                        augmentedRows.append([balanceSection])
+                    } else {
+                        AMLogging.log("ImportFlowView: Balance Summary section not found in raw text", component: "Import")
+                    }
+                    AMLogging.log("ImportFlowView: appending full document text as synthetic row", component: "Import")
+                    augmentedRows.append([fullText])
+                }
+
+                AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(augmentedHeaders.count) rows=\(augmentedRows.count)", component: "Import")
                 var staged: StagedImport
                 do {
                     let summaryParser = PDFSummaryParser()
-                    staged = try summaryParser.parse(rows: result.rows, headers: result.headers)
+                    staged = try summaryParser.parse(rows: augmentedRows, headers: augmentedHeaders)
                     AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
                     AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (success path)", component: "Import")
                 } catch {
                     AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
                     let parsers = ImportViewModel.defaultParsers()
-                    let matching = parsers.filter { $0.canParse(headers: result.headers) }
+                    let matching = parsers.filter { $0.canParse(headers: augmentedHeaders) }
                     if let parser = matching.first {
-                        staged = try parser.parse(rows: result.rows, headers: result.headers)
+                        staged = try parser.parse(rows: augmentedRows, headers: augmentedHeaders)
                         AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
                         AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
                     } else {
                         AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
                         AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
                         await MainActor.run { self.vm.handlePickedURL(url) }
+                        let stagedAfter = await MainActor.run { self.vm.staged }
+                        if stagedAfter == nil {
+                            await MainActor.run {
+                                self.vm.errorMessage = "We couldn’t read this credit card statement. Try importing a CSV activity export instead."
+                                self.showImportError = true
+                            }
+                        }
                         return
                     }
                 }
@@ -447,6 +478,13 @@ struct ImportFlowView: View {
             } catch {
                 AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Falling back to default handler.", component: "Import")
                 await MainActor.run { self.vm.handlePickedURL(url) }
+                let stagedAfter = await MainActor.run { self.vm.staged }
+                if stagedAfter == nil {
+                    await MainActor.run {
+                        self.vm.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        self.showImportError = true
+                    }
+                }
             }
         }
     }
@@ -715,7 +753,11 @@ struct ImportFlowView: View {
             }
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
+                isActive = true
 //                showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+            }
+            .onDisappear {
+                isActive = false
             }
             .task { await loadBatches() }
             .refreshable { await loadBatches() }
@@ -755,44 +797,53 @@ struct ImportFlowView: View {
                 if let url {
                     externalImportActive = true
                     pendingExternalURL = url
-                    showDocKindPicker = true
                     showPaywall = false
-                    AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), presenting doc kind picker", component: "Import")
-                }
-            }
-            .onChange(of: purchases.isPremiumUnlocked) { _, newValue in
-                if newValue {
-                    showPaywall = false
-                }
-            }
-            .fileImporter(
-                isPresented: $isFileImporterPresented,
-                allowedContentTypes: allowedTypesForCurrentPicker(),
-                allowsMultipleSelection: false
-            ) { (result: Result<[URL], Error>) in
-                switch result {
-                case .success(let urls):
-                    if let url = urls.first {
-                        AMLogging.log("ImportFlowView: picked file \(url.lastPathComponent) (ext=\(url.pathExtension))", component: "Import")
-                        let isPDF = url.pathExtension.lowercased() == "pdf"
-                        if isPDF {
-                            handlePDFSnapshotImport(url: url)
+                    AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
+                    if #available(iOS 18.0, *) {
+                        if isActive {
+                            showDocKindPicker = true
                         } else {
-                            vm.isImporting = true
-                            Task {
-                                defer { DispatchQueue.main.async { self.vm.isImporting = false } }
-                                await MainActor.run {
-                                    vm.handlePickedURL(url)
-                                }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                if isActive { showDocKindPicker = true }
+                            }
+                        }
+                    } else {
+                        if isActive {
+                            showDocKindSheet = true
+                        } else {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                if isActive { showDocKindSheet = true }
                             }
                         }
                     }
-                case .failure:
-                    break
                 }
             }
             .sheet(isPresented: isSheetPresentedBinding) {
                 sheetContent()
+            }
+            .sheet(isPresented: $showDocKindSheet) {
+                NavigationStack {
+                    List {
+                        ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
+                            Button(kind.rawValue) {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: kind, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                            }
+                        }
+                        Button("Cancel", role: .cancel) {
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                            showDocKindSheet = false
+                        }
+                    }
+                    .navigationTitle("Statement Type")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
             }
             .sheet(
                 isPresented: Binding(
@@ -1068,6 +1119,10 @@ struct ImportFlowView: View {
             if shouldShow && !externalImportActive && importRouter.pendingURL == nil && vm.staged == nil && vm.mappingSession == nil {
                 showPaywall = true
             }
+            isActive = true
+        }
+        .onDisappear {
+            isActive = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { (_: Notification) in
             Task { await loadBatches() }
@@ -1132,9 +1187,49 @@ struct ImportFlowView: View {
             if let url {
                 externalImportActive = true
                 pendingExternalURL = url
-                showDocKindPicker = true
                 showPaywall = false
-                AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), presenting doc kind picker", component: "Import")
+                AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
+                if #available(iOS 18.0, *) {
+                    if isActive {
+                        showDocKindPicker = true
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            if isActive { showDocKindPicker = true }
+                        }
+                    }
+                } else {
+                    if isActive {
+                        showDocKindSheet = true
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            if isActive { showDocKindSheet = true }
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showDocKindSheet) {
+            NavigationStack {
+                List {
+                    ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
+                        Button(kind.rawValue) {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: kind, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        importRouter.pendingURL = nil
+                        pendingExternalURL = nil
+                        externalImportActive = false
+                        showDocKindSheet = false
+                    }
+                }
+                .navigationTitle("Statement Type")
+                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .fileImporter(
@@ -1204,14 +1299,32 @@ struct ImportFlowView: View {
                 phoneBody
             }
             if vm.isImporting {
-                Color.black.opacity(0.2)
+                Color.black.opacity(0.4)
                     .ignoresSafeArea()
-                ProgressView("Importing…")
-                    .progressViewStyle(.circular)
-                    .padding(16)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.large)
+                        .tint(.primary) // uses white on dark material, black on light material
+
+                    Text("Importing…")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
+                .padding(20)
+                .background(.ultraThickMaterial) // or .regularMaterial
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(radius: 12)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Importing")
+                .accessibilityAddTraits(.isModal)
             }
+        }
+        .alert("Import Failed", isPresented: $showImportError) {
+            Button("OK", role: .cancel) { vm.errorMessage = nil }
+        } message: {
+            Text(vm.errorMessage ?? "Unknown error")
         }
     }
 

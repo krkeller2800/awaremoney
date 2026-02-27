@@ -2031,7 +2031,17 @@ enum PDFStatementExtractor {
     }
 
     private static func userFacingFailureMessage(for url: URL, mode: Mode) -> String {
-        let base = "We couldn't parse this PDF statement. If the file is stored in iCloud, make sure it has finished downloading. If the PDF is password-protected or a scanned image, please remove the password or export a text-based PDF and try again."
+        let base = """
+            We couldn’t read this PDF statement.
+
+            To fix this, try:
+            • Make sure the file is fully downloaded from iCloud/Drive and remove any password.
+            • If the PDF is a scan or photo, download the original e‑statement from your bank or re‑export as a text‑based PDF (not a screenshot). On Mac, open in Preview and choose File > Print > Save as PDF.
+            • If your bank offers multiple formats, choose “PDF Statement” or “Download/Print Statement” (avoid images/photos).
+            • Open the PDF and try selecting text. If you can’t select/copy text, it’s likely an image and needs re‑exporting.
+
+            If it still doesn’t import, you can manually enter your balances or transactions.
+            """
         switch mode {
         case .summaryOnly:
             return base + " You can also try switching to the full transactions mode and re-importing."

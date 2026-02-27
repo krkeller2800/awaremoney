@@ -87,6 +87,36 @@ struct ReviewImportView: View {
                 bottomBar
             }
         }
+        .sheet(isPresented: $showPDFSheet) {
+            NavigationStack {
+                if let url = resolvedPDFURL() {
+                    ZStack(alignment: .topTrailing) {
+                        PDFKitView(url: url)
+                            .ignoresSafeArea()
+                        DismissOverlay()
+                            .padding(.top, 12)
+                            .padding(.trailing, 12)
+                    }
+                } else {
+                    VStack {
+                        Text("File: \(staged.sourceFileName)")
+                            .font(.subheadline)
+                        ContentUnavailableView(
+                            "PDF Viewer",
+                            systemImage: "doc.richtext",
+                            description: Text("Original PDF preview isn't available yet.")
+                        )
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle("View PDF")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showPDFSheet = false }
+                }
+            }
+        }
     }
     
     private var mainList: some View {
@@ -103,12 +133,25 @@ struct ReviewImportView: View {
                     .padding(.vertical, 4)
                 }
             }
+            if let err = vm.errorMessage, !err.isEmpty {
+                Section {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
 
             Section("Details") {
                 Text("File: \(staged.sourceFileName)")
                     .font(.subheadline)
                 if staged.sourceFileName.lowercased().hasSuffix(".pdf") {
                     Button {
+                        AMLogging.log("ReviewImportView: View PDF tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
                         showPDFSheet = true
                     } label: {
                         HStack(spacing: 6) {
@@ -634,6 +677,28 @@ struct ReviewImportView: View {
                 AMLogging.log("ReviewImportView: no typicalPaymentAmount found on snapshots; no seeding performed", component: "ReviewImportView")
             }
         }
+    }
+    
+    private func resolvedPDFURL() -> URL? {
+        // Prefer a directly cached local URL from the import flow
+        if let direct = vm.lastPickedLocalURL {
+            AMLogging.log("ReviewImportView: PDF preview using lastPickedLocalURL=\(direct.path)", component: "ReviewImportView")
+            return direct
+        }
+        // Fallback: look in Caches using the staged file name
+        let lower = staged.sourceFileName.lowercased()
+        if lower.hasSuffix(".pdf"), let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let candidate = caches.appendingPathComponent(staged.sourceFileName)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                AMLogging.log("ReviewImportView: PDF preview using caches candidate=\(candidate.path)", component: "ReviewImportView")
+                return candidate
+            } else {
+                AMLogging.log("ReviewImportView: PDF preview missing for candidate=\(candidate.path)", component: "ReviewImportView")
+            }
+        } else {
+            AMLogging.log("ReviewImportView: PDF preview unavailable — fileName='\(staged.sourceFileName)'", component: "ReviewImportView")
+        }
+        return nil
     }
 
     private func parseCurrencyInput(_ s: String) -> Decimal? {

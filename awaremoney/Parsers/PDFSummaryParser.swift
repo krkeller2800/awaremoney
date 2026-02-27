@@ -195,8 +195,11 @@ struct PDFSummaryParser: StatementParser {
 
             // Additional disqualifying contexts for rewards and FX/fees
             let rewardWords = [
-                "cash back", "cashback", "rewards", "points", "miles", "bonus", "bonus category",
-                "category", "dining", "drugstore", "groceries", "gas", "travel"
+                "cash back", "cashback", "% back", "percent back",
+                "rewards", "points", "pts", "miles",
+                "bonus", "bonus category", "category",
+                "earn", "earned", "/$1", "per $", "per dollar", "per purchase",
+                "dining", "drugstore", "groceries", "gas", "travel"
             ]
             let fxWords = [
                 "foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"
@@ -411,6 +414,7 @@ struct PDFSummaryParser: StatementParser {
                 struct PCandidate { let value: Decimal; let scale: Int; let score: Int }
                 var pcands: [PCandidate] = []
 
+                let ns = window as NSString
                 for pm in pMatches {
                     // Ensure this match is exactly 'purchases' and not followed by 'before/prior/previous'
                     guard let pr = Range(pm.range, in: window) else { continue }
@@ -428,7 +432,6 @@ struct PDFSummaryParser: StatementParser {
                     }
 
             // Isolate the single line containing the 'purchases' token
-            let ns = window as NSString
             let startSearch = NSRange(location: 0, length: pm.range.location)
             let endSearch = NSRange(location: pm.range.location + pm.range.length, length: ns.length - (pm.range.location + pm.range.length))
             let prevNL = ns.range(of: "\n", options: [.backwards], range: startSearch)
@@ -436,16 +439,50 @@ struct PDFSummaryParser: StatementParser {
             let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
             let lineEnd = nextNL.location == NSNotFound ? ns.length : nextNL.location
             let lineRange = NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+            // Use ns instead of lns here as per instructions:
             let line = ns.substring(with: lineRange)
             let lineLower = line.lowercased()
             AMLogging.log("PurchasesAPR: line around 'purchases': '" + String(lineLower.prefix(220)) + "'", component: LOG_COMPONENT)
+
+            // Skip generic marketing/disclaimer lines that often include APR ranges
+            let disclaimerHints = [
+                "with credit approval",
+                "qualifying purchases",
+                "consumer credit card",
+                "special financing",
+                "subject to credit approval",
+                "see store",
+                "see details",
+                "see associate",
+                "offer",
+                "promotional financing",
+                "no interest if paid",
+                "deferred interest"
+            ]
+            if disclaimerHints.contains(where: { lineLower.contains($0) }) {
+                AMLogging.log("PurchasesAPR: skip due to disclaimer/marketing language on line", component: LOG_COMPONENT)
+                continue
+            }
+            // Skip lines that present an APR range (e.g., "17.99% – 29.99%") which are typically marketing, not table values
+            let hasRangeOnLine = (lineLower.range(of: #"([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%?\s*(?:–|-|to)\s*([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%?"#, options: .regularExpression) != nil)
+            if hasRangeOnLine {
+                AMLogging.log("PurchasesAPR: skip due to APR range on line (likely marketing)", component: LOG_COMPONENT)
+                continue
+            }
+
+            // Skip rewards/earn-rate marketing lines (e.g., "1.5% (1.5 pts)/$1 earned on all purchases")
+            let marketingHints = ["% back", "percent back", "cash back", "cashback", "rewards", "points", "pts", "miles", "earn", "earned", "/$1", "per $", "per dollar", "per purchase"]
+            if marketingHints.contains(where: { lineLower.contains($0) }) {
+                AMLogging.log("PurchasesAPR: skip due to rewards/earn-rate marketing hints on line", component: LOG_COMPONENT)
+                continue
+            }
 
             // Disqualify lines that mention penalty or disqualifying contexts
             if lineLower.contains("penalty") {
                 AMLogging.log("PurchasesAPR: skip due to penalty on line", component: LOG_COMPONENT)
                 continue
             }
-            let rewardWords = ["cash back", "cashback", "rewards", "points", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
+            let rewardWords = ["cash back", "cashback", "% back", "percent back", "rewards", "points", "pts", "miles", "bonus category", "category", "dining", "drugstore", "groceries", "gas", "travel"]
             let fxWords = ["foreign transaction", "foreign exchange", "international transaction", "currency conversion", "conversion fee"]
             let feeWords = ["transaction fee", "monthly fee", "fee-based", "pay over time"]
             if rewardWords.contains(where: { lineLower.contains($0) }) {
@@ -497,11 +534,88 @@ struct PDFSummaryParser: StatementParser {
             } else {
                 AMLogging.log("PurchasesAPR: no % found on same line as 'purchases'", component: LOG_COMPONENT)
             }
+
+            // Additionally, scan the next 1–2 lines for table-style APR values (often the percent is on the line after the 'PURCHASES' header)
+            do {
+                let tableHeaderHints = [
+                    "revolving balance",
+                    "interest charge",
+                    "balance subject to interest"
+                ]
+                var nextStart = min(ns.length, lineEnd + 1)
+                for _ in 0..<2 {
+                    if nextStart >= ns.length { break }
+                    let nextNL = ns.range(of: "\n", options: [], range: NSRange(location: nextStart, length: max(0, ns.length - nextStart)))
+                    let nextLineEnd = nextNL.location == NSNotFound ? ns.length : nextNL.location
+                    let candRange = NSRange(location: nextStart, length: max(0, nextLineEnd - nextStart))
+                    let candLine = ns.substring(with: candRange)
+                    let candLower = candLine.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                    nextStart = nextLineEnd == ns.length ? ns.length : (nextLineEnd + 1)
+                    if candLower.isEmpty { continue }
+
+                    // Skip disclaimers/marketing and APR range lines on candidate lines
+                    let hasDisclaimer = disclaimerHints.contains(where: { candLower.contains($0) })
+                    let hasRange = (candLower.range(of: #"([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%?\s*(?:–|-|to)\s*([0-9]{1,3}(?:\.[0-9]{1,4})?)\s*%?"#, options: .regularExpression) != nil)
+                    if hasDisclaimer || hasRange {
+                        AMLogging.log("PurchasesAPR: skipping neighbor line due to disclaimer/range — line='" + String(candLower.prefix(200)) + "'", component: LOG_COMPONENT)
+                        continue
+                    }
+
+                    // Skip penalty/rewards/FX/fee contexts
+                    if candLower.contains("penalty") { continue }
+                    if rewardWords.contains(where: { candLower.contains($0) }) { continue }
+                    if fxWords.contains(where: { candLower.contains($0) }) { continue }
+                    if feeWords.contains(where: { candLower.contains($0) }) { continue }
+                    if candLower.contains("no interest") { continue }
+
+                    // Prefer candidate lines that look like table rows (dollar amounts or table header hints)
+                    let hasDollar = candLine.contains("$")
+                    let hasTableHints = tableHeaderHints.contains(where: { candLower.contains($0) })
+
+                    // Find percentage tokens on this candidate line
+                    let candNSString = candLine as NSString
+                    let candFull = NSRange(location: 0, length: candNSString.length)
+                    let candPctMatches = pctRx.matches(in: candLine, options: [], range: candFull)
+                    guard !candPctMatches.isEmpty else { continue }
+
+                    // Choose percent token nearest to the original 'purchases' anchor in window coordinates
+                    var chosenToken: String? = nil
+                    var chosenDist: Int = Int.max
+                    for m in candPctMatches {
+                        guard m.numberOfRanges >= 2, let rTok = Range(m.range(at: 1), in: candLine) else { continue }
+                        let token = String(candLine[rTok])
+                        let absLoc = candRange.location + m.range.location
+                        let dist = abs(absLoc - pm.range.location)
+                        if dist < chosenDist {
+                            chosenDist = dist
+                            chosenToken = token
+                        }
+                    }
+
+                    guard let token = chosenToken, var val = Decimal(string: token) else { continue }
+                    let scale = token.contains(".") ? (token.split(separator: ".").last?.count ?? 0) : 0
+                    if val > 1 { val /= 100 }
+
+                    // Score this neighbor candidate; strong boosts for table-like context and proximity
+                    var score = 6 // base for neighbor line
+                    if hasDollar { score += 6 }
+                    if hasTableHints { score += 4 }
+                    score += max(0, 10 - min(chosenDist / 25, 10))
+
+                    // Penalize prior/previous qualifiers on the neighbor line
+                    if candLower.contains("on or before") || candLower.contains("before") || candLower.contains("prior") || candLower.contains("previous") {
+                        score -= 3
+                    }
+
+                    AMLogging.log("PurchasesAPR: neighbor-line candidate token=" + token + " value=" + String(describing: val) + " scale=" + String(scale) + " score=" + String(score) + " line='" + String(candLower.prefix(200)) + "'", component: LOG_COMPONENT)
+                    pcands.append(PCandidate(value: val, scale: scale, score: score))
+                }
+            }
                 }
 
                 if let best = pcands.max(by: { (l, r) in
                     if l.score != r.score { return l.score < r.score }
-                    return l.value > r.value
+                    return l.value < r.value
                 }) {
                     return (best.value, best.scale, best.score)
                 }
@@ -1140,23 +1254,23 @@ struct PDFSummaryParser: StatementParser {
             let poBoxPattern = #"\b(?:p\s*\.?\s*o\s*\.?\s*box)\s+\d+\b"#
             let zipPattern = #"\b\d{5}(?:-\d{4})?\b"#
             
-            // Date patterns: spelled-out month with day and year, month with year, and slash-separated dates
-            let dateMonthDayYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*|\s+)\d{4}\b"#
-            let dateMonthYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b"#
-            let dateSlashPattern = #"\b\d{1,2}/\d{1,2}/\d{2,4}\b"#
-            let dateSlashNoYearPattern = #"\b\d{1,2}/\d{1,2}\b"#
-            
             let phoneRx = try? NSRegularExpression(pattern: phonePattern, options: [.caseInsensitive])
             let vanityRx = try? NSRegularExpression(pattern: vanityPhonePattern, options: [.caseInsensitive])
             let timeRx = try? NSRegularExpression(pattern: timePattern, options: [.caseInsensitive])
             let poBoxRx = try? NSRegularExpression(pattern: poBoxPattern, options: [.caseInsensitive])
             let zipRx = try? NSRegularExpression(pattern: zipPattern, options: [.caseInsensitive])
 
+            let dateMonthDayYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*|\s+)\d{4}\b"#
+            let dateMonthYearPattern = #"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?)\s+\d{4}\b"#
+            let dateSlashPattern = #"\b\d{1,2}/\d{1,2}/\d{2,4}\b"#
+            let dateSlashNoYearPattern = #"\b\d{1,2}/\d{1,2}\b"#
+            
             let dateMonthDayYearRx = try? NSRegularExpression(pattern: dateMonthDayYearPattern, options: [.caseInsensitive])
             let dateMonthYearRx = try? NSRegularExpression(pattern: dateMonthYearPattern, options: [.caseInsensitive])
             let dateSlashRx = try? NSRegularExpression(pattern: dateSlashPattern, options: [.caseInsensitive])
             let dateSlashNoYearRx = try? NSRegularExpression(pattern: dateSlashNoYearPattern, options: [.caseInsensitive])
             
+            // *** Inserted computation of match arrays immediately after regex declarations ***
             let phoneMatches = phoneRx?.matches(in: line, options: [], range: fullRange) ?? []
             let vanityMatches = vanityRx?.matches(in: line, options: [], range: fullRange) ?? []
             let timeMatches = timeRx?.matches(in: line, options: [], range: fullRange) ?? []
@@ -1167,7 +1281,8 @@ struct PDFSummaryParser: StatementParser {
             let dateMonthYearMatches = dateMonthYearRx?.matches(in: line, options: [], range: fullRange) ?? []
             let dateSlashMatches = dateSlashRx?.matches(in: line, options: [], range: fullRange) ?? []
             let dateSlashNoYearMatches = dateSlashNoYearRx?.matches(in: line, options: [], range: fullRange) ?? []
-            
+            // *** End of inserted block ***
+
             func intersects(_ r: NSRange, with matches: [NSTextCheckingResult]) -> Bool {
                 for m in matches {
                     let a = r
