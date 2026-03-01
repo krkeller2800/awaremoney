@@ -673,6 +673,43 @@ struct ImportBatchDetailView: View {
                         }
                     }
 
+                    // Prefer Purchases APR when available for credit card contexts during replace
+                    if fileExtension == "pdf" {
+                        // Infer credit card context from existing batch content
+                        let isCreditCardContext: Bool = {
+                            if let t = batch.transactions.first?.account?.type { return t == .creditCard }
+                            if let t = batch.balances.first?.account?.type { return t == .creditCard }
+                            if let t = batch.holdings.first?.account?.type { return t == .creditCard }
+                            // Heuristic: favor CC if label mentions credit card
+                            let lbl = batch.label.lowercased()
+                            if lbl.contains("credit") && lbl.contains("card") { return true }
+                            return false
+                        }()
+                        if isCreditCardContext {
+                            if let urlForAPR = resolvedPDFURL(for: batch), let fullText = PDFTextExtractor.extractText(from: urlForAPR), let (apr, scale) = PDFTextExtractor.extractPreferredAPR(from: fullText) {
+                                var applied = 0
+                                for i in staged.balances.indices {
+                                    if let existing = staged.balances[i].interestRateAPR {
+                                        if apr < existing {
+                                            staged.balances[i].interestRateAPR = apr
+                                            staged.balances[i].interestRateScale = scale
+                                            staged.balances[i].sourceAccountLabel = (staged.balances[i].sourceAccountLabel ?? "") + " apr:purchases"
+                                            applied += 1
+                                        }
+                                    } else {
+                                        staged.balances[i].interestRateAPR = apr
+                                        staged.balances[i].interestRateScale = scale
+                                        staged.balances[i].sourceAccountLabel = (staged.balances[i].sourceAccountLabel ?? "") + " apr:purchases"
+                                        applied += 1
+                                    }
+                                }
+                                if applied > 0 {
+                                    AMLogging.log("ImportBatchDetailView: applied preferred APR (likely Purchases) to \(applied) staged balance(s) in replace flow", component: "ImportBatchDetailView")
+                                }
+                            }
+                        }
+                    }
+
                     // Maintain a local copy for PDF preview
                     if fileExtension == "pdf" {
                         let fm = FileManager.default
@@ -790,6 +827,43 @@ struct ImportBatchDetailView: View {
                             }
                             if relabeled > 0 {
                                 AMLogging.log("ImportBatchDetailView: suppressed CC coercion in replace flow — relabeled \(relabeled) snapshot(s) to 'checking'", component: "ImportBatchDetailView")
+                            }
+                        }
+                    }
+
+                    // Prefer Purchases APR when available for credit card contexts during replace
+                    if fileExtension == "pdf" {
+                        // Infer credit card context from existing batch content
+                        let isCreditCardContext: Bool = {
+                            if let t = batch.transactions.first?.account?.type { return t == .creditCard }
+                            if let t = batch.balances.first?.account?.type { return t == .creditCard }
+                            if let t = batch.holdings.first?.account?.type { return t == .creditCard }
+                            // Heuristic: favor CC if label mentions credit card
+                            let lbl = batch.label.lowercased()
+                            if lbl.contains("credit") && lbl.contains("card") { return true }
+                            return false
+                        }()
+                        if isCreditCardContext {
+                            if let urlForAPR = resolvedPDFURL(for: batch), let fullText = PDFTextExtractor.extractText(from: urlForAPR), let (apr, scale) = PDFTextExtractor.extractPreferredAPR(from: fullText) {
+                                var applied = 0
+                                for i in staged.balances.indices {
+                                    if let existing = staged.balances[i].interestRateAPR {
+                                        if apr < existing {
+                                            staged.balances[i].interestRateAPR = apr
+                                            staged.balances[i].interestRateScale = scale
+                                            staged.balances[i].sourceAccountLabel = (staged.balances[i].sourceAccountLabel ?? "") + " apr:purchases"
+                                            applied += 1
+                                        }
+                                    } else {
+                                        staged.balances[i].interestRateAPR = apr
+                                        staged.balances[i].interestRateScale = scale
+                                        staged.balances[i].sourceAccountLabel = (staged.balances[i].sourceAccountLabel ?? "") + " apr:purchases"
+                                        applied += 1
+                                    }
+                                }
+                                if applied > 0 {
+                                    AMLogging.log("ImportBatchDetailView: applied preferred APR (likely Purchases) to \(applied) staged balance(s) in replace flow", component: "ImportBatchDetailView")
+                                }
                             }
                         }
                     }

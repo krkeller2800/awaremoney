@@ -120,7 +120,7 @@ struct ReviewImportView: View {
     }
     
     private var mainList: some View {
-        List {
+        Form {
             if let info = vm.infoMessage, !info.isEmpty {
                 Section {
                     HStack(alignment: .top, spacing: 8) {

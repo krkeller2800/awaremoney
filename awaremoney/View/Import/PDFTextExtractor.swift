@@ -234,5 +234,141 @@ enum PDFTextExtractor {
         }
         return unique
     }
+    
+    /// Removes rewards/points summary sections (e.g., "REWARDS SUMMARY") to avoid misinterpreting
+    /// points earning percentages (like 1.5% Pts/$1) as APR values.
+    private static func stripRewardsSections(from fullText: String) -> String {
+        let text = fullText.replacingOccurrences(of: "\r", with: "\n")
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        func isHeader(_ s: String) -> Bool {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return isAllCapsHeader(trimmed)
+        }
+        func isRewardsHeaderLine(_ s: String) -> Bool {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = trimmed.lowercased()
+            guard !lower.isEmpty else { return false }
+            // Look for a header-like line that mentions rewards and summary
+            let mentionsRewards = lower.contains("reward")
+            let mentionsSummary = lower.contains("summary")
+            let headerish = isHeader(trimmed) || trimmed.count <= 64
+            return headerish && mentionsRewards && (mentionsSummary || headerish)
+        }
+
+        var toRemove = Set<Int>()
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            if isRewardsHeaderLine(line) {
+                // Remove from this header until the next all-caps header (exclusive)
+                var j = i
+                let cap = min(lines.count, i + 200) // safety cap to avoid runaway
+                while j < cap {
+                    if j > i {
+                        let next = lines[j]
+                        let trimmed = next.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if isHeader(trimmed) {
+                            break
+                        }
+                    }
+                    toRemove.insert(j)
+                    j += 1
+                }
+                // Also remove the header line itself
+                toRemove.insert(i)
+                i = j
+                continue
+            }
+            i += 1
+        }
+
+        if toRemove.isEmpty { return text }
+        var kept: [String] = []
+        kept.reserveCapacity(lines.count - toRemove.count)
+        for (idx, line) in lines.enumerated() {
+            if !toRemove.contains(idx) { kept.append(line) }
+        }
+        return kept.joined(separator: "\n")
+    }
+
+    /// Extracts a preferred APR (fraction, e.g., 0.1999) and its display scale from the PDF's text.
+    /// Preference order: Purchases > Balance Transfers > Cash Advances > lowest unlabeled.
+    /// Returns nil if no APR-like value is found.
+    static func extractPreferredAPR(from fullText: String) -> (Decimal, Int)? {
+        // Prefer to work within the Interest Charges section if available, then strip Rewards sections
+        let base = extractInterestChargesSection(from: fullText) ?? fullText
+        let cleaned = stripRewardsSections(from: base)
+        return extractPreferredAPRFromInterestSection(cleaned)
+    }
+
+    /// Parses an Interest Charges section and chooses the preferred APR by category.
+    /// Lines containing "purchase" (or plural) win, followed by balance transfers, then cash advances.
+    private static func extractPreferredAPRFromInterestSection(_ interestSection: String) -> (Decimal, Int)? {
+        let text = interestSection.replacingOccurrences(of: "\r", with: "\n")
+        let lines = text.components(separatedBy: .newlines)
+        var purchases: (Decimal, Int)? = nil
+        var balanceTransfers: (Decimal, Int)? = nil
+        var cashAdvances: (Decimal, Int)? = nil
+        var unlabeled: [(Decimal, Int)] = []
+
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if isRewardsRateLine(line) { continue }
+            let lower = line.lowercased()
+            guard let (apr, scale) = firstPercent(in: line) else { continue }
+
+            if lower.contains("purchase") {
+                if purchases == nil { purchases = (apr, scale) }
+            } else if lower.contains("balance transfer") {
+                if balanceTransfers == nil { balanceTransfers = (apr, scale) }
+            } else if lower.contains("cash advance") {
+                if cashAdvances == nil { cashAdvances = (apr, scale) }
+            } else {
+                unlabeled.append((apr, scale))
+            }
+        }
+
+        if let p = purchases { return p }
+        if let bt = balanceTransfers { return bt }
+        if let ca = cashAdvances { return ca }
+        if let best = unlabeled.sorted(by: { $0.0 < $1.0 }).first { return best }
+        return nil
+    }
+
+    /// Heuristic to detect rewards/points earning lines (e.g., "1.5% (1.5 Pts)/$1 earned on all purchases").
+    private static func isRewardsRateLine(_ s: String) -> Bool {
+        let lower = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.isEmpty { return false }
+        let hasRewardsTokens = lower.contains("reward") || lower.contains("points") || lower.contains("pts") || lower.contains("cash back") || lower.contains("cashback")
+        let hasPerDollar = lower.contains("/$") || lower.contains("per $") || lower.contains("per$") || lower.contains("$1")
+        let hasEarningVerbs = lower.contains("earned") || lower.contains("earn") || lower.contains("addl") || lower.contains("additional")
+        return (hasRewardsTokens || hasPerDollar || hasEarningVerbs)
+    }
+
+    /// Finds the first percentage value in a string and returns it as a fraction (e.g., 19.99% -> 0.1999)
+    /// along with the number of fraction digits (scale) detected in the source.
+    private static func firstPercent(in s: String) -> (Decimal, Int)? {
+        // Normalize thousands separators but leave the decimal separator intact
+        let cleaned = s.replacingOccurrences(of: ",", with: "")
+        // Match numbers like 19%, 19.9%, 19.99%, up to three fraction digits
+        let pattern = #"\b(\d{1,2}(?:\.\d{1,3})?)\s*%"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let range = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
+        guard let match = regex.firstMatch(in: cleaned, options: [], range: range),
+              let r = Range(match.range(at: 1), in: cleaned) else { return nil }
+        let numberString = String(cleaned[r])
+        guard let dec = Decimal(string: numberString) else { return nil }
+        let scale: Int = {
+            if let dot = numberString.firstIndex(of: ".") {
+                return numberString.distance(from: numberString.index(after: dot), to: numberString.endIndex)
+            }
+            return 0
+        }()
+        var fraction = dec
+        if fraction > 1 { fraction /= 100 }
+        return (fraction, scale)
+    }
 }
 
