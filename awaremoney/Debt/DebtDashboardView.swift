@@ -27,10 +27,16 @@ private extension UIResponder {
 #endif
 
 struct DebtDashboardView: View {
+    private enum DebtMode: String, CaseIterable { case debt, planning }
     @Environment(\.modelContext) private var modelContext
     @State private var liabilities: [Account] = []
     @State private var selection: Account.ID? = nil
-    @State private var showIncomeBillsHost = false
+    @State private var mode: DebtMode = .debt
+    
+    @State private var showPlanSheet = false
+    private enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
+    @State private var planSheetMode: PlanSheetMode = .incomeBills
+    
     @EnvironmentObject private var settings: SettingsStore
 
     var body: some View {
@@ -60,22 +66,10 @@ struct DebtDashboardView: View {
         }
         //.safeAreaInset(edge: .top) { TrialBanner() }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 340)
-        //.toolbar {
-        //    ToolbarItem(placement: .navigationBarLeading) {
-        //        Menu("Plan") {
-        //            NavigationLink(destination: DebtPlannerView()) {
-        //                Text("Planning")
-        //            }
-        //            NavigationLink(destination: DebtSummaryView()) {
-        //                Text("Summary")
-        //            }
-        //        }
-        //    }
-        //}
         .task { await load() }
-        .fullScreenCover(isPresented: $showIncomeBillsHost) {
-            IncomeBillsSplitHostView()
-                .environment(\.modelContext, modelContext)
+        .sheet(isPresented: $showPlanSheet) {
+            planSheetView
+                .presentationSizing(.page)
         }
     }
 
@@ -84,8 +78,15 @@ struct DebtDashboardView: View {
         if let sel = selection, let acct = liabilities.first(where: { $0.id == sel }) {
             HStack {
                 Spacer(minLength: 0)
-                DebtDetailView(account: acct)
-                    .frame(maxWidth: 700)
+                Group {
+                    if mode == .planning {
+                        DebtPayoffView(viewModel: DebtPayoffViewModel(account: acct, context: modelContext))
+                            .id(acct.id)
+                    } else {
+                        DebtDetailView(account: acct)
+                    }
+                }
+                .frame(maxWidth: 700)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
@@ -100,107 +101,50 @@ struct DebtDashboardView: View {
         } else if liabilities.isEmpty {
             ContentUnavailableView("No debts yet", systemImage: "creditcard")
         } else {
-            ContentUnavailableView("Select a debt", systemImage: "creditcard")
+            ContentUnavailableView("Select a destination", systemImage: "square.grid.2x2")
         }
     }
 
     @ViewBuilder
     private var iPadSidebar: some View {
-        if liabilities.isEmpty {
-            ContentUnavailableView("No debts yet", systemImage: "creditcard")
-            //.safeAreaInset(edge: .top) { TrialBanner() }
-                .navigationTitle("Debt")
-                .toolbar {
-                    if #available(iOS 18.0, *) {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Menu {
-                                NavigationLink(destination: DebtPlannerView()) {
-                                    Text("Planning")
-                                }
-                                NavigationLink(destination: DebtSummaryView()) {
-                                    Text("Summary")
-                                }
-                                Button {
-                                    showIncomeBillsHost = true
-                                } label: {
-                                    Text("Income & Bills")
-                                }
-                            } label: {
-                                PlanMenuLabel(title: "Plan", titleFont: .callout)
-                            }
-                        }
-                    } else {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Menu {
-                                NavigationLink(destination: DebtPlannerView()) {
-                                    Text("Planning")
-                                }
-                                NavigationLink(destination: DebtSummaryView()) {
-                                    Text("Summary")
-                                }
-                                Button {
-                                    showIncomeBillsHost = true
-                                } label: {
-                                    Text("Income & Bills")
-                                }
-                            } label: {
-                                PlanMenuLabel(title: "Plan", titleFont: .callout)
-                            }
-                        }
-                    }
+        List(selection: $selection) {
+            // Segmented control header
+            Section {
+                Picker("Mode", selection: $mode) {
+                    Text("Debt").tag(DebtMode.debt)
+                    Text("Planning").tag(DebtMode.planning)
                 }
-        } else {
-            List(selection: $selection) {
-                Section("Institutions") {
-                    ForEach(liabilities, id: \.id) { acct in
-                        debtRowContent(for: acct)
-                            .tag(acct.id)
-                    }
-                }
+                .pickerStyle(.segmented)
             }
-            .refreshable { await load() }
-            .navigationTitle("Debt")
             .toolbar {
-                if #available(iOS 18.0, *) {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            NavigationLink(destination: DebtPlannerView()) {
-                                Text("Planning")
-                            }
-                            NavigationLink(destination: DebtSummaryView()) {
-                                Text("Summary")
-                            }
-                            Button {
-                                showIncomeBillsHost = true
-                            } label: {
-                                Text("Income & Bills")
-                            }
-                        } label: {
-                            PlanMenuLabel(title: "Plan", titleFont: .callout)
-                        }
-                    }
+                ToolbarItem(placement: .topBarLeading) {
+                    PlanToolbarButton("Summary",fixedWidth: 100) { planSheetMode = .summary; showPlanSheet = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    PlanToolbarButton("Bills") { planSheetMode = .incomeBills; showPlanSheet = true }
+                }
+            }
+
+            // Institutions list (selecting an account clears any static detail)
+            Section("Institutions") {
+                if liabilities.isEmpty {
+                    ContentUnavailableView("No debts yet", systemImage: "creditcard")
                 } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            NavigationLink(destination: DebtPlannerView()) {
-                                Text("Planning")
-                            }
-                            NavigationLink(destination: DebtSummaryView()) {
-                                Text("Summary")
-                            }
-                            Button {
-                                showIncomeBillsHost = true
-                            } label: {
-                                Text("Income & Bills")
-                            }
-                        } label: {
-                            PlanMenuLabel(title: "Plan", titleFont: .callout)
+                    ForEach(liabilities, id: \.id) { acct in
+                        HStack(alignment: .firstTextBaseline) {
+                            debtRowContent(for: acct)
+                        }
+                        .tag(acct.id)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selection = acct.id
                         }
                     }
                 }
             }
-            //.safeAreaInset(edge: .top) { TrialBanner() }
         }
+        .refreshable { await load() }
+        .navigationTitle(mode == .debt ? "Debt" : "Planning")
     }
 
     @ViewBuilder
@@ -230,76 +174,118 @@ struct DebtDashboardView: View {
     @ViewBuilder
     private var iPhoneBody: some View {
         NavigationStack {
-            Group {
-                if liabilities.isEmpty {
-                    ContentUnavailableView("No debts yet", systemImage: "creditcard")
-                    //.safeAreaInset(edge: .top) { TrialBanner() }
-                } else {
-                    List {
-                        Section("Institutions") {
-                            ForEach(liabilities, id: \.id) { acct in
-                                NavigationLink(destination: DebtDetailView(account: acct)) {
-                                    debtRowContent(for: acct)
+            List {
+                // Segmented control header (match iPad behavior)
+                Section {
+                    Picker("Mode", selection: $mode) {
+                        Text("Debt").tag(DebtMode.debt)
+                        Text("Planning").tag(DebtMode.planning)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                // Institutions list
+                Section("Institutions") {
+                    if liabilities.isEmpty {
+                        ContentUnavailableView("No debts yet", systemImage: "creditcard")
+                    } else {
+                        ForEach(liabilities, id: \.id) { acct in
+                            NavigationLink {
+                                if mode == .planning {
+                                    DebtPayoffView(viewModel: DebtPayoffViewModel(account: acct, context: modelContext))
+                                } else {
+                                    DebtDetailView(account: acct)
                                 }
+                            } label: {
+                                debtRowContent(for: acct)
                             }
                         }
                     }
-                    .refreshable { await load() }
-                    //.safeAreaInset(edge: .top) { TrialBanner() }
                 }
             }
-            .navigationTitle("Debt")
+            .refreshable { await load() }
+            .navigationTitle(mode == .debt ? "Debt" : "Planning")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if #available(iOS 18.0, *) {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            NavigationLink(destination: DebtPlannerView()) {
-                                Text("Planning")
-                            }
-                            NavigationLink(destination: DebtSummaryView()) {
-                                Text("Summary")
-                            }
-                            Button {
-                                showIncomeBillsHost = true
-                            } label: {
-                                Text("Income & Bills")
-                            }
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button {
+                            planSheetMode = .summary; showPlanSheet = true
                         } label: {
-                            PlanMenuLabel(title: "Plan", titleFont: .headline)
+                            Text("Summary")
                         }
-                    }
-                } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            NavigationLink(destination: DebtPlannerView()) {
-                                Text("Planning")
-                            }
-                            NavigationLink(destination: DebtSummaryView()) {
-                                Text("Summary")
-                            }
-                            Button {
-                                showIncomeBillsHost = true
-                            } label: {
-                                Text("Income & Bills")
-                            }
+                        Button {
+                            planSheetMode = .incomeBills; showPlanSheet = true
                         } label: {
-                            PlanMenuLabel(title: "Plan", titleFont: .headline)
+                            Text("Income & Bills")
                         }
+                    } label: {
+                        PlanMenuLabel(title: "Plan", titleFont: .headline)
                     }
                 }
             }
         }
+        //.safeAreaInset(edge: .top) {
+        //    VStack(spacing: 8) {
+        //        Picker("Mode", selection: $mode) {
+        //            Text("Debt").tag(DebtMode.debt)
+        //            Text("Planning").tag(DebtMode.planning)
+        //        }
+        //        .pickerStyle(.segmented)
+        //        .padding(.horizontal)
+        //    }
+        //    .padding(.vertical, 8)
+        //    .background(.bar)
+        //}
         .task { await load() }
-        .fullScreenCover(isPresented: $showIncomeBillsHost) {
-            NavigationStack {
-                IncomeAndBillsView()
-                    .environment(\.modelContext, modelContext)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            PlanToolbarButton("Done", fixedWidth: 65) { showIncomeBillsHost = false }
-                        }
+        .sheet(isPresented: $showPlanSheet) {
+            planSheetView
+                .presentationSizing(.page)
+        }
+    }
+    
+    @ViewBuilder
+    private var planSheetView: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Picker("Plan Mode", selection: $planSheetMode) {
+                    Text("Income & Bills").tag(PlanSheetMode.incomeBills)
+                    Text("Summary").tag(PlanSheetMode.summary)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                Group {
+                    switch planSheetMode {
+                    case .incomeBills:
+                        IncomeAndBillsView()
+                            .environment(\.modelContext, modelContext)
+                    case .summary:
+                        IncomeBillsSummarySheetContent()
+                            .environment(\.modelContext, modelContext)
+                            .environmentObject(settings)
                     }
+                }
             }
+            .navigationTitle("Plan")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    PlanToolbarButton("Done", fixedWidth: 65) { showPlanSheet = false }
+                }
+            }
+        }
+    }
+
+    private struct IncomeBillsSummarySheetContent: View {
+        @Environment(\.modelContext) private var modelContext
+        @Query(sort: \CashFlowItem.createdAt, order: .reverse) private var items: [CashFlowItem]
+        @EnvironmentObject private var settings: SettingsStore
+
+        var body: some View {
+            List {
+                IncomeBillsSummarySections(items: items)
+            }
+            .listStyle(.insetGrouped)
         }
     }
 

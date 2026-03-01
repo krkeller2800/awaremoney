@@ -24,12 +24,11 @@ struct ImportFlowView: View {
     @State private var showImportError: Bool = false
 
     @State private var pendingExternalURL: URL? = nil
-    @State private var showDocKindPicker: Bool = false
-    @State private var showDocKindSheet: Bool = false
     @State private var isActive: Bool = false
 
     // Additional state for the new fileImporter binding as per instructions
     @State private var isImporterPresented: Bool = false
+    @State private var showDocKindSheet: Bool = false
 
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     
@@ -825,32 +824,25 @@ struct ImportFlowView: View {
                 }
             }
             .onReceive(importRouter.$pendingURL) { (url: URL?) in
-                if let url {
-                    externalImportActive = true
-                    pendingExternalURL = url
-                    showPaywall = false
-                    AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
-                    if #available(iOS 18.0, *) {
-                        if isActive {
-                            showDocKindPicker = true
-                        } else {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                if isActive { showDocKindPicker = true }
-                            }
-                        }
-                    } else {
-                        if isActive {
-                            showDocKindSheet = true
-                        } else {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                if isActive { showDocKindSheet = true }
-                            }
-                        }
-                    }
-                }
+                  if let url {
+                      externalImportActive = true
+                      pendingExternalURL = url
+                      showPaywall = false
+                      AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
+                      showDocKindSheet = true
+                  }
             }
             .sheet(isPresented: isSheetPresentedBinding) {
                 sheetContent()
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { showPaywall && !externalImportActive && vm.staged == nil && vm.mappingSession == nil },
+                    set: { showPaywall = $0 }
+                )
+            ) {
+                PaywallView()
+                    .environmentObject(purchases)
             }
             .sheet(isPresented: $showDocKindSheet) {
                 NavigationStack {
@@ -863,6 +855,7 @@ struct ImportFlowView: View {
                                 }
                                 importRouter.pendingURL = nil
                                 pendingExternalURL = nil
+                                externalImportActive = false
                             }
                         }
                         Button("Cancel", role: .cancel) {
@@ -875,32 +868,6 @@ struct ImportFlowView: View {
                     .navigationTitle("Statement Type")
                     .navigationBarTitleDisplayMode(.inline)
                 }
-            }
-            .sheet(
-                isPresented: Binding(
-                    get: { showPaywall && !externalImportActive && vm.staged == nil && vm.mappingSession == nil },
-                    set: { showPaywall = $0 }
-                )
-            ) {
-                PaywallView()
-                    .environmentObject(purchases)
-            }
-            .confirmationDialog("What kind of statement is this?", isPresented: $showDocKindPicker, presenting: pendingExternalURL) { url in
-                ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
-                    Button(kind.rawValue) {
-                        showDocKindPicker = false
-                        applyExternal(kind: kind, url: url)
-                        importRouter.pendingURL = nil
-                        pendingExternalURL = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    importRouter.pendingURL = nil
-                    pendingExternalURL = nil
-                    externalImportActive = false
-                }
-            } message: {_ in 
-                Text("We’ll tailor parsing for best results.")
             }
         }
         .navigationDestination(item: $phoneRoute) { (route: BatchRoute) in
@@ -969,175 +936,88 @@ struct ImportFlowView: View {
                 .navigationTitle("Import")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    if #available(iOS 18.0, *) {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Menu {
-                                Section("PDF") {
-                                    Button("Loan Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .loan
-                                        vm.newAccountType = .loan
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Bank Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .checking
-                                        vm.newAccountType = .checking
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Brokerage Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .brokerage
-                                        vm.newAccountType = .brokerage
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Credit Card Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        vm.newAccountType = .creditCard
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Divider()
-                                    Button("User-defined…") {
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        vm.newAccountType = .creditCard
-                                        let manual = StagedImport(
-                                            parserId: "manual.user",
-                                            sourceFileName: "Manual Entry",
-                                            inferredInstitutionName: nil,
-                                            suggestedAccountType: vm.newAccountType,
-                                            transactions: [],
-                                            holdings: [],
-                                            balances: []
-                                        )
-                                        vm.staged = manual
-                                        vm.mappingSession = nil
-                                        AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
-                                    }
-                                }
-                                Section("CSV") {
-                                    Button("Loan CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .loan
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Bank CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .checking
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Brokerage CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .brokerage
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Credit Card CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                }
-                            } label: {
-                                PlanMenuLabel(title: "Statements",titleFont: .caption)
-//                            Label("Import", systemImage: "square.and.arrow.down")
-                            }
-                        }
-                    } else {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Menu {
-                                Section("PDF") {
-                                    Button("Loan Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .loan
-                                        vm.newAccountType = .loan
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Bank Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .checking
-                                        vm.newAccountType = .checking
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Brokerage Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .brokerage
-                                        vm.newAccountType = .brokerage
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Credit Card Statement") {
-                                        pickerKind = .pdf
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        vm.newAccountType = .creditCard
-                                        AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Divider()
-                                    Button("User-defined…") {
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        vm.newAccountType = .creditCard
-                                        let manual = StagedImport(
-                                            parserId: "manual.user",
-                                            sourceFileName: "Manual Entry",
-                                            inferredInstitutionName: nil,
-                                            suggestedAccountType: vm.newAccountType,
-                                            transactions: [],
-                                            holdings: [],
-                                            balances: []
-                                        )
-                                        vm.staged = manual
-                                        vm.mappingSession = nil
-                                        AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
-                                    }
-                                }
-                                Section("CSV") {
-                                    Button("Loan CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .loan
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Bank CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .checking
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Brokerage CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .brokerage
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                    Button("Credit Card CSV") {
-                                        pickerKind = .csv
-                                        vm.userSelectedDocHint = .creditCard
-                                        vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                        AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
-                                        isImporterPresented = true
-                                    }
-                                }
-                            } label: {
-                                PlanMenuLabel(title: "Statements",titleFont: .caption)
-//                            Label("Import", systemImage: "square.and.arrow.down")
-                            }
-                        }
-                    }
+                      ToolbarItem(placement: .topBarLeading) {
+                          Menu {
+                              Section("PDF") {
+                                  Button("Loan Statement") {
+                                      pickerKind = .pdf
+                                      vm.userSelectedDocHint = .loan
+                                      vm.newAccountType = .loan
+                                      AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Bank Statement") {
+                                      pickerKind = .pdf
+                                      vm.userSelectedDocHint = .checking
+                                      vm.newAccountType = .checking
+                                      AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Brokerage Statement") {
+                                      pickerKind = .pdf
+                                      vm.userSelectedDocHint = .brokerage
+                                      vm.newAccountType = .brokerage
+                                      AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Credit Card Statement") {
+                                      pickerKind = .pdf
+                                      vm.userSelectedDocHint = .creditCard
+                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      vm.newAccountType = .creditCard
+                                      AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Divider()
+                                  Button("User-defined…") {
+                                      vm.userSelectedDocHint = .creditCard
+                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      vm.newAccountType = .creditCard
+                                      let manual = StagedImport(
+                                          parserId: "manual.user",
+                                          sourceFileName: "Manual Entry",
+                                          inferredInstitutionName: nil,
+                                          suggestedAccountType: vm.newAccountType,
+                                          transactions: [],
+                                          holdings: [],
+                                          balances: []
+                                      )
+                                      vm.staged = manual
+                                      vm.mappingSession = nil
+                                      AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
+                                  }
+                              }
+                              Section("CSV") {
+                                  Button("Loan CSV") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .loan
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Bank CSV") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .checking
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Brokerage CSV") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .brokerage
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Credit Card CSV") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .creditCard
+                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                              }
+                          } label: {
+                              PlanMenuLabel(title: "Statements",titleFont: .caption)
+                          }
+                      }
                 }
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
@@ -1215,53 +1095,13 @@ struct ImportFlowView: View {
             }
         }
         .onReceive(importRouter.$pendingURL) { (url: URL?) in
-            if let url {
-                externalImportActive = true
-                pendingExternalURL = url
-                showPaywall = false
-                AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
-                if #available(iOS 18.0, *) {
-                    if isActive {
-                        showDocKindPicker = true
-                    } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            if isActive { showDocKindPicker = true }
-                        }
-                    }
-                } else {
-                    if isActive {
-                        showDocKindSheet = true
-                    } else {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            if isActive { showDocKindSheet = true }
-                        }
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $showDocKindSheet) {
-            NavigationStack {
-                List {
-                    ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
-                        Button(kind.rawValue) {
-                            showDocKindSheet = false
-                            if let url = pendingExternalURL {
-                                applyExternal(kind: kind, url: url)
-                            }
-                            importRouter.pendingURL = nil
-                            pendingExternalURL = nil
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {
-                        importRouter.pendingURL = nil
-                        pendingExternalURL = nil
-                        externalImportActive = false
-                        showDocKindSheet = false
-                    }
-                }
-                .navigationTitle("Statement Type")
-                .navigationBarTitleDisplayMode(.inline)
-            }
+              if let url {
+                  externalImportActive = true
+                  pendingExternalURL = url
+                  showPaywall = false
+                  AMLogging.always("ImportFlowView: received external URL \(url.lastPathComponent), preparing doc kind chooser", component: "Import")
+                  showDocKindSheet = true
+              }
         }
         .sheet(isPresented: isSheetPresentedBinding) {
             sheetContent()
@@ -1275,23 +1115,30 @@ struct ImportFlowView: View {
             PaywallView()
                 .environmentObject(purchases)
         }
-        .confirmationDialog("What kind of statement is this?", isPresented: $showDocKindPicker, presenting: pendingExternalURL) { url in
-            ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
-                Button(kind.rawValue) {
-                    showDocKindPicker = false
-                    applyExternal(kind: kind, url: url)
-                    importRouter.pendingURL = nil
-                    pendingExternalURL = nil
+        .sheet(isPresented: $showDocKindSheet) {
+            NavigationStack {
+                List {
+                    ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
+                        Button(kind.rawValue) {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: kind, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {
+                        importRouter.pendingURL = nil
+                        pendingExternalURL = nil
+                        externalImportActive = false
+                        showDocKindSheet = false
+                    }
                 }
+                .navigationTitle("Statement Type")
+                .navigationBarTitleDisplayMode(.inline)
             }
-            Button("Cancel", role: .cancel) {
-                importRouter.pendingURL = nil
-                pendingExternalURL = nil
-                externalImportActive = false
-            }
-        }
-        message: { _ in
-            Text("We’ll tailor parsing for best results.")
         }
         .task { await loadBatches() }
     }

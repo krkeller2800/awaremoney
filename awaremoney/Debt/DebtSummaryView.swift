@@ -55,6 +55,13 @@ struct DebtSummaryView: View {
     private enum FocusField: Hashable {
         case monthlyBudget
     }
+    private var isPhone: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        return false
+        #endif
+    }
 
     var body: some View {
         NavigationStack {
@@ -106,6 +113,14 @@ struct DebtSummaryView: View {
 //                        }
                         .accessibilityIdentifier("planByDateButton")
                     }
+                    if isPhone {
+                        ToolbarItem(placement: .topBarLeading) {
+                            PlanToolbarButton("Done", fixedWidth: 65) {
+                                dismiss()
+                            }
+                            .accessibilityIdentifier("debtSummaryDoneButton")
+                        }
+                    }
 //                    ToolbarItem(placement: .topBarTrailing) {
 //                        Button {
 //                            showIncomeBillsHost = true
@@ -128,7 +143,11 @@ struct DebtSummaryView: View {
                 }
             }
         }
+        #if canImport(UIKit)
+        .landscapeOnlyOnPhone()
+        #endif
     }
+
 
     // MARK: - View Builders
 
@@ -1070,6 +1089,125 @@ struct DebtSummaryView: View {
     }
 }
 
+#if canImport(UIKit)
+import UIKit
+
+// A hosting controller that restricts orientation to landscape on iPhone and logs diagnostics.
+final class LandscapeOnlyHostingController<Content: View>: UIHostingController<Content> {
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            return [.landscapeLeft, .landscapeRight]
+        } else {
+            // Do not restrict iPad
+            return super.supportedInterfaceOrientations
+        }
+    }
+
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        // Choose a preferred initial orientation
+        return .landscapeRight
+    }
+
+    private func maskDescription(_ mask: UIInterfaceOrientationMask) -> String {
+        var parts: [String] = []
+        if mask.contains(.portrait) { parts.append("portrait") }
+        if mask.contains(.portraitUpsideDown) { parts.append("portraitUpsideDown") }
+        if mask.contains(.landscapeLeft) { parts.append("landscapeLeft") }
+        if mask.contains(.landscapeRight) { parts.append("landscapeRight") }
+        if mask.isEmpty { parts.append("(empty)") }
+        return parts.joined(separator: ", ")
+    }
+
+    private func logOrientationDiagnostics(tag: String) {
+        #if canImport(UIKit)
+        let device = UIDevice.current.orientation
+        let scene = view.window?.windowScene ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let keyWindow = scene?.windows.first { $0.isKeyWindow }
+        let appMask = keyWindow.map { UIApplication.shared.supportedInterfaceOrientations(for: $0) }
+        let topVC: String = {
+            guard let root = keyWindow?.rootViewController else { return "nil" }
+            var top: UIViewController = root
+            while let presented = top.presentedViewController { top = presented }
+            return String(describing: type(of: top))
+        }()
+        AMLogging.always("LandscapeOnlyHostingController [\(tag)] — supportedMask=\(self.maskDescription(self.supportedInterfaceOrientations)), preferred=\(self.preferredInterfaceOrientationForPresentation.rawValue), device=\(device.rawValue), sceneIO=\(scene?.interfaceOrientation.rawValue ?? -1), appMask=\(appMask.map(self.maskDescription) ?? "nil"), topVC=\(topVC)", component: "OrientationDiag")
+        #endif
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        logOrientationDiagnostics(tag: "willAppear")
+        setNeedsUpdateOfSupportedInterfaceOrientations()
+        // Proactively request a landscape geometry update on iPhone
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            if #available(iOS 16.0, *) {
+                if let scene = view.window?.windowScene {
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
+                    AMLogging.always("Requested geometry update to landscape for scene (willAppear)", component: "OrientationDiag")
+                } else {
+                    AMLogging.always("No windowScene available to request geometry update (willAppear)", component: "OrientationDiag")
+                }
+            }
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        logOrientationDiagnostics(tag: "didAppear")
+        setNeedsUpdateOfSupportedInterfaceOrientations()
+        // Request landscape again after presentation to nudge rotation if needed
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            if #available(iOS 16.0, *) {
+                if let scene = view.window?.windowScene {
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
+                    AMLogging.always("Requested geometry update to landscape for scene (didAppear)", component: "OrientationDiag")
+                } else {
+                    AMLogging.always("No windowScene available to request geometry update (didAppear)", component: "OrientationDiag")
+                }
+            }
+        }
+    }
+}
+
+/// A SwiftUI wrapper that hosts its content in a controller that only supports landscape on iPhone.
+struct LandscapeOnly<Content: View>: UIViewControllerRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeUIViewController(context: Context) -> LandscapeOnlyHostingController<Content> {
+        let vc = LandscapeOnlyHostingController(rootView: content)
+        AMLogging.always("LandscapeOnly.makeUIViewController — created host VC=\(type(of: vc))", component: "OrientationDiag")
+        return vc
+    }
+
+    func updateUIViewController(_ vc: LandscapeOnlyHostingController<Content>, context: Context) {
+        vc.rootView = content
+        AMLogging.always("LandscapeOnly.updateUIViewController — updating host VC=\(type(of: vc))", component: "OrientationDiag")
+        vc.setNeedsUpdateOfSupportedInterfaceOrientations()
+    }
+}
+
+/// Convenience wrapper for presenting the Debt Summary in landscape-only on iPhone.
+struct DebtSummaryLandscapeHost: View {
+    var body: some View {
+        LandscapeOnly {
+            DebtSummaryView()
+                .ignoresSafeArea() // Use the full screen in landscape
+        }
+    }
+}
+
+/// Convenience modifier so callers can do `DebtSummaryView().landscapeOnlyOnPhone()` if desired.
+extension View {
+    func landscapeOnlyOnPhone() -> some View {
+        LandscapeOnly { self }
+    }
+}
+#endif
+
 private extension Decimal {
     func rounded(_ scale: Int) -> Decimal {
         var value = self
@@ -1092,4 +1230,5 @@ extension UIView {
     }
 }
 #endif
+
 

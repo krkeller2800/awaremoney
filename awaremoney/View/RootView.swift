@@ -60,7 +60,7 @@ struct RootView: View {
             if let url = url {
                 selectedTab = 3
                 lastNonSettingsTab = 3
-                AMLogging.always("RootView", component: "Received import URL: \(url.lastPathComponent)")
+                AMLogging.always("Received import URL: \(url.lastPathComponent)", component: "RootView")
             }
         }
         .sheet(isPresented: $showSettings) {

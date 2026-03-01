@@ -102,17 +102,10 @@ struct IncomeBillsSummarySections: View {
                                 Text("\(Int(billsToIncomeRatio * 100))%")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                if #available(iOS 17.0, *) {
-                                    Gauge(value: billsToIncomeRatio) { Text("") }
-                                        .gaugeStyle(.linearCapacity)
-                                        .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
-                                        .frame(height: 12)
-                                } else {
-                                    Gauge(value: billsToIncomeRatio) { Text("") }
-                                        .gaugeStyle(.accessoryLinear)
-                                        .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
-                                        .frame(height: 12)
-                                }
+                                Gauge(value: billsToIncomeRatio) { Text("") }
+                                    .gaugeStyle(.linearCapacity)
+                                    .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
+                                    .frame(height: 12)
                             }
                         }
                     } else {
@@ -163,17 +156,10 @@ struct IncomeBillsSummarySections: View {
                         .foregroundStyle(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
                     Spacer()
                 }
-                if #available(iOS 17.0, *) {
-                    Gauge(value: billsToIncomeRatio) { Text("") }
-                        .gaugeStyle(.linearCapacity)
-                        .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
-                        .frame(height: 12)
-                } else {
-                    Gauge(value: billsToIncomeRatio) { Text("") }
-                        .gaugeStyle(.accessoryLinear)
-                        .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
-                        .frame(height: 12)
-                }
+                Gauge(value: billsToIncomeRatio) { Text("") }
+                    .gaugeStyle(.linearCapacity)
+                    .tint(billsToIncomeRatio > 0.8 ? .red : (billsToIncomeRatio > 0.6 ? .orange : .green))
+                    .frame(height: 12)
             } else {
                 Text("—")
                     .font(.title3)

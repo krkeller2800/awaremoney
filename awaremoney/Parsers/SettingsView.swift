@@ -43,14 +43,10 @@ struct SettingsView: View {
 
                 Section("Purchases") {
                     Button("Manage Subscription") {
-                        if #available(iOS 15.0, *) {
-                            if let scene = UIApplication.shared.connectedScenes
-                                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
-                                Task {
-                                    try? await AppStore.showManageSubscriptions(in: scene)
-                                }
-                            } else if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
-                                UIApplication.shared.open(url)
+                        if let scene = UIApplication.shared.connectedScenes
+                            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
+                            Task {
+                                try? await AppStore.showManageSubscriptions(in: scene)
                             }
                         } else if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
                             UIApplication.shared.open(url)

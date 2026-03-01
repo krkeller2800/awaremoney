@@ -127,7 +127,7 @@ struct DebugSettingsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
+                    PlanToolbarButton("Done",fixedWidth: 70) { dismiss() }
                 }
             }
         }

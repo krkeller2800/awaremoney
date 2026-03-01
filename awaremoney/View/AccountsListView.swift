@@ -51,43 +51,22 @@ struct AccountsListView: View {
                     .navigationTitle("Accounts")
                     .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 420)
                     .toolbar {
-                        if #available(iOS 18.0, *) {
-                            // iOS 18+: keep current (About leading, Debug trailing)
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    isAboutPresented = true
-                                } label: {
-                                    Label("About", systemImage: "info.circle")
-                                }
-                            }
-#if DEBUG
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button {
-                                    isDebugSettingsPresented = true
-                                } label: {
-                                    Label("Debug", systemImage: "ladybug")
-                                }
-                            }
-#endif
-                        } else {
-                            // iOS 17: swap to avoid collision with leading sidebar toggle; Debug leading, About trailing
-#if DEBUG
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    isDebugSettingsPresented = true
-                                } label: {
-                                    Label("Debug", systemImage: "ladybug")
-                                }
-                            }
-#endif
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button {
-                                    isAboutPresented = true
-                                } label: {
-                                    Label("About", systemImage: "info.circle")
-                                }
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                isAboutPresented = true
+                            } label: {
+                                Label("About", systemImage: "info.circle")
                             }
                         }
+#if DEBUG
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                isDebugSettingsPresented = true
+                            } label: {
+                                Label("Debug", systemImage: "ladybug")
+                            }
+                        }
+#endif
                     }
                 } detail: {
                     if let sel = selection, let account = accounts.first(where: { $0.id == sel }) {

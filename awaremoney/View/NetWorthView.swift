@@ -29,14 +29,8 @@ struct NetWorthView: View {
                     primaryList
                         .navigationTitle("Net Worth")
                         .toolbar {
-                            if #available(iOS 18.0, *) {
-                                ToolbarItem(placement: .topBarLeading) {
-                                    PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
-                                }
-                            } else {
-                                ToolbarItem(placement: .topBarTrailing) {
-                                    PlanToolbarButton("Asset",systemImage: "plus", titleFont: .caption) { showAddAssetSheet = true }
-                                }
+                            ToolbarItem(placement: .topBarLeading) {
+                                PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
                             }
                         }
                 } detail: {
@@ -47,16 +41,8 @@ struct NetWorthView: View {
                     primaryList
                         .navigationTitle("Net Worth")
                         .toolbar {
-                            ToolbarItem(placement: .primaryAction) {
-                                PlanToolbarButton("Asset",systemImage: "plus") { showAddAssetSheet = true }
-//                                Button {
-//                                    showAddAssetSheet = true
-//                                } label: {
-//                                    HStack(spacing: 6) {
-//                                        Image(systemName: "plus")
-//                                        Text("Add Asset")
-//                                    }
-//                                }
+                            ToolbarItem(placement: .topBarLeading) {
+                                PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
                             }
                         }
                 }
