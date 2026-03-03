@@ -43,6 +43,8 @@ fileprivate func parseDecimalAmount(from text: String) -> Decimal? {
 }
 
 struct IncomeAndBillsView: View {
+    var showsLocalModePicker: Bool = true
+
     @State private var selectedIncomeID: UUID? = nil
     @State private var selectedBillID: UUID? = nil
     @State private var showAddSheet = false
@@ -289,15 +291,69 @@ struct IncomeAndBillsView: View {
     private var iPhoneBody: some View {
         NavigationStack {
             List {
-                Section {
-                    Picker("View", selection: $phoneMode) {
-                        Text("Income & Bills").tag(PhoneMode.incomeBills)
-                        Text("Summary").tag(PhoneMode.summary)
+                if showsLocalModePicker {
+                    Section {
+                        Picker("View", selection: $phoneMode) {
+                            Text("Income & Bills").tag(PhoneMode.incomeBills)
+                            Text("Summary").tag(PhoneMode.summary)
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
-                }
 
-                if phoneMode == .incomeBills {
+                    if phoneMode == .incomeBills {
+                        if incomes.isEmpty && bills.isEmpty {
+                            ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
+                        } else {
+                            Section("Income") {
+                                ForEach(incomes) { item in
+                                    NavigationLink(destination: EditCashFlowItemView(
+                                        item: item,
+                                        onSave: {
+                                            try? modelContext.save()
+                                        },
+                                        onDelete: {
+                                            modelContext.delete(item)
+                                            try? modelContext.save()
+                                        }
+                                    )) {
+                                        row(for: item)
+                                    }
+                                }
+                                .onDelete { indexSet in
+                                    delete(items: indexSet.map { incomes[$0] })
+                                }
+                                if incomes.isEmpty {
+                                    Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                            Section("Bills") {
+                                ForEach(bills) { item in
+                                    NavigationLink(destination: EditCashFlowItemView(
+                                        item: item,
+                                        onSave: {
+                                            try? modelContext.save()
+                                        },
+                                        onDelete: {
+                                            modelContext.delete(item)
+                                            try? modelContext.save()
+                                        }
+                                    )) {
+                                        row(for: item)
+                                    }
+                                }
+                                .onDelete { indexSet in
+                                    delete(items: indexSet.map { bills[$0] })
+                                }
+                                if bills.isEmpty {
+                                    Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } else {
+                        summarySection
+                    }
+                } else {
+                    // No local picker: always show Income & Bills content (outer container controls summary)
                     if incomes.isEmpty && bills.isEmpty {
                         ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
                     } else {
@@ -346,8 +402,6 @@ struct IncomeAndBillsView: View {
                             }
                         }
                     }
-                } else {
-                    summarySection
                 }
             }
             .navigationTitle("Income & Bills")
@@ -1234,9 +1288,5 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
-
-
-
-
 
 

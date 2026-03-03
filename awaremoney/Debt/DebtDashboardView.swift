@@ -24,9 +24,18 @@ private extension UIResponder {
         UIResponder.am_current = self
     }
 }
+
+private extension UIWindowScene {
+    var keyWindow: UIWindow? {
+        if let key = self.windows.first(where: { $0.isKeyWindow }) { return key }
+        return self.windows.first
+    }
+}
 #endif
 
 struct DebtDashboardView: View {
+    @State private var showDebtSummary = false
+
     private enum DebtMode: String, CaseIterable { case debt, planning }
     @Environment(\.modelContext) private var modelContext
     @State private var liabilities: [Account] = []
@@ -71,6 +80,10 @@ struct DebtDashboardView: View {
             planSheetView
                 .presentationSizing(.page)
         }
+        .sheet(isPresented: $showDebtSummary) {
+            DebtSummaryView()
+                .presentationSizing(.page)
+        }
     }
 
     @ViewBuilder
@@ -94,7 +107,7 @@ struct DebtDashboardView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text(acct.name)
-                        .font(.largeTitle).bold()
+                        .font(.headline).bold()
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -108,25 +121,8 @@ struct DebtDashboardView: View {
     @ViewBuilder
     private var iPadSidebar: some View {
         List(selection: $selection) {
-            // Segmented control header
-            Section {
-                Picker("Mode", selection: $mode) {
-                    Text("Debt").tag(DebtMode.debt)
-                    Text("Planning").tag(DebtMode.planning)
-                }
-                .pickerStyle(.segmented)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    PlanToolbarButton("Summary",fixedWidth: 100) { planSheetMode = .summary; showPlanSheet = true }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    PlanToolbarButton("Bills") { planSheetMode = .incomeBills; showPlanSheet = true }
-                }
-            }
-
             // Institutions list (selecting an account clears any static detail)
-            Section("Institutions") {
+            Section(mode == .debt ? "Institutions" : "Accounts") {
                 if liabilities.isEmpty {
                     ContentUnavailableView("No debts yet", systemImage: "creditcard")
                 } else {
@@ -145,6 +141,29 @@ struct DebtDashboardView: View {
         }
         .refreshable { await load() }
         .navigationTitle(mode == .debt ? "Debt" : "Planning")
+        .safeAreaInset(edge: .top) {
+            VStack(spacing: 8) {
+                Picker("Mode", selection: $mode) {
+                    Text("Debt").tag(DebtMode.debt)
+                    Text("Planning").tag(DebtMode.planning)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+            }
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                PlanToolbarButton("Summary",fixedWidth: 100) {
+                    AMLogging.log("Summary tapped; presenting debt summary sheet", component: "DebtDashboardView")
+                    showDebtSummary = true
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                PlanToolbarButton("Bills") { planSheetMode = .incomeBills; showPlanSheet = true }
+            }
+        }
     }
 
     @ViewBuilder
@@ -175,17 +194,8 @@ struct DebtDashboardView: View {
     private var iPhoneBody: some View {
         NavigationStack {
             List {
-                // Segmented control header (match iPad behavior)
-                Section {
-                    Picker("Mode", selection: $mode) {
-                        Text("Debt").tag(DebtMode.debt)
-                        Text("Planning").tag(DebtMode.planning)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
                 // Institutions list
-                Section("Institutions") {
+                Section(mode == .debt ? "Institutions" : "Accounts") {
                     if liabilities.isEmpty {
                         ContentUnavailableView("No debts yet", systemImage: "creditcard")
                     } else {
@@ -206,72 +216,99 @@ struct DebtDashboardView: View {
             .refreshable { await load() }
             .navigationTitle(mode == .debt ? "Debt" : "Planning")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top) {
+                VStack(spacing: 8) {
+                    Picker("Mode", selection: $mode) {
+                        Text("Debt").tag(DebtMode.debt)
+                        Text("Planning").tag(DebtMode.planning)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                }
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button {
-                            planSheetMode = .summary; showPlanSheet = true
-                        } label: {
-                            Text("Summary")
-                        }
-                        Button {
-                            planSheetMode = .incomeBills; showPlanSheet = true
-                        } label: {
-                            Text("Income & Bills")
-                        }
-                    } label: {
-                        PlanMenuLabel(title: "Plan", titleFont: .headline)
-                    }
+                    PlanToolbarButton("Summary",fixedWidth: 100) { showDebtSummary = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    PlanToolbarButton("Income/Bills",fixedWidth: 120) { planSheetMode = .incomeBills; showPlanSheet = true }
                 }
             }
         }
-        //.safeAreaInset(edge: .top) {
-        //    VStack(spacing: 8) {
-        //        Picker("Mode", selection: $mode) {
-        //            Text("Debt").tag(DebtMode.debt)
-        //            Text("Planning").tag(DebtMode.planning)
-        //        }
-        //        .pickerStyle(.segmented)
-        //        .padding(.horizontal)
-        //    }
-        //    .padding(.vertical, 8)
-        //    .background(.bar)
-        //}
         .task { await load() }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
                 .presentationSizing(.page)
         }
+        .fullScreenCover(isPresented: $showDebtSummary, onDismiss: { resetPhoneOrientationToDefault() }) {
+            DebtSummaryLandscapeHost()
+                .environment(\.modelContext, modelContext)
+                .environmentObject(settings)
+        }
     }
     
+    @MainActor
+    private func resetPhoneOrientationToDefault() {
+        #if canImport(UIKit)
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        if #available(iOS 16.0, *) {
+            if let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .allButUpsideDown))
+            }
+
+            // Trigger an update of supported interface orientations on the active controller
+            if let windowScene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first,
+               let window = windowScene.keyWindow,
+               let rootVC = window.rootViewController {
+                rootVC.setNeedsUpdateOfSupportedInterfaceOrientations()
+            } else if let rootVC = UIApplication.shared.connectedScenes
+                        .compactMap({ $0 as? UIWindowScene })
+                        .flatMap({ $0.windows })
+                        .first(where: { $0.isKeyWindow })?
+                        .rootViewController {
+                rootVC.setNeedsUpdateOfSupportedInterfaceOrientations()
+            }
+        }
+        #endif
+    }
+
     @ViewBuilder
     private var planSheetView: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                Picker("Plan Mode", selection: $planSheetMode) {
-                    Text("Income & Bills").tag(PlanSheetMode.incomeBills)
-                    Text("Summary").tag(PlanSheetMode.summary)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-
-                Group {
-                    switch planSheetMode {
-                    case .incomeBills:
-                        IncomeAndBillsView()
-                            .environment(\.modelContext, modelContext)
-                    case .summary:
-                        IncomeBillsSummarySheetContent()
-                            .environment(\.modelContext, modelContext)
-                            .environmentObject(settings)
-                    }
+            Group {
+                switch planSheetMode {
+                case .incomeBills:
+                    IncomeAndBillsView(showsLocalModePicker: false)
+                        .environment(\.modelContext, modelContext)
+                case .summary:
+                    IncomeBillsSummarySheetContent()
+                        .environment(\.modelContext, modelContext)
+                        .environmentObject(settings)
                 }
             }
-            .navigationTitle("Plan")
+            .navigationTitle(isPad ? "Plan" : "Summary")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     PlanToolbarButton("Done", fixedWidth: 65) { showPlanSheet = false }
                 }
+            }
+            .safeAreaInset(edge: .top) {
+                VStack(spacing: 8) {
+                    Picker("Plan Mode", selection: $planSheetMode) {
+                        Text("Income & Bills").tag(PlanSheetMode.incomeBills)
+                        Text("Summary").tag(PlanSheetMode.summary)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                }
+                .padding(.vertical, 8)
+                .background(.bar)
             }
         }
     }

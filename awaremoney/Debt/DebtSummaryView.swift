@@ -103,41 +103,24 @@ struct DebtSummaryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        PlanToolbarButton("Model") {
+                        PlanToolbarButton("Project",fixedWidth: 70) {
                             AMLogging.log("Model tapped; presenting plan sheet", component: "DebtSummaryView")
                             showPlanSheet = true
                         }
-//                        label: {
-//                            Text("Project")
-//                            Image(systemName: "calendar.badge.clock")
-//                        }
+
                         .accessibilityIdentifier("planByDateButton")
                     }
-                    if isPhone {
-                        ToolbarItem(placement: .topBarLeading) {
-                            PlanToolbarButton("Done", fixedWidth: 65) {
-                                dismiss()
-                            }
-                            .accessibilityIdentifier("debtSummaryDoneButton")
+                    ToolbarItem(placement: .topBarLeading) {
+                        PlanToolbarButton("Done", fixedWidth: 60) {
+                            dismiss()
                         }
+                        .accessibilityIdentifier("debtSummaryDoneButton")
                     }
-//                    ToolbarItem(placement: .topBarTrailing) {
-//                        Button {
-//                            showIncomeBillsHost = true
-//                        } label: {
-//                            Text("Income & Bills")
-//                        }
-//                        .accessibilityIdentifier("incomeBillsButton")
-//                    }
                 }
                 .task { await load() }
                 .sheet(isPresented: $showPlanSheet) {
                     planSheetView()
                 }
-//                .fullScreenCover(isPresented: $showIncomeBillsHost) {
-//                    IncomeBillsSplitHostView()
-//                        .environment(\.modelContext, modelContext)
-//                }
                 .onChange(of: showPlanSheet) { _, newValue in
                     AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
                 }
@@ -234,12 +217,12 @@ struct DebtSummaryView: View {
                         .onSubmit {
                             commitAndDismissKeyboard()
                         }
-                        .onTapGesture {
-                            focusedField = .monthlyBudget
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                selectAllInFirstResponderTextField()
+                        .highPriorityGesture(
+                            TapGesture().onEnded {
+                                focusedField = .monthlyBudget
+                                selectAllInFirstResponder()
                             }
-                        }
+                        )
                         .onChange(of: tempMonthlyBudget) { _, newValue in
                             // Normalize to a valid numeric string or empty
                             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -311,6 +294,8 @@ struct DebtSummaryView: View {
                     }
                 }
             }
+            .navigationTitle("Projection plan")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 // Prefill strategy
                 switch settings.defaultPayoffStrategyRaw {
@@ -331,9 +316,7 @@ struct DebtSummaryView: View {
             }
             .onChange(of: focusedField) { _, newValue in
                 if newValue == .monthlyBudget {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        selectAllInFirstResponderTextField()
-                    }
+                    selectAllInFirstResponder()
                 }
             }
             .toolbar {
@@ -463,6 +446,19 @@ struct DebtSummaryView: View {
                     Spacer()
                     Button { commitAndDismissKeyboard() } label: { Image(systemName: "checkmark") }
                 }
+                #if os(iOS)
+                if isPhone, focusedField == .monthlyBudget {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            commitAndDismissKeyboard()
+                        } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                        }
+                        .accessibilityIdentifier("dismissKeyboardButton")
+                        .help("Dismiss Keyboard")
+                    }
+                }
+                #endif
             }
             .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
                 Button("OK", role: .cancel) { }
@@ -510,20 +506,13 @@ struct DebtSummaryView: View {
         keyWindow?.endEditing(true)
         #endif
     }
-
-    private func selectAllInFirstResponderTextField() {
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
         #if canImport(UIKit)
-        let keyWindow = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }
-        if let view = keyWindow?.rootViewController?.view,
-           let tf = view.findFirstResponder() as? UITextField {
-            tf.selectAll(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
         }
         #endif
     }
-
     // MARK: - Rows
 
     private func planHeader(compact: Bool) -> some View {
@@ -1230,5 +1219,7 @@ extension UIView {
     }
 }
 #endif
+
+
 
 
