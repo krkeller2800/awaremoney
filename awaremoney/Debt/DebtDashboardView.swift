@@ -292,12 +292,17 @@ struct DebtDashboardView: View {
                         .environmentObject(settings)
                 }
             }
-            .navigationTitle(isPad ? "Plan" : "Summary")
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Income & Bills")
+                        .font(isPad ? .largeTitle : .headline)  
+                        .lineLimit(1)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     PlanToolbarButton("Done", fixedWidth: 65) { showPlanSheet = false }
                 }
             }
+            .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {
                     Picker("Plan Mode", selection: $planSheetMode) {

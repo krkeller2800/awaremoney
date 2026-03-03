@@ -255,7 +255,7 @@ struct IncomeAndBillsView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text(ipadMode == .incomeBills ? "Income & Bills" : "Monthly Summary")
-                    .font(.largeTitle)
+                    .font(isPad ? .largeTitle : .headline)
             }
         }
         .sheet(item: $activeSheet) { sheet in

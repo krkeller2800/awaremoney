@@ -354,6 +354,71 @@ struct ImportBatchDetailView: View {
         .background(.regularMaterial)
     }
 
+    // MARK: - PDF caching helpers
+    private func perBatchPreviewDirectory(for batch: ImportBatch) -> URL? {
+        let fm = FileManager.default
+        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            return caches.appendingPathComponent("StatementPreviews", isDirectory: true)
+                .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+        }
+        return nil
+    }
+
+    private func cachePDF(for batch: ImportBatch, from originalURL: URL) -> URL? {
+        guard let dir = perBatchPreviewDirectory(for: batch) else { return nil }
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = dir.appendingPathComponent(originalURL.lastPathComponent)
+            // Remove any existing file at the destination to avoid stale previews
+            try? fm.removeItem(at: dest)
+            if fm.fileExists(atPath: originalURL.path) {
+                try fm.copyItem(at: originalURL, to: dest)
+                AMLogging.log("Cached PDF copied to per-batch path: \(dest.path)", component: "ImportBatchDetailView")
+                return dest
+            } else {
+                AMLogging.log("Original picked PDF path does not exist at \(originalURL.path)", component: "ImportBatchDetailView")
+            }
+        } catch {
+            AMLogging.error("Failed to prepare per-batch cache directory or copy PDF: \(error.localizedDescription)", component: "ImportBatchDetailView")
+        }
+        return nil
+    }
+
+    private func migrateLegacyPDFCacheIfNeeded(for batch: ImportBatch) {
+        // If we already have a valid per-batch path, nothing to do
+        if let path = batch.sourceFileLocalPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+            return
+        }
+        // Only attempt migration for .pdf source filenames
+        let lower = batch.sourceFileName.lowercased()
+        guard lower.hasSuffix(".pdf") else { return }
+        // Legacy fallback location was Caches/<sourceFileName>
+        if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            let legacy = caches.appendingPathComponent(batch.sourceFileName)
+            if FileManager.default.fileExists(atPath: legacy.path) {
+                AMLogging.log("Migrating legacy cached PDF for batchID=\(batch.id) from legacy=\(legacy.path)", component: "ImportBatchDetailView")
+                if let newURL = cachePDF(for: batch, from: legacy) {
+                    batch.sourceFileLocalPath = newURL.path
+                    try? modelContext.save()
+                    // Best-effort cleanup of legacy file to prevent future confusion
+                    try? FileManager.default.removeItem(at: legacy)
+                    AMLogging.log("Migration complete; updated sourceFileLocalPath and removed legacy file", component: "ImportBatchDetailView")
+                }
+            }
+        }
+    }
+
+    private func resolvedPDFURL(for batch: ImportBatch) -> URL? {
+        if let path = batch.sourceFileLocalPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+            AMLogging.log("PDF preview using per-batch local path: \(path)", component: "ImportBatchDetailView")
+            return URL(fileURLWithPath: path)
+        } else {
+            AMLogging.log("PDF preview unavailable — missing or invalid per-batch path for file: \(batch.sourceFileName)", component: "ImportBatchDetailView")
+        }
+        return nil
+    }
+
     @ViewBuilder private func pdfSheetContent(for batch: ImportBatch) -> some View {
         NavigationStack {
             if let url = resolvedPDFURL(for: batch) {
@@ -383,26 +448,6 @@ struct ImportBatchDetailView: View {
                 Button("Done") { showPDFSheet = false }
             }
         }
-    }
-
-    private func resolvedPDFURL(for batch: ImportBatch) -> URL? {
-        if let path = batch.sourceFileLocalPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
-            AMLogging.log("PDF preview using local path: \(path)", component: "ImportBatchDetailView")
-            return URL(fileURLWithPath: path)
-        }
-        if batch.sourceFileName.lowercased().hasSuffix(".pdf"),
-           let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let candidate = caches.appendingPathComponent(batch.sourceFileName)
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                AMLogging.log("PDF preview using caches candidate: \(candidate.path)", component: "ImportBatchDetailView")
-                return candidate
-            } else {
-                AMLogging.log("PDF preview missing for candidate: \(candidate.path)", component: "ImportBatchDetailView")
-            }
-        } else {
-            AMLogging.log("PDF preview unavailable for file: \(batch.sourceFileName)", component: "ImportBatchDetailView")
-        }
-        return nil
     }
 
     @ViewBuilder private func conflictsSheetContent(for batch: ImportBatch) -> some View {
@@ -712,17 +757,10 @@ struct ImportBatchDetailView: View {
 
                     // Maintain a local copy for PDF preview
                     if fileExtension == "pdf" {
-                        let fm = FileManager.default
-                        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                            let dest = caches.appendingPathComponent(url.lastPathComponent)
-                            AMLogging.log("Caching PDF to: \(dest.path)", component: "ImportBatchDetailView")
-                            try? fm.removeItem(at: dest)
-                            if fm.fileExists(atPath: url.path) {
-                                try? fm.copyItem(at: url, to: dest)
-                                batch.sourceFileLocalPath = dest.path
-                                AMLogging.log("Cached PDF copied; batch.sourceFileLocalPath updated", component: "ImportBatchDetailView")
-                                try? modelContext.save()
-                            }
+                        if let cachedURL = cachePDF(for: batch, from: url) {
+                            batch.sourceFileLocalPath = cachedURL.path
+                            AMLogging.log("Cached PDF copied; batch.sourceFileLocalPath updated to per-batch path", component: "ImportBatchDetailView")
+                            try? modelContext.save()
                         }
                     } else {
                         if batch.sourceFileLocalPath != nil {
@@ -870,17 +908,10 @@ struct ImportBatchDetailView: View {
 
                     // Maintain a local copy for PDF preview
                     if fileExtension == "pdf" {
-                        let fm = FileManager.default
-                        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                            let dest = caches.appendingPathComponent(url.lastPathComponent)
-                            AMLogging.log("Caching PDF to: \(dest.path)", component: "ImportBatchDetailView")
-                            try? fm.removeItem(at: dest)
-                            if fm.fileExists(atPath: url.path) {
-                                try? fm.copyItem(at: url, to: dest)
-                                batch.sourceFileLocalPath = dest.path
-                                AMLogging.log("Cached PDF copied; batch.sourceFileLocalPath updated", component: "ImportBatchDetailView")
-                                try? modelContext.save()
-                            }
+                        if let cachedURL = cachePDF(for: batch, from: url) {
+                            batch.sourceFileLocalPath = cachedURL.path
+                            AMLogging.log("Cached PDF copied; batch.sourceFileLocalPath updated to per-batch path", component: "ImportBatchDetailView")
+                            try? modelContext.save()
                         }
                     } else {
                         if batch.sourceFileLocalPath != nil {
@@ -1009,6 +1040,7 @@ struct ImportBatchDetailView: View {
             AMLogging.log("ImportBatchDetailView.load: fetch batch found=\(found != nil ? "yes" : "no") for id=\(batchID)", component: "ImportBatchDetailView")
             self.batch = found
             guard found != nil else { return }
+            if let b = found { migrateLegacyPDFCacheIfNeeded(for: b) }
 
             // Fetch related items
             let txPred = #Predicate<Transaction> { $0.importBatch?.id == batchID }
@@ -1040,6 +1072,20 @@ struct ImportBatchDetailView: View {
     private func deleteBatch() {
         guard let batch else { return }
         AMLogging.log("Hard delete initiated for batchID=\(batch.id) label=\(batch.label)", component: "ImportBatchDetailView")
+
+        // Remove any cached PDF preview for this batch
+        if let path = batch.sourceFileLocalPath, !path.isEmpty {
+            let fm = FileManager.default
+            do {
+                let fileURL = URL(fileURLWithPath: path)
+                try? fm.removeItem(at: fileURL)
+                // Attempt to remove the per-batch directory if empty
+                let dirURL = fileURL.deletingLastPathComponent()
+                try? fm.removeItem(at: dirURL)
+                AMLogging.log("Removed cached PDF and per-batch directory at \(dirURL.path)", component: "ImportBatchDetailView")
+            }
+        }
+
         do {
             // Clear lists immediately to prevent the UI from touching deleted objects
             self.transactions = []
