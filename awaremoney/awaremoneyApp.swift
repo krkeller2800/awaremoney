@@ -25,7 +25,8 @@ struct awaremoneyApp: App {
             BalanceSnapshot.self,
             ImportBatch.self,
             CSVColumnMapping.self,
-            CashFlowItem.self
+            CashFlowItem.self,
+            AssetLiabilityLink.self
         ])
 
         // Ensure Application Support directory exists and build a file URL for the store

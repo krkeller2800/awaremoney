@@ -202,4 +202,64 @@ public struct PlanToolbarButton: View {
                                             fixedWidth: fixedWidth))
     }
 }
+public struct EditingAccessoryBar: View {
+    public let canGoPrevious: Bool
+    public let canGoNext: Bool
+    public let onPrevious: () -> Void
+    public let onNext: () -> Void
+    public let onDone: () -> Void
+
+    public init(
+        canGoPrevious: Bool,
+        canGoNext: Bool,
+        onPrevious: @escaping () -> Void,
+        onNext: @escaping () -> Void,
+        onDone: @escaping () -> Void
+    ) {
+        self.canGoPrevious = canGoPrevious
+        self.canGoNext = canGoNext
+        self.onPrevious = onPrevious
+        self.onNext = onNext
+        self.onDone = onDone
+    }
+
+    public var body: some View {
+        HStack(spacing: 16) {
+            Button(action: onPrevious) {
+                Image(systemName: "chevron.left")
+                    .font(.title2)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canGoPrevious)
+            .accessibilityLabel("Previous field")
+
+            Button(action: onNext) {
+                Image(systemName: "chevron.right")
+                    .font(.title2)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canGoNext)
+            .accessibilityLabel("Next field")
+
+            Spacer()
+
+            Button(action: onDone) {
+                Image(systemName: "checkmark")
+                    .font(.title2.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Done editing")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.bar)               // native bar appearance
+        .overlay(Divider(), alignment: .top)
+    }
+}
 

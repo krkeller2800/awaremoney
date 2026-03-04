@@ -19,6 +19,12 @@ struct AccountDetailView: View {
     @State private var cachedEarliestTransactionDate: Date? = nil
     @State private var showDeleteAlert = false
 
+    @Query(filter: #Predicate<Account> { $0.typeRaw == "loan" }, sort: [SortDescriptor(\Account.name, order: .forward)]) private var liabilityAccounts: [Account]
+
+    @State private var linkedLiabilityID: UUID? = nil
+    @State private var activeAssetLink: AssetLiabilityLink? = nil
+    @State private var suppressLinkOnChange = false
+
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
@@ -75,6 +81,49 @@ struct AccountDetailView: View {
                                 .foregroundStyle(.secondary)
                             }
                             .padding(.top, 4)
+                        }
+                    }
+
+                    if account.type == .property {
+                        Section(header: GroupedSectionHeader("Financing")) {
+                            Picker("Liability Account", selection: $linkedLiabilityID) {
+                                Text("None").tag(nil as UUID?)
+                                ForEach(liabilityAccounts.filter { $0.id != account.id }, id: \.id) { liab in
+                                    let label = "\(liab.name) — \(liab.type.rawValue.capitalized)"
+                                    Text(label).tag(Optional(liab.id))
+                                }
+                            }
+                            .onChange(of: linkedLiabilityID) { newVal in
+                                if suppressLinkOnChange { return }
+                                // If the selection becomes nil because the currently linked account isn't in the available options (e.g., filtered out),
+                                // don't delete the existing link.
+                                if newVal == nil, let active = activeAssetLink, !liabilityAccounts.contains(where: { $0.id == active.liability.id }) {
+                                    return
+                                }
+                                updateAssetLiabilityLink(for: account, to: newVal)
+                            }
+
+                            // Show Equity and LTV when a liability is linked and we have balances
+                            if let liabID = linkedLiabilityID,
+                               let liab = liabilityAccounts.first(where: { $0.id == liabID }) {
+                                let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
+                                let debtMag: Decimal = {
+                                    let bal = lastBalanceSnapshot(for: liab)?.balance ?? 0
+                                    return bal < 0 ? -bal : bal
+                                }()
+                                if assetVal != 0 {
+                                    LabeledContent("Equity") {
+                                        Text(format(amount: assetVal - debtMag))
+                                    }
+                                    LabeledContent("LTV") {
+                                        Text(formatPercent(debtMag / assetVal))
+                                    }
+                                }
+                            }
+
+                            Text("Link a loan to track equity and LTV.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -373,7 +422,10 @@ struct AccountDetailView: View {
         }
         .task(id: account?.id) {
             AMLogging.log("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
-            if let account = account { await recomputeAccountDerivedData(for: account) }
+            if let account = account {
+                await recomputeAccountDerivedData(for: account)
+                await MainActor.run { loadAssetLiabilityLink(for: account) }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
             AMLogging.log("AccountDetailView received transactionsDidChange for accountID=\(accountID)", component: "AccountDetailView")
@@ -503,6 +555,71 @@ struct AccountDetailView: View {
         nf.numberStyle = .currency
         nf.currencyCode = settings.currencyCode
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
+    private func loadAssetLiabilityLink(for account: Account) {
+        suppressLinkOnChange = true
+        defer { suppressLinkOnChange = false }
+        do {
+            let assetID = account.id
+            let pred = #Predicate<AssetLiabilityLink> { link in
+                link.asset.id == assetID && link.endDate == nil
+            }
+            let desc = FetchDescriptor<AssetLiabilityLink>(predicate: pred)
+            if let link = try modelContext.fetch(desc).first {
+                self.activeAssetLink = link
+                self.linkedLiabilityID = link.liability.id
+            } else {
+                self.activeAssetLink = nil
+                self.linkedLiabilityID = nil
+            }
+        } catch {
+            self.activeAssetLink = nil
+            self.linkedLiabilityID = nil
+        }
+    }
+
+    private func updateAssetLiabilityLink(for asset: Account, to newLiabilityID: UUID?) {
+        // Fetch any existing active links for this asset
+
+        // No-op if selection hasn't changed
+        if (self.activeAssetLink == nil && newLiabilityID == nil) || (self.activeAssetLink?.liability.id == newLiabilityID) {
+            return
+        }
+
+        do {
+            let assetID = asset.id
+            let pred = #Predicate<AssetLiabilityLink> { link in
+                link.asset.id == assetID && link.endDate == nil
+            }
+            let desc = FetchDescriptor<AssetLiabilityLink>(predicate: pred)
+            let existing = try modelContext.fetch(desc)
+            // Remove existing active links if changing or unlinking
+            for link in existing {
+                modelContext.delete(link)
+            }
+            if let newID = newLiabilityID, let liab = liabilityAccounts.first(where: { $0.id == newID }) {
+                // Create a new link with a reasonable start date (use latest asset snapshot date if available)
+                let start = lastBalanceSnapshot(for: asset)?.asOfDate ?? Date()
+                let link = AssetLiabilityLink(asset: asset, liability: liab, startDate: start)
+                modelContext.insert(link)
+                self.activeAssetLink = link
+            } else {
+                self.activeAssetLink = nil
+            }
+            try modelContext.save()
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        } catch {
+            // Ignore errors for now
+        }
+    }
+
+    private func formatPercent(_ value: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .percent
+        nf.minimumFractionDigits = 2
+        nf.maximumFractionDigits = 2
+        return nf.string(from: NSDecimalNumber(decimal: value)) ?? "\(value * 100)%"
     }
 
     private func isInvalidInstitutionName(_ name: String?) -> Bool {

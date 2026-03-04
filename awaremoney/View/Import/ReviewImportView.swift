@@ -21,10 +21,9 @@ struct ReviewImportView: View {
     @State private var typicalPaymentParsed: Decimal? = nil
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
-
+    private var isEditing: Bool { focusedField != nil }
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable { case institution, typicalPayment, apr, balance(Int) }
-    @State private var isKeyboardVisible: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -47,25 +46,26 @@ struct ReviewImportView: View {
                 AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                 seedTypicalPaymentFromSentinelIfNeeded()
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button(action: { moveFocus(-1) }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    Button(action: { moveFocus(1) }) {
-                        Image(systemName: "chevron.right")
-                    }
-                    Spacer()
-                    Button(action: { commitAndDismissKeyboard() }) {
-                        Image(systemName: "checkmark")
+            .safeAreaInset(edge: .bottom) {
+                Group {
+                    if vm.isImporting {
+                        EmptyView().frame(height: 0)
+                    } else if isEditing {
+                        EditingAccessoryBar(
+                            canGoPrevious: canGoPrevious,
+                            canGoNext: canGoNext,
+                            onPrevious: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        bottomBar
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                isKeyboardVisible = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                isKeyboardVisible = false
+                .animation(.snappy, value: isEditing)
+                .animation(.snappy, value: vm.isImporting)
             }
             .onChange(of: focusedField) { _, newValue in
                 switch newValue {
@@ -80,11 +80,6 @@ struct ReviewImportView: View {
             .onDisappear {
                 // Ensure institution does not carry over to the next import
                 vm.userInstitutionName = ""
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !isKeyboardVisible {
-                bottomBar
             }
         }
         .sheet(isPresented: $showPDFSheet) {
@@ -389,6 +384,7 @@ struct ReviewImportView: View {
                 }
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .onChange(of: selectedAccountId, initial: false) { _, newValue in
             AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
         }
@@ -517,6 +513,46 @@ struct ReviewImportView: View {
         }
     }
     
+//    private var editingAccessoryBar: some View {
+//        HStack(spacing: 16) {
+//
+//            Button { moveFocus(-1) } label: {
+//                Image(systemName: "chevron.left")
+//                    .font(.title2)
+//                    .frame(width: 44, height: 44)
+//                    .contentShape(Rectangle())
+//            }
+//            .buttonStyle(.plain)
+//            .disabled(!canGoPrevious)
+//            .accessibilityLabel("Previous field")
+//
+//            Button { moveFocus(1) } label: {
+//                Image(systemName: "chevron.right")
+//                    .font(.title2)
+//                    .frame(width: 44, height: 44)
+//                    .contentShape(Rectangle())
+//            }
+//            .buttonStyle(.plain)
+//            .disabled(!canGoNext)
+//            .accessibilityLabel("Next field")
+//
+//            Spacer()
+//
+//            Button { commitAndDismissKeyboard() } label: {
+//                Image(systemName: "checkmark")
+//                    .font(.title2.weight(.semibold))
+//                    .frame(width: 44, height: 44)
+//                    .contentShape(Rectangle())
+//            }
+//            .buttonStyle(.plain)
+//            .accessibilityLabel("Done editing")
+//        }
+//        .padding(.horizontal, 12)
+//        .padding(.vertical, 10)
+//        .background(.bar)
+//        .overlay(Divider(), alignment: .top)
+//    }
+//    
     private var accountSelectionBinding: Binding<UUID?> {
         Binding(
             get: { selectedAccountId },
@@ -817,6 +853,15 @@ struct ReviewImportView: View {
         return order
     }
 
+    private var canGoPrevious: Bool {
+        guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
+        return i > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
+        return i < focusOrder.count - 1
+    }
     private func moveFocus(_ delta: Int) {
         let order = focusOrder
         guard !order.isEmpty else { return }
