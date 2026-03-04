@@ -262,4 +262,6 @@ public struct EditingAccessoryBar: View {
         .overlay(Divider(), alignment: .top)
     }
 }
-
+extension UIDevice {
+    static let type = UIDevice.current.localizedModel
+}

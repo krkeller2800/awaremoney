@@ -62,6 +62,7 @@ struct DebtSummaryView: View {
         return false
         #endif
     }
+    private var isEditing: Bool { focusedField != nil }
 
     var body: some View {
         NavigationStack {
@@ -293,6 +294,7 @@ struct DebtSummaryView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Projection plan")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -427,30 +429,28 @@ struct DebtSummaryView: View {
                         planErrorMessage = nil
                     }
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button { focusPrevious() } label: { Image(systemName: "chevron.left") }
-                    Button { focusNext() } label: { Image(systemName: "chevron.right") }
-                    Spacer()
-                    Button { commitAndDismissKeyboard() } label: { Image(systemName: "checkmark") }
-                }
-                #if os(iOS)
-                if isPhone, focusedField == .monthlyBudget {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            commitAndDismissKeyboard()
-                        } label: {
-                            Image(systemName: "keyboard.chevron.compact.down")
-                        }
-                        .accessibilityIdentifier("dismissKeyboardButton")
-                        .help("Dismiss Keyboard")
-                    }
-                }
-                #endif
             }
             .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(planErrorMessage ?? "")
+            }
+            .safeAreaInset(edge: .bottom) {
+                Group {
+                    if isEditing {
+                        EditingAccessoryBar(
+                            canGoPrevious: canGoPrevious,
+                            canGoNext: canGoNext,
+                            onPrevious: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        EmptyView().frame(height: 0)
+                    }
+                }
+                .animation(.snappy, value: isEditing)
             }
         }
     }
@@ -476,6 +476,27 @@ struct DebtSummaryView: View {
             focusedField = focusOrder[newIdx]
         } else {
             focusedField = focusOrder.first
+        }
+    }
+    
+    private var canGoPrevious: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx < focusOrder.count - 1
+    }
+
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { return }
+        if let current = focusedField, let idx = order.firstIndex(of: current) {
+            let nextIdx = max(0, min(order.count - 1, idx + delta))
+            focusedField = order[nextIdx]
+        } else {
+            focusedField = order.first
         }
     }
 
@@ -1080,6 +1101,7 @@ extension UIView {
     }
 }
 #endif
+
 
 
 

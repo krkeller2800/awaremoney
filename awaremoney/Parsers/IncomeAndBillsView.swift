@@ -567,12 +567,29 @@ private struct AddCashFlowItemView: View {
     @State private var notesIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
-    // Removed: @FocusState private var focusedField: Field?
+    @FocusState private var focusedField: Field?
+
+    private var isEditing: Bool { nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || (focusedField != nil) }
+
+    private var canGoPrevious: Bool {
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return false }
+        return idx > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return false }
+        return idx < fieldOrder.count - 1
+    }
+
+    private func moveFocus(_ delta: Int) {
+        if delta < 0 { goPrev() } else if delta > 0 { goNext() }
+    }
 
     private func focus(_ field: Field) {
         nameIsFirstResponder = (field == .name)
         amountIsFirstResponder = (field == .amount)
         notesIsFirstResponder = (field == .notes)
+        focusedField = field
     }
 
     private func currentField() -> Field? {
@@ -596,97 +613,100 @@ private struct AddCashFlowItemView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Details") {
-                    Label("Enter a name and a valid amount to enable Add.", systemImage: "info.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .opacity(isValid ? 0 : 1)
-                        .accessibilityHidden(isValid)
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        SelectAllTextField(
-                            text: $name,
-                            placeholder: "Name",
-                            isFirstResponder: $nameIsFirstResponder,
-                            returnKeyType: .next,
-                            onPrev: { goPrev() },
-                            onNext: { focus(.amount) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel("Name")
-
-                        CurrencyAmountField(
-                            value: $amountValue,
-                            placeholder: "Amount",
-                            currencyCode: settings.currencyCode,
-                            isFirstResponder: $amountIsFirstResponder,
-                            onPrev: { focus(.name) },
-                            onNext: { focus(.notes) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
-                        .accessibilityLabel("Amount")
-                    }
-                    Picker("Frequency", selection: $frequency) {
-                        Text("Monthly").tag(PaymentFrequency.monthly)
-                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
-                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
-                        Text("Weekly").tag(PaymentFrequency.weekly)
-                        Text("Yearly").tag(PaymentFrequency.yearly)
-                    }
-                    .onChange(of: frequency) { _, newValue in
-                        if initialKind == .income {
-                            switch newValue.normalized {
-                            case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                if dayOfMonth == nil { dayOfMonth = 1 }
-                                firstPaymentDate = nil
-                            default:
-                                break
-                            }
-                        }
-                    }
-                    if initialKind == .income && frequency == .monthly {
-                        Picker("SSA Wednesday", selection: Binding<Int?>(
-                            get: { ssaWednesday },
-                            set: { ssaWednesday = $0 }
-                        )) {
-                            Text("None").tag(nil as Int?)
-                            Text("2nd Wednesday").tag(Optional(2))
-                            Text("3rd Wednesday").tag(Optional(3))
-                            Text("4th Wednesday").tag(Optional(4))
-                        }
-                        Text("For Social Security income paid on a specific Wednesday of the month.")
+            ZStack {
+                Form {
+                    Section("Details") {
+                        Label("Enter a name and a valid amount to enable Add.", systemImage: "info.circle")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                    }
-                    if ssaWednesday == nil {
-                        switch frequency.normalized {
-                        case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                            Picker("Day of Month", selection: Binding<Int?>(
-                                get: { dayOfMonth },
-                                set: { dayOfMonth = $0 }
+                            .opacity(isValid ? 0 : 1)
+                            .accessibilityHidden(isValid)
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            SelectAllTextField(
+                                text: $name,
+                                placeholder: "Name",
+                                isFirstResponder: $nameIsFirstResponder,
+                                returnKeyType: .next,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Name")
+
+                            CurrencyAmountField(
+                                value: $amountValue,
+                                placeholder: "Amount",
+                                currencyCode: settings.currencyCode,
+                                isFirstResponder: $amountIsFirstResponder,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+                            .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                            .accessibilityLabel("Amount")
+                        }
+                        Picker("Frequency", selection: $frequency) {
+                            Text("Monthly").tag(PaymentFrequency.monthly)
+                            Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                            Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                            Text("Weekly").tag(PaymentFrequency.weekly)
+                            Text("Yearly").tag(PaymentFrequency.yearly)
+                        }
+                        .onChange(of: frequency) { _, newValue in
+                            if initialKind == .income {
+                                switch newValue.normalized {
+                                case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                    if dayOfMonth == nil { dayOfMonth = 1 }
+                                    firstPaymentDate = nil
+                                default:
+                                    break
+                                }
+                            }
+                        }
+                        if initialKind == .income && frequency == .monthly {
+                            Picker("SSA Wednesday", selection: Binding<Int?>(
+                                get: { ssaWednesday },
+                                set: { ssaWednesday = $0 }
                             )) {
                                 Text("None").tag(nil as Int?)
-                                ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                Text("2nd Wednesday").tag(Optional(2))
+                                Text("3rd Wednesday").tag(Optional(3))
+                                Text("4th Wednesday").tag(Optional(4))
                             }
-                        default:
-                            DatePicker("First Payment Date", selection: Binding<Date>(
-                                get: { firstPaymentDate ?? Date() },
-                                set: { firstPaymentDate = $0 }
-                            ), displayedComponents: .date)
+                            Text("For Social Security income paid on a specific Wednesday of the month.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
+                        if ssaWednesday == nil {
+                            switch frequency.normalized {
+                            case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                Picker("Day of Month", selection: Binding<Int?>(
+                                    get: { dayOfMonth },
+                                    set: { dayOfMonth = $0 }
+                                )) {
+                                    Text("None").tag(nil as Int?)
+                                    ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                }
+                            default:
+                                DatePicker("First Payment Date", selection: Binding<Date>(
+                                    get: { firstPaymentDate ?? Date() },
+                                    set: { firstPaymentDate = $0 }
+                                ), displayedComponents: .date)
+                            }
+                        }
+                        SelectAllTextField(
+                            text: $notes,
+                            placeholder: "Notes",
+                            isFirstResponder: $notesIsFirstResponder,
+                            returnKeyType: .done,
+                            onPrev: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
                     }
-                    SelectAllTextField(
-                        text: $notes,
-                        placeholder: "Notes",
-                        isFirstResponder: $notesIsFirstResponder,
-                        returnKeyType: .done,
-                        onPrev: { focus(.amount) },
-                        onNext: { goNext() },
-                        onDone: { commitAndDismissKeyboard() }
-                    )
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle(initialKind == .income ? "Add Income" : "Add Bill")
             .toolbar {
@@ -714,6 +734,14 @@ private struct AddCashFlowItemView: View {
                             nameIsFirstResponder = false
                             amountIsFirstResponder = false
                             notesIsFirstResponder = false
+                            focusedField = nil
+                            #if canImport(UIKit)
+                            let keyWindow = UIApplication.shared.connectedScenes
+                                .compactMap { $0 as? UIWindowScene }
+                                .flatMap { $0.windows }
+                                .first { $0.isKeyWindow }
+                            keyWindow?.endEditing(true)
+                            #endif
                             dismiss()
                         }
                     } label: {
@@ -723,36 +751,24 @@ private struct AddCashFlowItemView: View {
                     .disabled(!isValid)
                 }
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button(action: { goPrev() }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .disabled({
-                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
-                        return idx == 0
-                    }())
-
-                    Button(action: { goNext() }) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .disabled({
-                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
-                        return idx >= fieldOrder.count - 1
-                    }())
-
-                    Spacer()
-
-                    Button(action: { commitAndDismissKeyboard() }) {
-                        Image(systemName: "checkmark.circle.fill")
+            .safeAreaInset(edge: .bottom) {
+                Group {
+                    if isEditing {
+                        EditingAccessoryBar(
+                            canGoPrevious: canGoPrevious,
+                            canGoNext: canGoNext,
+                            onPrevious: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        EmptyView().frame(height: 0)
                     }
                 }
+                .animation(.snappy, value: isEditing)
             }
         }
-        // Removed: .onChange(of: focusedField) { ... }
-        // Removed: .onChange(of: nameIsFirstResponder) { ... }
-        // Removed: .onChange(of: amountIsFirstResponder) { ... }
-        // Removed: .onChange(of: notesIsFirstResponder) { ... }
         .onAppear {
             if initialKind == .income {
                 switch frequency.normalized {
@@ -761,6 +777,21 @@ private struct AddCashFlowItemView: View {
                 default: break
                 }
             }
+        }
+        .onChange(of: focusedField) { _, newValue in
+            nameIsFirstResponder = (newValue == .name)
+            amountIsFirstResponder = (newValue == .amount)
+            notesIsFirstResponder = (newValue == .notes)
+            selectAllInFirstResponder()
+        }
+        .onChange(of: nameIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .name } else if focusedField == .name && !amountIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
+        }
+        .onChange(of: amountIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .amount } else if focusedField == .amount && !nameIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
+        }
+        .onChange(of: notesIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .notes } else if focusedField == .notes && !nameIsFirstResponder && !amountIsFirstResponder { focusedField = nil }
         }
     }
 
@@ -796,12 +827,28 @@ private struct AddCashFlowItemView: View {
             nameIsFirstResponder = false
             amountIsFirstResponder = false
             notesIsFirstResponder = false
+            focusedField = nil
+            #if canImport(UIKit)
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }
+            keyWindow?.endEditing(true)
+            #endif
             dismiss()
         } else {
             // If invalid, just dismiss the keyboard
             nameIsFirstResponder = false
             amountIsFirstResponder = false
             notesIsFirstResponder = false
+            focusedField = nil
+            #if canImport(UIKit)
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }
+            keyWindow?.endEditing(true)
+            #endif
         }
     }
 
@@ -810,6 +857,14 @@ private struct AddCashFlowItemView: View {
         var parts = s.split(separator: " ").map(String.init)
         parts.removeAll { $0.hasPrefix("[SSA_WED]=") }
         return parts.joined(separator: " ")
+    }
+
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
+        #if canImport(UIKit)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 }
 
@@ -834,12 +889,29 @@ private struct EditCashFlowItemView: View {
     @State private var notesIsFirstResponder: Bool = false
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
-    // Removed: @FocusState private var focusedField: Field?
+    @FocusState private var focusedField: Field?
+
+    private var isEditing: Bool { nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || (focusedField != nil) }
+
+    private var canGoPrevious: Bool {
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return false }
+        return idx > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return false }
+        return idx < fieldOrder.count - 1
+    }
+
+    private func moveFocus(_ delta: Int) {
+        if delta < 0 { goPrev() } else if delta > 0 { goNext() }
+    }
 
     private func focus(_ field: Field) {
         nameIsFirstResponder = (field == .name)
         amountIsFirstResponder = (field == .amount)
         notesIsFirstResponder = (field == .notes)
+        focusedField = field
     }
 
     private func currentField() -> Field? {
@@ -863,97 +935,102 @@ private struct EditCashFlowItemView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Details") {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        SelectAllTextField(
-                            text: $name,
-                            placeholder: "Name",
-                            isFirstResponder: $nameIsFirstResponder,
-                            returnKeyType: .next,
-                            onPrev: { goPrev() },
-                            onNext: { focus(.amount) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel("Name")
+            ZStack {
+                Form {
+                    Section("Details") {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            SelectAllTextField(
+                                text: $name,
+                                placeholder: "Name",
+                                isFirstResponder: $nameIsFirstResponder,
+                                returnKeyType: .next,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("Name")
 
-                        CurrencyAmountField(
-                            value: $amountValue,
-                            placeholder: "Amount",
-                            currencyCode: settings.currencyCode,
-                            isFirstResponder: $amountIsFirstResponder,
-                            onPrev: { focus(.name) },
-                            onNext: { focus(.notes) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
-                        .accessibilityLabel("Amount")
-                    }
-                    Picker("Frequency", selection: $frequency) {
-                        Text("Monthly").tag(PaymentFrequency.monthly)
-                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
-                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
-                        Text("Weekly").tag(PaymentFrequency.weekly)
-                        Text("Yearly").tag(PaymentFrequency.yearly)
-                    }
-                    .onChange(of: frequency) { _, newValue in
-                        if isIncome {
-                            switch newValue.normalized {
-                            case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                if dayOfMonth == nil { dayOfMonth = 1 }
-                                firstPaymentDate = nil
-                            default:
-                                break
+                            CurrencyAmountField(
+                                value: $amountValue,
+                                placeholder: "Amount",
+                                currencyCode: settings.currencyCode,
+                                isFirstResponder: $amountIsFirstResponder,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+                            .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                            .accessibilityLabel("Amount")
+                        }
+                        Picker("Frequency", selection: $frequency) {
+                            Text("Monthly").tag(PaymentFrequency.monthly)
+                            Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                            Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                            Text("Weekly").tag(PaymentFrequency.weekly)
+                            Text("Yearly").tag(PaymentFrequency.yearly)
+                        }
+                        .onChange(of: frequency) { _, newValue in
+                            if isIncome {
+                                switch newValue.normalized {
+                                case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                    if dayOfMonth == nil { dayOfMonth = 1 }
+                                    firstPaymentDate = nil
+                                default:
+                                    break
+                                }
                             }
                         }
-                    }
-                    if isIncome && frequency == .monthly {
-                        Picker("SSA Wednesday", selection: Binding<Int?>(
-                            get: { ssaWednesday },
-                            set: { ssaWednesday = $0 }
-                        )) {
-                            Text("None").tag(nil as Int?)
-                            Text("2nd Wednesday").tag(Optional(2))
-                            Text("3rd Wednesday").tag(Optional(3))
-                            Text("4th Wednesday").tag(Optional(4))
-                        }
-                        Text("For Social Security income paid on a specific Wednesday of the month.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    if ssaWednesday == nil {
-                        switch frequency.normalized {
-                        case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                            Picker("Day of Month", selection: Binding<Int?>(
-                                get: { dayOfMonth },
-                                set: { dayOfMonth = $0 }
+                        if isIncome && frequency == .monthly {
+                            Picker("SSA Wednesday", selection: Binding<Int?>(
+                                get: { ssaWednesday },
+                                set: { ssaWednesday = $0 }
                             )) {
                                 Text("None").tag(nil as Int?)
-                                ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                Text("2nd Wednesday").tag(Optional(2))
+                                Text("3rd Wednesday").tag(Optional(3))
+                                Text("4th Wednesday").tag(Optional(4))
                             }
-                        default:
-                            DatePicker("First Payment Date", selection: Binding<Date>(
-                                get: { firstPaymentDate ?? Date() },
-                                set: { firstPaymentDate = $0 }
-                            ), displayedComponents: .date)
+                            Text("For Social Security income paid on a specific Wednesday of the month.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
+                        if ssaWednesday == nil {
+                            switch frequency.normalized {
+                            case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                Picker("Day of Month", selection: Binding<Int?>(
+                                    get: { dayOfMonth },
+                                    set: { dayOfMonth = $0 }
+                                )) {
+                                    Text("None").tag(nil as Int?)
+                                    ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                }
+                            default:
+                                DatePicker("First Payment Date", selection: Binding<Date>(
+                                    get: { firstPaymentDate ?? Date() },
+                                    set: { firstPaymentDate = $0 }
+                                ), displayedComponents: .date)
+                            }
+                        }
+                        SelectAllTextField(
+                            text: $notes,
+                            placeholder: "Notes",
+                            isFirstResponder: $notesIsFirstResponder,
+                            returnKeyType: .done,
+                            onPrev: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
                     }
-                    SelectAllTextField(
-                        text: $notes,
-                        placeholder: "Notes",
-                        isFirstResponder: $notesIsFirstResponder,
-                        returnKeyType: .done,
-                        onPrev: { focus(.amount) },
-                        onNext: { goNext() },
-                        onDone: { commitAndDismissKeyboard() }
-                    )
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle(isIncome ? "Edit Income" : "Edit Bill")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
+                if UIDevice.type == "iPad" {
+                    ToolbarItem(placement: .cancellationAction) {
+                        PlanToolbarButton("Cancel",fixedWidth: 70) { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
@@ -979,6 +1056,14 @@ private struct EditCashFlowItemView: View {
                             item.firstPaymentDate = firstPaymentDate
                             item.notes = finalNotes
                             onSave()
+                            focusedField = nil
+                            #if canImport(UIKit)
+                            let keyWindow = UIApplication.shared.connectedScenes
+                                .compactMap { $0 as? UIWindowScene }
+                                .flatMap { $0.windows }
+                                .first { $0.isKeyWindow }
+                            keyWindow?.endEditing(true)
+                            #endif
                             dismiss()
                         }
                     } label: {
@@ -995,36 +1080,24 @@ private struct EditCashFlowItemView: View {
                     }
                 }
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button(action: { goPrev() }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .disabled({
-                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
-                        return idx == 0
-                    }())
-
-                    Button(action: { goNext() }) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .disabled({
-                        guard let current = currentField(), let idx = fieldOrder.firstIndex(of: current) else { return true }
-                        return idx >= fieldOrder.count - 1
-                    }())
-
-                    Spacer()
-
-                    Button(action: { commitAndDismissKeyboard() }) {
-                        Image(systemName: "checkmark.circle.fill")
+            .safeAreaInset(edge: .bottom) {
+                Group {
+                    if isEditing {
+                        EditingAccessoryBar(
+                            canGoPrevious: canGoPrevious,
+                            canGoNext: canGoNext,
+                            onPrevious: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        EmptyView().frame(height: 0)
                     }
                 }
+                .animation(.snappy, value: isEditing)
             }
         }
-        // Removed: .onChange(of: focusedField) { ... }
-        // Removed: .onChange(of: nameIsFirstResponder) { ... }
-        // Removed: .onChange(of: amountIsFirstResponder) { ... }
-        // Removed: .onChange(of: notesIsFirstResponder) { ... }
         .onAppear {
             // Seed state from the existing item
             name = item.name
@@ -1041,6 +1114,21 @@ private struct EditCashFlowItemView: View {
                 default: break
                 }
             }
+        }
+        .onChange(of: focusedField) { _, newValue in
+            nameIsFirstResponder = (newValue == .name)
+            amountIsFirstResponder = (newValue == .amount)
+            notesIsFirstResponder = (newValue == .notes)
+            selectAllInFirstResponder()
+        }
+        .onChange(of: nameIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .name } else if focusedField == .name && !amountIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
+        }
+        .onChange(of: amountIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .amount } else if focusedField == .amount && !nameIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
+        }
+        .onChange(of: notesIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .notes } else if focusedField == .notes && !nameIsFirstResponder && !amountIsFirstResponder { focusedField = nil }
         }
     }
 
@@ -1065,9 +1153,31 @@ private struct EditCashFlowItemView: View {
             item.firstPaymentDate = firstPaymentDate
             item.notes = finalNotes
             onSave()
+            nameIsFirstResponder = false
+            amountIsFirstResponder = false
+            notesIsFirstResponder = false
+            focusedField = nil
+            #if canImport(UIKit)
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }
+            keyWindow?.endEditing(true)
+            #endif
             dismiss()
         } else {
             // If invalid, just dismiss the keyboard
+            nameIsFirstResponder = false
+            amountIsFirstResponder = false
+            notesIsFirstResponder = false
+            focusedField = nil
+            #if canImport(UIKit)
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }
+            keyWindow?.endEditing(true)
+            #endif
         }
     }
 
@@ -1087,6 +1197,14 @@ private struct EditCashFlowItemView: View {
             }
         }
         return nil
+    }
+
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
+        #if canImport(UIKit)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 }
 
@@ -1110,15 +1228,7 @@ private struct CurrencyAmountField: UIViewRepresentable {
         let formatted = context.coordinator.formatter.string(from: NSDecimalNumber(decimal: value)) ?? ""
         tf.text = formatted
 
-        // Add keyboard accessory toolbar with Prev/Next/Done
-        let toolbar = UIToolbar()
-        let prev = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), style: .plain, target: context.coordinator, action: #selector(Coordinator.prevTapped))
-        let next = UIBarButtonItem(image: UIImage(systemName: "chevron.right"), style: .plain, target: context.coordinator, action: #selector(Coordinator.nextTapped))
-        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-        let done = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle.fill"), style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
-        toolbar.items = [prev, next, flex, done]
-        toolbar.sizeToFit()
-        tf.inputAccessoryView = toolbar
+        // Removed: keyboard accessory toolbar with Prev/Next/Done
 
         return tf
     }
@@ -1218,15 +1328,7 @@ private struct SelectAllTextField: UIViewRepresentable {
         tf.returnKeyType = returnKeyType
         tf.borderStyle = .none
 
-        // Add keyboard accessory toolbar with Prev/Next/Done
-        let toolbar = UIToolbar()
-        let prev = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), style: .plain, target: context.coordinator, action: #selector(Coordinator.prevTapped))
-        let next = UIBarButtonItem(image: UIImage(systemName: "chevron.right"), style: .plain, target: context.coordinator, action: #selector(Coordinator.nextTapped))
-        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-        let done = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle.fill"), style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
-        toolbar.items = [prev, next, flex, done]
-        toolbar.sizeToFit()
-        tf.inputAccessoryView = toolbar
+        // Removed: keyboard accessory toolbar with Prev/Next/Done
 
         return tf
     }
@@ -1288,5 +1390,6 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
+
 
 

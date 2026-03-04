@@ -32,6 +32,8 @@ struct AccountDetailView: View {
         case paymentAmount
     }
 
+    private var isEditing: Bool { focusedField != nil }
+
     init(accountID: UUID) {
         self.accountID = accountID
         _fetchedAccounts = Query(filter: #Predicate<Account> { $0.id == accountID }, sort: [])
@@ -93,7 +95,7 @@ struct AccountDetailView: View {
                                     Text(label).tag(Optional(liab.id))
                                 }
                             }
-                            .onChange(of: linkedLiabilityID) { newVal in
+                            .onChange(of: linkedLiabilityID) { _, newVal in
                                 if suppressLinkOnChange { return }
                                 // If the selection becomes nil because the currently linked account isn't in the available options (e.g., filtered out),
                                 // don't delete the existing link.
@@ -302,6 +304,7 @@ struct AccountDetailView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .scrollDismissesKeyboard(.interactively)
                 .frame(maxWidth: 760, alignment: .center)
                 .padding(.horizontal)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -360,55 +363,6 @@ struct AccountDetailView: View {
                             .accessibilityLabel("Delete Property")
                         }
                     }
-
-                    ToolbarItemGroup(placement: .keyboard) {
-                        // Determine the ordered fields that are currently visible
-                        let fields: [Field] = {
-                            var arr: [Field] = [.institution]
-                            if account.type == .loan || account.type == .creditCard {
-                                arr.append(.paymentAmount)
-                            }
-                            return arr
-                        }()
-
-                        Button {
-                            guard let current = focusedField,
-                                  let idx = fields.firstIndex(of: current),
-                                  idx > 0 else { return }
-                            focusedField = fields[idx - 1]
-                        } label: {
-                            Image(systemName: "chevron.left")
-                        }
-                        .disabled({
-                            guard let current = focusedField,
-                                  let idx = fields.firstIndex(of: current) else { return true }
-                            return idx == 0
-                        }())
-
-                        Button {
-                            guard let current = focusedField,
-                                  let idx = fields.firstIndex(of: current),
-                                  idx < fields.count - 1 else { return }
-                            focusedField = fields[idx + 1]
-                        } label: {
-                            Image(systemName: "chevron.right")
-                        }
-                        .disabled({
-                            guard let current = focusedField,
-                                  let idx = fields.firstIndex(of: current) else { return true }
-                            return idx >= fields.count - 1
-                        }())
-
-                        Spacer()
-
-                        Button {
-                            // Commit any pending edits and dismiss the keyboard
-                            try? modelContext.save()
-                            focusedField = nil
-                        } label: {
-                            Image(systemName: "checkmark")
-                        }
-                    }
                 }
             } else {
                 ContentUnavailableView("Account no longer exists", systemImage: "exclamationmark.triangle")
@@ -440,6 +394,23 @@ struct AccountDetailView: View {
                 selectAllInFirstResponder()
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if let account = account, isEditing {
+                    EditingAccessoryBar(
+                        canGoPrevious: canGoPrevious(for: account),
+                        canGoNext: canGoNext(for: account),
+                        onPrevious: { moveFocus(-1, for: account) },
+                        onNext: { moveFocus(1, for: account) },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    EmptyView().frame(height: 0)
+                }
+            }
+            .animation(.snappy, value: isEditing)
+        }
     }
 
     private var isIPadLandscape: Bool {
@@ -447,6 +418,52 @@ struct AccountDetailView: View {
         return UIDevice.current.userInterfaceIdiom == .pad && UIScreen.main.bounds.width > UIScreen.main.bounds.height
         #else
         return false
+        #endif
+    }
+
+    private func focusOrder(for account: Account) -> [Field] {
+        var arr: [Field] = [.institution]
+        if account.type == .loan || account.type == .creditCard {
+            arr.append(.paymentAmount)
+        }
+        return arr
+    }
+
+    private func canGoPrevious(for account: Account) -> Bool {
+        guard let current = focusedField else { return false }
+        let order = focusOrder(for: account)
+        guard let idx = order.firstIndex(of: current) else { return false }
+        return idx > 0
+    }
+
+    private func canGoNext(for account: Account) -> Bool {
+        guard let current = focusedField else { return false }
+        let order = focusOrder(for: account)
+        guard let idx = order.firstIndex(of: current) else { return false }
+        return idx < order.count - 1
+    }
+
+    private func moveFocus(_ delta: Int, for account: Account) {
+        let order = focusOrder(for: account)
+        guard !order.isEmpty else { return }
+        if let current = focusedField, let idx = order.firstIndex(of: current) {
+            let nextIdx = max(0, min(order.count - 1, idx + delta))
+            focusedField = order[nextIdx]
+        } else {
+            focusedField = order.first
+        }
+    }
+
+    private func commitAndDismissKeyboard() {
+        // Commit any pending edits and dismiss the keyboard
+        try? modelContext.save()
+        focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
         #endif
     }
 

@@ -42,8 +42,37 @@ struct ImportBatchDetailView: View {
 
     @FocusState private var focusedField: FocusedField?
 
+    private var isEditing: Bool { focusedField != nil }
+
     private enum FocusedField: Hashable {
         case balanceAmount(UUID)
+    }
+
+    // Focus navigation scaffolding (unified editing accessory support)
+    private var focusOrder: [FocusedField] {
+        // Order balance amount fields top-to-bottom
+        balances.map { .balanceAmount($0.id) }
+    }
+
+    private var canGoPrevious: Bool {
+        guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
+        return i > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
+        return i < focusOrder.count - 1
+    }
+
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { return }
+        if let current = focusedField, let idx = order.firstIndex(of: current) {
+            let nextIdx = (idx + delta + order.count) % order.count
+            focusedField = order[nextIdx]
+        } else {
+            focusedField = order.first
+        }
     }
 
     var body: some View {
@@ -55,11 +84,6 @@ struct ImportBatchDetailView: View {
                     .navigationTitle("Update Transactions")
                     .onAppear { AMLogging.log("ImportBatchDetailView appear batchID=\(batchID)", component: "ImportBatchDetailView") }
                     .task(id: batchID) { await load() }
-                    .safeAreaInset(edge: .bottom) {
-                        if focusedField == nil {
-                            bottomBar()
-                        }
-                    }
                     .fileImporter(
                         isPresented: $isImporterPresented,
                         allowedContentTypes: [UTType.commaSeparatedText, .tabSeparatedText, .text, .plainText, .pdf],
@@ -89,24 +113,6 @@ struct ImportBatchDetailView: View {
                                 Image(systemName: "trash")
                             }
                         }
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Button {
-                                focusPreviousField()
-                            } label: {
-                                Image(systemName: "chevron.left")
-                            }
-                            Button {
-                                focusNextField()
-                            } label: {
-                                Image(systemName: "chevron.right")
-                            }
-                            Spacer()
-                            Button {
-                                commitAndDismissKeyboard()
-                            } label: {
-                                Image(systemName: "checkmark")
-                            }
-                        }
                     }
                     .alert("Delete Batch?", isPresented: $showDeleteAlert) {
                         Button("Delete", role: .destructive) {
@@ -124,6 +130,26 @@ struct ImportBatchDetailView: View {
                 ProgressView().task { await load() }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if isEditing {
+                    EditingAccessoryBar(
+                        canGoPrevious: canGoPrevious,
+                        canGoNext: canGoNext,
+                        onPrevious: { moveFocus(-1) },
+                        onNext: { moveFocus(1) },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else if batch != nil {
+                    bottomBar()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    EmptyView().frame(height: 0)
+                }
+            }
+            .animation(.snappy, value: isEditing)
+        }
     }
 
     @ViewBuilder private func listContent(for batch: ImportBatch) -> some View {
@@ -133,6 +159,7 @@ struct ImportBatchDetailView: View {
             balancesSection(for: batch)
             holdingsSection()
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     @ViewBuilder private func batchSection(_ batch: ImportBatch) -> some View {

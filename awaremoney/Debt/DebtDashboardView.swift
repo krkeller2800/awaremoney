@@ -406,6 +406,20 @@ struct DebtDetailView: View {
     private enum Field: Hashable { case apr, payment }
     @State private var showProjection: Bool = false
 
+    private var isEditing: Bool { focusedField != nil }
+
+    private var focusOrder: [Field] { [.payment, .apr] }
+
+    private var canGoPrevious: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx < focusOrder.count - 1
+    }
+
     var body: some View {
         Form {
             Section("Overview") {
@@ -464,25 +478,7 @@ struct DebtDetailView: View {
                     .disabled(absDecimal(latestBalance(account)) <= 0)
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Button(action: { moveFocus(-1) }) {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(focusedField == nil || focusedField == focusOrder.first)
-
-                Button(action: { moveFocus(1) }) {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(focusedField == nil || focusedField == focusOrder.last)
-
-                Spacer()
-
-                Button(action: { commitAndDismissKeyboard() }) {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(account.name)
         .task(id: account.id) {
             initializeState()
@@ -509,9 +505,24 @@ struct DebtDetailView: View {
                     }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if isEditing {
+                    EditingAccessoryBar(
+                        canGoPrevious: canGoPrevious,
+                        canGoNext: canGoNext,
+                        onPrevious: { moveFocus(-1) },
+                        onNext: { moveFocus(1) },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    EmptyView().frame(height: 0)
+                }
+            }
+            .animation(.snappy, value: isEditing)
+        }
     }
-
-    private var focusOrder: [Field] { [.payment, .apr] }
 
     private func moveFocus(_ delta: Int) {
         let order = focusOrder
@@ -534,6 +545,13 @@ struct DebtDetailView: View {
             self.paymentInput = formatAmountForInput(pay)
         }
         focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
     }
 
     @MainActor private func selectAllOnFocus(_ field: Field?) {

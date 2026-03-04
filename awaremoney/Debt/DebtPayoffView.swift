@@ -16,6 +16,20 @@ struct DebtPayoffView: View {
     enum Field: Hashable { case apr, typical }
     @FocusState private var focusedField: Field?
 
+    private var isEditing: Bool { focusedField != nil }
+
+    private var focusOrder: [Field] { [.apr, .typical] }
+
+    private var canGoPrevious: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx > 0
+    }
+
+    private var canGoNext: Bool {
+        guard let focusedField, let idx = focusOrder.firstIndex(of: focusedField) else { return false }
+        return idx < focusOrder.count - 1
+    }
+
     var body: some View {
         List {
             Section("Account") {
@@ -112,32 +126,8 @@ struct DebtPayoffView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Debt Payoff")
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Button(action: { moveFocus(direction: -1) }) {
-                    Image(systemName: "chevron.left")
-                }
-                .labelStyle(.iconOnly)
-
-                Button(action: { moveFocus(direction: +1) }) {
-                    Image(systemName: "chevron.right")
-                }
-                .labelStyle(.iconOnly)
-
-                Spacer()
-
-                Button(action: {
-                    applyAPRIfParsable()
-                    applyPaymentIfParsable()
-                    viewModel.computeVarianceAgainstLatestStatement()
-                    focusedField = nil
-                }) {
-                    Image(systemName: "checkmark.circle.fill")
-                }
-                .labelStyle(.iconOnly)
-            }
-        }
         .onAppear {
             // Seed UI fields from model
             aprInput = aprInputForUI()
@@ -151,16 +141,48 @@ struct DebtPayoffView: View {
                 selectAllInFirstResponder()
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if isEditing {
+                    EditingAccessoryBar(
+                        canGoPrevious: canGoPrevious,
+                        canGoNext: canGoNext,
+                        onPrevious: { moveFocus(-1) },
+                        onNext: { moveFocus(1) },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    EmptyView().frame(height: 0)
+                }
+            }
+            .animation(.snappy, value: isEditing)
+        }
     }
 
-    private func moveFocus(direction: Int) {
-        let order: [Field] = [.apr, .typical]
-        guard let current = focusedField, let idx = order.firstIndex(of: current) else {
-            focusedField = .apr
-            return
+    private func moveFocus(_ delta: Int) {
+        let order = focusOrder
+        guard !order.isEmpty else { return }
+        if let current = focusedField, let idx = order.firstIndex(of: current) {
+            let nextIdx = max(0, min(order.count - 1, idx + delta))
+            focusedField = order[nextIdx]
+        } else {
+            focusedField = order.first
         }
-        let nextIndex = max(0, min(order.count - 1, idx + direction))
-        focusedField = order[nextIndex]
+    }
+
+    private func commitAndDismissKeyboard() {
+        applyAPRIfParsable()
+        applyPaymentIfParsable()
+        viewModel.computeVarianceAgainstLatestStatement()
+        focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
     }
 
     private func formatCurrency(_ amount: Decimal) -> String {
