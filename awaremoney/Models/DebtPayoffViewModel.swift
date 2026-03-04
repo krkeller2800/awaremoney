@@ -50,38 +50,16 @@ final class DebtPayoffViewModel: ObservableObject {
 
     func recompute(asOf: Date = Date()) {
         varianceMessage = nil
-        // Establish baseline from the most recent BalanceSnapshot
-        guard let latest = latestSnapshot() else {
-            projection = []
-            payoffDate = nil
-            confidence = 0.2
-            return
-        }
-
-        let startingBalance = owedAmount(fromSnapshot: latest)
-        let apr = aprForProjection(asOf: latest.asOfDate)
-        let payment = typicalPaymentAmount()
-        let kind = debtKind()
 
         do {
-            let sDay = Calendar.current.component(.day, from: latest.asOfDate)
-            let start = statementDate(onOrBefore: latest.asOfDate, day: sDay)
-            let points = try DebtProjectionEngine.project(
-                kind: kind,
-                startingBalance: startingBalance,
-                apr: apr,
-                payment: payment,
-                startDate: start,
-                maxMonths: 600
-            )
-            projection = points
-            if let idx = points.firstIndex(where: { $0.balance == 0 }) {
-                let zeroDate = points[idx].date
-                payoffDate = statementDate(onOrBefore: zeroDate, day: sDay)
+            let result = try PayoffCalculator.project(for: account, asOf: asOf)
+            projection = result.points
+            payoffDate = result.payoffDate
+            if let latest = latestSnapshot() {
+                confidence = computeConfidence(since: latest.asOfDate, asOf: asOf)
             } else {
-                payoffDate = nil
+                confidence = 0.2
             }
-            confidence = computeConfidence(since: latest.asOfDate, asOf: asOf)
         } catch {
             projection = []
             payoffDate = nil
@@ -158,23 +136,6 @@ final class DebtPayoffViewModel: ObservableObject {
             // Treat other types as loans for projection fallback
             return .loan
         }
-    }
-
-    private func statementDate(onOrBefore date: Date, day: Int) -> Date {
-        let cal = Calendar.current
-        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
-        let range = cal.range(of: .day, in: .month, for: monthStart)!
-        let clampedDay = min(max(1, day), range.count)
-        var comps = cal.dateComponents([.year, .month], from: monthStart)
-        comps.day = clampedDay
-        let candidate = cal.date(from: comps)!
-        if candidate <= date { return candidate }
-        let prevMonth = cal.date(byAdding: DateComponents(month: -1), to: monthStart)!
-        let prevRange = cal.range(of: .day, in: .month, for: prevMonth)!
-        let prevClamped = min(max(1, day), prevRange.count)
-        var prevComps = cal.dateComponents([.year, .month], from: prevMonth)
-        prevComps.day = prevClamped
-        return cal.date(from: prevComps)!
     }
 
     private func normalizeToMonth(_ date: Date) -> Date {

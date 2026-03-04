@@ -104,7 +104,6 @@ struct DebtSummaryView: View {
                     }
                     ToolbarItem(placement: .primaryAction) {
                         PlanToolbarButton("Project",fixedWidth: 70) {
-                            AMLogging.log("Model tapped; presenting plan sheet", component: "DebtSummaryView")
                             showPlanSheet = true
                         }
 
@@ -121,9 +120,9 @@ struct DebtSummaryView: View {
                 .sheet(isPresented: $showPlanSheet) {
                     planSheetView()
                 }
-                .onChange(of: showPlanSheet) { _, newValue in
-                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
-                }
+//                .onChange(of: showPlanSheet) { _, newValue in
+//                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
+//                }
             }
         }
         #if canImport(UIKit)
@@ -322,7 +321,6 @@ struct DebtSummaryView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     PlanToolbarButton("Set Plan") {
-                        AMLogging.log("Set Plan tapped with mode=\(tempPlanMode.rawValue), date=\(String(describing: tempPlanDate)), strategy=\(tempStrategyDisplay), budgetField='\(tempMonthlyBudget)'", component: "DebtSummaryView")
                         budgetValidationError = nil
                         let parsedBudget: Decimal? = {
                             if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -331,9 +329,7 @@ struct DebtSummaryView: View {
                                 return parseCurrencyInput(tempMonthlyBudget)
                             }
                         }()
-                        AMLogging.log("Parsed budget: \(String(describing: parsedBudget)) for strategy=\(tempStrategyDisplay)", component: "DebtSummaryView")
                         if tempStrategy != .minimumsOnly && parsedBudget == nil {
-                            AMLogging.error("Validation failed: Non-minimums strategy with invalid budget", component: "DebtSummaryView")
                             budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
                             planErrorMessage = "Please enter a valid budget amount or select the Minimums Only strategy."
                             showPlanErrorAlert = true
@@ -343,7 +339,6 @@ struct DebtSummaryView: View {
                         appliedPlanDate = (tempPlanMode == .projectedAtDate) ? tempPlanDate : nil
                         appliedStrategy = tempStrategy
                         appliedBudget = parsedBudget
-                        AMLogging.log("Applied plan selections: mode=\(appliedPlanMode.rawValue), date=\(String(describing: appliedPlanDate)), strategy=\(appliedStrategyDisplay), budget=\(String(describing: appliedBudget))", component: "DebtSummaryView")
                         
                         let filteredAccounts = accounts.filter { acct in
                             let baseBal = absDecimal(latestBalance(acct))
@@ -356,7 +351,6 @@ struct DebtSummaryView: View {
                             }()
                             return bal > 0
                         }
-                        AMLogging.log("Filtered accounts count: \(filteredAccounts.count)", component: "DebtSummaryView")
                         
                         let debts: [Debt] = filteredAccounts.map { acct in
                             let baseBal = absDecimal(latestBalance(acct))
@@ -376,7 +370,6 @@ struct DebtSummaryView: View {
                                 minPayment: minPayment
                             )
                         }
-                        AMLogging.log("Prepared debts count: \(debts.count)", component: "DebtSummaryView")
 
                         let budgetToUse: Decimal
                         if appliedStrategy == .minimumsOnly {
@@ -384,9 +377,7 @@ struct DebtSummaryView: View {
                         } else {
                             budgetToUse = appliedBudget ?? 0
                         }
-                        AMLogging.log("Planning with budget: \(budgetToUse) and strategy=\(appliedStrategyDisplay)", component: "DebtSummaryView")
 
-                        AMLogging.log("Invoking DebtPayoffEngine.plan ...", component: "DebtSummaryView")
                         let debtInputs: [DebtInput] = debts.map { d in
                             DebtInput(
                                 id: d.id,
@@ -407,15 +398,12 @@ struct DebtSummaryView: View {
                                 startDate: startDateForPlan
                             )
                             currentPlan = planResult
-                            AMLogging.log("Plan computed successfully; closing plan sheet", component: "DebtSummaryView")
                             showPlanSheet = false
                         } catch DebtPlanError.infeasibleBudget {
-                            AMLogging.error("Infeasible budget error from planner", component: "DebtSummaryView")
                             budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
                             planErrorMessage = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
                             showPlanErrorAlert = true
                         } catch {
-                            AMLogging.error("Unexpected error during planning: \(error.localizedDescription)", component: "DebtSummaryView")
                             budgetValidationError = "An unexpected error occurred."
                             planErrorMessage = "An unexpected error occurred."
                             showPlanErrorAlert = true
@@ -424,7 +412,6 @@ struct DebtSummaryView: View {
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     PlanToolbarButton("Cancel",fixedWidth: 70) {
-                        AMLogging.log("Cancel tapped; resetting selections and dismissing sheet", component: "DebtSummaryView")
                         appliedPlanDate = nil
                         appliedPlanMode = .currentInputs
                         appliedStrategy = .minimumsOnly
@@ -651,18 +638,15 @@ struct DebtSummaryView: View {
                 return monthStep(for: account, balance: usedBal, payment: payment)
             }
         }()
+
         let payoff: Date? = {
-            if let plan = currentPlan, let monthDate = plan.payoffDates[account.id] {
-                // Adjust plan month date to the account's actual due day within that month
-                let dueDay = account.loanTerms?.paymentDayOfMonth
-                    ?? Calendar.current.component(.day, from: latestSnapshotDate(account) ?? monthDate)
-                return dateInSameMonth(monthDate, withDay: dueDay)
+            // If a plan is applied, prefer its payoff date for this account
+            if let planDate = currentPlan?.payoffDates[account.id] {
+                return planDate
             }
-            if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
-                return payoffDate(startingBalance: usedBal, startFrom: plan, for: account)
-            } else {
-                return payoffDate(for: account)
-            }
+            // Fallback: compute per-account payoff using current inputs as of the selected date
+            let asOfDate = (appliedPlanMode == .projectedAtDate) ? (appliedPlanDate ?? Date()) : Date()
+            return PayoffCalculator.payoffDate(for: account, asOf: asOfDate)
         }()
 
         return HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
@@ -795,43 +779,6 @@ struct DebtSummaryView: View {
         return try? modelContext.fetch(desc).first?.asOfDate
     }
 
-    private func payoffDate(for account: Account) -> Date? {
-        let startingBalance = absDecimal(latestBalance(account))
-        guard startingBalance > 0 else { return nil }
-        let apr = account.loanTerms?.apr
-        let payment = account.loanTerms?.paymentAmount ?? monthlyPayment(for: account, balance: startingBalance)
-
-        if let apr = apr, apr > 0 {
-            // Statement-anchored monthly simulation
-            let sDay = Calendar.current.component(.day, from: latestSnapshotDate(account) ?? Date())
-            var bal = startingBalance
-            var stmt = nextStatementDate(after: statementDate(onOrBefore: latestSnapshotDate(account) ?? Date(), day: sDay), day: sDay)
-            for _ in 0..<600 {
-                bal -= payment
-                if bal <= 0 { return stmt }
-                bal += bal * (apr / 12)
-                stmt = nextStatementDate(after: stmt, day: sDay)
-            }
-            return nil
-        } else {
-            // Fallback to engine projection
-            do {
-                let kind: DebtKind = (account.type == .loan) ? .loan : .creditCard(account.creditCardPaymentMode ?? .minimum)
-                let points = try DebtProjectionEngine.project(kind: kind, startingBalance: startingBalance, apr: apr, payment: payment)
-                if let idx = points.firstIndex(where: { $0.balance == 0 }) {
-                    let zeroDate = points[idx].date
-                    if let anchor = latestSnapshotDate(account) {
-                        let sDay = Calendar.current.component(.day, from: anchor)
-                        return statementDate(onOrBefore: zeroDate, day: sDay)
-                    } else {
-                        return zeroDate
-                    }
-                }
-                return nil
-            } catch { return nil }
-        }
-    }
-
     private func monthlyPayment(for account: Account, balance: Decimal) -> Decimal {
         // Use user's typical payment if provided; otherwise estimate at 2% of balance
         if let configured = account.loanTerms?.paymentAmount, configured > 0 {
@@ -891,34 +838,6 @@ struct DebtSummaryView: View {
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
     }
 
-    private func statementDate(onOrBefore date: Date, day: Int) -> Date {
-        let cal = Calendar.current
-        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
-        let range = cal.range(of: .day, in: .month, for: monthStart)!
-        let clampedDay = min(max(1, day), range.count)
-        var comps = cal.dateComponents([.year, .month], from: monthStart)
-        comps.day = clampedDay
-        let candidate = cal.date(from: comps)!
-        if candidate <= date { return candidate }
-        let prevMonth = cal.date(byAdding: DateComponents(month: -1), to: monthStart)!
-        let prevRange = cal.range(of: .day, in: .month, for: prevMonth)!
-        let prevClamped = min(max(1, day), prevRange.count)
-        var prevComps = cal.dateComponents([.year, .month], from: prevMonth)
-        prevComps.day = prevClamped
-        return cal.date(from: prevComps)!
-    }
-
-    private func nextStatementDate(after date: Date, day: Int) -> Date {
-        let cal = Calendar.current
-        let nextMonth = cal.date(byAdding: DateComponents(month: 1), to: date)!
-        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: nextMonth))!
-        let range = cal.range(of: .day, in: .month, for: monthStart)!
-        let clampedDay = min(max(1, day), range.count)
-        var comps = cal.dateComponents([.year, .month], from: monthStart)
-        comps.day = clampedDay
-        return cal.date(from: comps)!
-    }
-    
     private func dateInSameMonth(_ date: Date, withDay targetDay: Int) -> Date {
         let cal = Calendar.current
         let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date))!
@@ -945,50 +864,12 @@ struct DebtSummaryView: View {
     }
 
     private func projectedBalance(for account: Account, on targetDate: Date) throws -> Decimal? {
-        let startingBalance = absDecimal(latestBalance(account))
-        guard startingBalance > 0 else { return 0 }
-        let apr = account.loanTerms?.apr
-        let payment = account.loanTerms?.paymentAmount ?? monthlyPayment(for: account, balance: startingBalance)
-        let kind: DebtKind = (account.type == .loan) ? .loan : .creditCard(account.creditCardPaymentMode ?? .minimum)
-        let startDate = normalizeToMonth(latestSnapshotDate(account) ?? Date())
-        let points = try DebtProjectionEngine.project(
-            kind: kind,
-            startingBalance: startingBalance,
-            apr: apr,
-            payment: payment,
-            startDate: startDate,
-            maxMonths: 600
-        )
         let targetMonth = normalizeToMonth(targetDate)
-        return projectionPoint(points, closestTo: targetMonth)?.balance
-    }
-
-    private func payoffDate(startingBalance: Decimal, startFrom: Date, for account: Account) -> Date? {
-        let apr = account.loanTerms?.apr
-        let payment = account.loanTerms?.paymentAmount ?? monthlyPayment(for: account, balance: startingBalance)
-        do {
-            let kind: DebtKind = (account.type == .loan) ? .loan : .creditCard(account.creditCardPaymentMode ?? .minimum)
-            let points = try DebtProjectionEngine.project(
-                kind: kind,
-                startingBalance: startingBalance,
-                apr: apr,
-                payment: payment,
-                startDate: normalizeToMonth(startFrom),
-                maxMonths: 600
-            )
-            if let idx = points.firstIndex(where: { $0.balance == 0 }) {
-                let zeroDate = points[idx].date
-                if let anchor = latestSnapshotDate(account) {
-                    let sDay = Calendar.current.component(.day, from: anchor)
-                    return statementDate(onOrBefore: zeroDate, day: sDay)
-                } else {
-                    return zeroDate
-                }
-            }
-            return nil
-        } catch {
-            return nil
+        let result = try PayoffCalculator.project(for: account, asOf: targetMonth)
+        if let point = projectionPoint(result.points, closestTo: targetMonth) {
+            return point.balance
         }
+        return nil
     }
 
     private func absDecimal(_ d: Decimal) -> Decimal { d < 0 ? -d : d }
@@ -1108,19 +989,7 @@ final class LandscapeOnlyHostingController<Content: View>: UIHostingController<C
     }
 
     private func logOrientationDiagnostics(tag: String) {
-        #if canImport(UIKit)
-        let device = UIDevice.current.orientation
-        let scene = view.window?.windowScene ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        let keyWindow = scene?.windows.first { $0.isKeyWindow }
-        let appMask = keyWindow.map { UIApplication.shared.supportedInterfaceOrientations(for: $0) }
-        let topVC: String = {
-            guard let root = keyWindow?.rootViewController else { return "nil" }
-            var top: UIViewController = root
-            while let presented = top.presentedViewController { top = presented }
-            return String(describing: type(of: top))
-        }()
-        AMLogging.always("LandscapeOnlyHostingController [\(tag)] — supportedMask=\(self.maskDescription(self.supportedInterfaceOrientations)), preferred=\(self.preferredInterfaceOrientationForPresentation.rawValue), device=\(device.rawValue), sceneIO=\(scene?.interfaceOrientation.rawValue ?? -1), appMask=\(appMask.map(self.maskDescription) ?? "nil"), topVC=\(topVC)", component: "OrientationDiag")
-        #endif
+        // Empty implementation after logging removal
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -1132,9 +1001,6 @@ final class LandscapeOnlyHostingController<Content: View>: UIHostingController<C
             if #available(iOS 16.0, *) {
                 if let scene = view.window?.windowScene {
                     scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
-                    AMLogging.always("Requested geometry update to landscape for scene (willAppear)", component: "OrientationDiag")
-                } else {
-                    AMLogging.always("No windowScene available to request geometry update (willAppear)", component: "OrientationDiag")
                 }
             }
         }
@@ -1149,9 +1015,6 @@ final class LandscapeOnlyHostingController<Content: View>: UIHostingController<C
             if #available(iOS 16.0, *) {
                 if let scene = view.window?.windowScene {
                     scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
-                    AMLogging.always("Requested geometry update to landscape for scene (didAppear)", component: "OrientationDiag")
-                } else {
-                    AMLogging.always("No windowScene available to request geometry update (didAppear)", component: "OrientationDiag")
                 }
             }
         }
@@ -1168,13 +1031,11 @@ struct LandscapeOnly<Content: View>: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> LandscapeOnlyHostingController<Content> {
         let vc = LandscapeOnlyHostingController(rootView: content)
-        AMLogging.always("LandscapeOnly.makeUIViewController — created host VC=\(type(of: vc))", component: "OrientationDiag")
         return vc
     }
 
     func updateUIViewController(_ vc: LandscapeOnlyHostingController<Content>, context: Context) {
         vc.rootView = content
-        AMLogging.always("LandscapeOnly.updateUIViewController — updating host VC=\(type(of: vc))", component: "OrientationDiag")
         vc.setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 }
@@ -1219,6 +1080,7 @@ extension UIView {
     }
 }
 #endif
+
 
 
 

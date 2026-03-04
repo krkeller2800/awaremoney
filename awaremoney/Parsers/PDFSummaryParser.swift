@@ -412,7 +412,8 @@ struct PDFSummaryParser: StatementParser {
                 AMLogging.log("PurchasesAPR: purchases matches=\(pMatches.count)", component: LOG_COMPONENT)
 
                 struct PCandidate { let value: Decimal; let scale: Int; let score: Int }
-                var pcands: [PCandidate] = []
+                var lineCands: [PCandidate] = []
+                var neighborCands: [PCandidate] = []
 
                 let ns = window as NSString
                 for pm in pMatches {
@@ -530,7 +531,7 @@ struct PDFSummaryParser: StatementParser {
                 // Score: strong boost for exact line match; light penalty if line hints at prior/previous (already filtered above)
                 let score = 5
                 AMLogging.log("PurchasesAPR: candidate token=\(bestLocal.token) value=\(val) scale=\(scale) score=\(score) (line-based)", component: LOG_COMPONENT)
-                pcands.append(PCandidate(value: val, scale: scale, score: score))
+                lineCands.append(PCandidate(value: val, scale: scale, score: score))
             } else {
                 AMLogging.log("PurchasesAPR: no % found on same line as 'purchases'", component: LOG_COMPONENT)
             }
@@ -567,6 +568,13 @@ struct PDFSummaryParser: StatementParser {
                     if fxWords.contains(where: { candLower.contains($0) }) { continue }
                     if feeWords.contains(where: { candLower.contains($0) }) { continue }
                     if candLower.contains("no interest") { continue }
+
+                    // Exclude neighbor lines that clearly refer to other APR categories
+                    let otherCategoryTokens = ["cash advance", "cash advances", "balance transfer", "balance transfers", "penalty apr"]
+                    if otherCategoryTokens.contains(where: { candLower.contains($0) }) {
+                        AMLogging.log("PurchasesAPR: skipping neighbor line due to other category context — line='" + String(candLower.prefix(200)) + "'", component: LOG_COMPONENT)
+                        continue
+                    }
 
                     // Prefer candidate lines that look like table rows (dollar amounts or table header hints)
                     let hasDollar = candLine.contains("$")
@@ -608,12 +616,14 @@ struct PDFSummaryParser: StatementParser {
                     }
 
                     AMLogging.log("PurchasesAPR: neighbor-line candidate token=" + token + " value=" + String(describing: val) + " scale=" + String(scale) + " score=" + String(score) + " line='" + String(candLower.prefix(200)) + "'", component: LOG_COMPONENT)
-                    pcands.append(PCandidate(value: val, scale: scale, score: score))
+                    neighborCands.append(PCandidate(value: val, scale: scale, score: score))
                 }
             }
                 }
 
-                if let best = pcands.max(by: { (l, r) in
+                // Prefer same-line candidates over neighbor-line fallbacks
+                let pickFrom: [PCandidate] = !lineCands.isEmpty ? lineCands : neighborCands
+                if let best = pickFrom.max(by: { (l, r) in
                     if l.score != r.score { return l.score < r.score }
                     return l.value < r.value
                 }) {

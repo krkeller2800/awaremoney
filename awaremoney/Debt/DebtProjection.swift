@@ -66,10 +66,12 @@ struct DebtProjectionEngine {
                     maxMonths: maxMonths
                 )
             case .minimum:
-                // Assume 2% minimum or $25, whichever greater, if payment unspecified
-                let assumedMin: Decimal = 0.02
+                // Minimum payment heuristic: interest for the month plus 0.0025% of balance, with a $25 floor.
+                // That is, use (monthlyRate + 0.000025) applied to the starting balance for the period.
                 let floor: Decimal = 25
-                let minPay = max((startingBalance * assumedMin), floor)
+                let extra: Decimal = Decimal(string: "0.0025") ?? 0.0025
+                let rateWithExtra = r + extra
+                let minPay = max((startingBalance * rateWithExtra), floor)
                 return amortize(
                     startingBalance: startingBalance,
                     monthlyRate: r,
