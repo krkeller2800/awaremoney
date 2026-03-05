@@ -1,0 +1,58 @@
+Assistant note (2026-03-05)
+
+I can update this note file now. To let me update awaremoney/Info.plist automatically:
+- Turn on Project Context (binoculars icon under the prompt) so I can read and edit Info.plist and other non-source files.
+- Then open awaremoney/Info.plist in the editor or tell me to update it, and I'll insert the UTExportedTypeDeclarations and CFBundleDocumentTypes entries below, merging with any existing keys.
+- Alternatively, paste your current Info.plist contents here and ask me to merge these keys for you.
+
+Status: Pending Info.plist update
+
+Add the following to Info.plist (as top-level keys):
+
+1) UTExportedTypeDeclarations (Array)
+
+<key>UTExportedTypeDeclarations</key>
+<array>
+    <dict>
+        <key>UTTypeIdentifier</key>
+        <string>com.komakode.awaremoney.backup</string>
+        <key>UTTypeDescription</key>
+        <string>AwareMoney Backup</string>
+        <key>UTTypeConformsTo</key>
+        <array>
+            <string>public.json</string>
+        </array>
+        <key>UTTypeTagSpecification</key>
+        <dict>
+            <key>public.filename-extension</key>
+            <array>
+                <string>ambackup</string>
+            </array>
+            <key>public.mime-type</key>
+            <string>application/json</string>
+        </dict>
+    </dict>
+</array>
+
+2) CFBundleDocumentTypes (Array)
+
+<key>CFBundleDocumentTypes</key>
+<array>
+    <dict>
+        <key>CFBundleTypeName</key>
+        <string>AwareMoney Backup</string>
+        <key>LSHandlerRank</key>
+        <string>Owner</string>
+        <key>LSItemContentTypes</key>
+        <array>
+            <string>com.komakode.awaremoney.backup</string>
+        </array>
+        <key>LSSupportsOpeningDocumentsInPlace</key>
+        <true/>
+        <key>UISupportsDocumentBrowser</key>
+        <false/>
+    </dict>
+</array>
+
+If you already have CFBundleDocumentTypes entries, just append the dict for the backup type without removing existing ones.
+

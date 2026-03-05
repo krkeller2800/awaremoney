@@ -14,6 +14,7 @@ struct awaremoneyApp: App {
     let container: ModelContainer
     let settings = SettingsStore()
     let importRouter = ImportOpenRouter()
+    @StateObject private var backupCoordinator = BackupOpenCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -54,9 +55,21 @@ struct awaremoneyApp: App {
                 .environmentObject(PurchaseManager.shared)
                 .environmentObject(settings)
                 .environmentObject(importRouter)
+                .environmentObject(backupCoordinator)
                 .onOpenURL { url in
-                    importRouter.pendingURL = url
-                    AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
+                    let ext = url.pathExtension.lowercased()
+                    if ext == "ambackup" || ext == "json" {
+                        Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
+                        AMLogging.always("App opened with backup URL: \(url.lastPathComponent)", component: "App")
+                    } else {
+                        importRouter.pendingURL = url
+                        AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
+                    }
+                }
+                .alert("Import Backup", isPresented: Binding(get: { backupCoordinator.alertMessage != nil }, set: { if !$0 { backupCoordinator.alertMessage = nil } })) {
+                    Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
+                } message: {
+                    Text(backupCoordinator.alertMessage ?? "")
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     AMLogging.log("Scene phase changed to: \(newPhase)", component: "App")

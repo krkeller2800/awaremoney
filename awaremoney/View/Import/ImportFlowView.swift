@@ -10,6 +10,7 @@ struct ImportFlowView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var purchases: PurchaseManager
     @EnvironmentObject private var importRouter: ImportOpenRouter
+    @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
     @StateObject private var vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
 
     @State private var batches: [ImportBatch] = []
@@ -1191,6 +1192,11 @@ struct ImportFlowView: View {
             Button("OK", role: .cancel) { vm.errorMessage = nil }
         } message: {
             Text(vm.errorMessage ?? "Unknown error")
+        }
+        .alert("Import Backup", isPresented: Binding(get: { backupCoordinator.alertMessage != nil }, set: { if !$0 { backupCoordinator.alertMessage = nil } })) {
+            Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
+        } message: {
+            Text(backupCoordinator.alertMessage ?? "")
         }
     }
 

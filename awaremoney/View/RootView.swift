@@ -15,6 +15,7 @@ struct RootView: View {
     @State private var lastNonSettingsTab: Int = 0
     @State private var showSettings: Bool = false
     @EnvironmentObject private var importRouter: ImportOpenRouter
+    @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
 
     #if canImport(UIKit)
     private func configureTabBarAppearance() {
@@ -65,6 +66,16 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .alert("Import Backup", isPresented: Binding(
+            get: { backupCoordinator.alertMessage != nil },
+            set: { if !$0 { backupCoordinator.alertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {
+                backupCoordinator.alertMessage = nil
+            }
+        } message: {
+            Text(backupCoordinator.alertMessage ?? "")
         }
         .onAppear {
             #if canImport(UIKit)
