@@ -31,6 +31,9 @@ struct ImportFlowView: View {
     @State private var isImporterPresented: Bool = false
     @State private var showDocKindSheet: Bool = false
 
+    // New state for backup sheet presentation
+    @State private var showBackupSheet: Bool = false
+
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     
     private enum PickerKind { case csv, pdf }
@@ -172,6 +175,24 @@ struct ImportFlowView: View {
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(Color(.systemGroupedBackground))
+    }
+
+    private var backupSection: some View {
+        PlanToolbarButton("Backup & Restore…", systemImage: "externaldrive") { showBackupSheet = true }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+//        Button {
+//            showBackupSheet = true
+//        } label: {
+//            HStack(spacing: 8) {
+//                Image(systemName: "externaldrive")
+//                Text("Backup & Restore…")
+//            }
+//        }
+//        .buttonStyle(.bordered)
+//        .frame(maxWidth: .infinity, alignment: .center)
+//        .padding(.horizontal)
+//        .padding(.vertical, 10)
     }
 
     private func autoApplyMappingIfPossible(headers: [String], rows: [[String]]) {
@@ -781,6 +802,7 @@ struct ImportFlowView: View {
                 if settings.showHintBars {
                     hintBar
                 }
+                backupSection
             }
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
@@ -898,6 +920,7 @@ struct ImportFlowView: View {
             if settings.showHintBars {
                 hintBar
             }
+            backupSection
         }
     }
 
@@ -1141,6 +1164,10 @@ struct ImportFlowView: View {
                 .navigationBarTitleDisplayMode(.inline)
             }
         }
+        .sheet(isPresented: $showBackupSheet) {
+            BackupRestoreView()
+                .environmentObject(settings)
+        }
         .task { await loadBatches() }
     }
 
@@ -1197,6 +1224,10 @@ struct ImportFlowView: View {
             Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
         } message: {
             Text(backupCoordinator.alertMessage ?? "")
+        }
+        .sheet(isPresented: $showBackupSheet) {
+            BackupRestoreView()
+                .environmentObject(settings)
         }
     }
 

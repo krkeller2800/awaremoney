@@ -17,7 +17,7 @@ final class BackupOpenCoordinator: ObservableObject {
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
-            let summary = try BackupImporter.importBackup(data: data, context: context, settings: settings)
+            let summary = try await BackupImporter.importBackup(data: data, context: context, settings: settings)
             let text = await Self.makeSummaryText(from: summary)
             await MainActor.run { self.alertMessage = text }
         } catch {
