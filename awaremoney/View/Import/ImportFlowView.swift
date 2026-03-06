@@ -288,6 +288,10 @@ struct ImportFlowView: View {
         vm.isImporting = true
         Task {
             defer { DispatchQueue.main.async { self.vm.isImporting = false } }
+            await MainActor.run {
+                self.vm.infoMessage = nil
+                self.vm.errorMessage = nil
+            }
 
             // Capture the current hint on the main actor
             let hintOpt = await MainActor.run { self.vm.userSelectedDocHint }
@@ -395,14 +399,31 @@ struct ImportFlowView: View {
                         AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
                     } else {
                         AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
-                        AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to default handler", component: "Import")
-                        await MainActor.run { self.vm.handlePickedURL(url) }
-                        let stagedAfter = await MainActor.run { self.vm.staged }
-                        if stagedAfter == nil {
-                            await MainActor.run {
-                                self.vm.errorMessage = "We couldn’t read this credit card statement. Try importing a CSV activity export instead."
-                                self.showImportError = true
-                            }
+                        AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to manual entry with ReviewImportView", component: "Import")
+                        await MainActor.run {
+                            // Present manual fallback immediately. Do NOT call handlePickedURL here — it may clear `staged` asynchronously.
+                            let suggested: Account.AccountType? = {
+                                switch self.vm.userSelectedDocHint {
+                                case .loan: return .loan
+                                case .creditCard: return .creditCard
+                                case .brokerage: return .brokerage
+                                case .checking: return .checking
+                                default: return nil
+                                }
+                            }()
+                            if let s = suggested { self.vm.newAccountType = s }
+                            self.vm.staged = StagedImport(
+                                parserId: "manual.fallback",
+                                sourceFileName: url.lastPathComponent,
+                                inferredInstitutionName: nil,
+                                suggestedAccountType: self.vm.newAccountType,
+                                transactions: [],
+                                holdings: [],
+                                balances: []
+                            )
+                            self.vm.mappingSession = nil
+                            self.vm.errorMessage = nil
+                            self.vm.infoMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
                         }
                         return
                     }
@@ -466,9 +487,9 @@ struct ImportFlowView: View {
                 }
                 AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
 
-                // Surface any importer warnings as an info message
+                // Log importer warnings for diagnostics; do not surface as user-facing info
                 if !result.warnings.isEmpty {
-                    await MainActor.run { self.vm.infoMessage = result.warnings.joined(separator: "\n") }
+                    AMLogging.log("ImportFlowView: importer warnings (suppressed from UI): " + result.warnings.joined(separator: " | "), component: "Import")
                 }
 
                 // Set the default account type based on the user hint
@@ -528,14 +549,31 @@ struct ImportFlowView: View {
                 }
                 AMLogging.log("ImportFlowView: staged import prepared (PDF snapshot) — balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
             } catch {
-                AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Falling back to default handler.", component: "Import")
-                await MainActor.run { self.vm.handlePickedURL(url) }
-                let stagedAfter = await MainActor.run { self.vm.staged }
-                if stagedAfter == nil {
-                    await MainActor.run {
-                        self.vm.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                        self.showImportError = true
-                    }
+                AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Presenting manual ReviewImportView fallback.", component: "Import")
+                await MainActor.run {
+                    // Present manual fallback immediately. Do NOT call handlePickedURL here — it may clear `staged` asynchronously.
+                    let suggested: Account.AccountType? = {
+                        switch self.vm.userSelectedDocHint {
+                        case .loan: return .loan
+                        case .creditCard: return .creditCard
+                        case .brokerage: return .brokerage
+                        case .checking: return .checking
+                        default: return nil
+                        }
+                    }()
+                    if let s = suggested { self.vm.newAccountType = s }
+                    self.vm.staged = StagedImport(
+                        parserId: "manual.fallback",
+                        sourceFileName: url.lastPathComponent,
+                        inferredInstitutionName: nil,
+                        suggestedAccountType: self.vm.newAccountType,
+                        transactions: [],
+                        holdings: [],
+                        balances: []
+                    )
+                    self.vm.mappingSession = nil
+                    self.vm.errorMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
+                    self.vm.infoMessage = nil
                 }
             }
         }
