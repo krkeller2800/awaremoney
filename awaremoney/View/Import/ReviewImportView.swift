@@ -22,6 +22,8 @@ struct ReviewImportView: View {
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
     @State private var pendingStartingBalance: Decimal? = nil
+    @State private var scrollProxy: ScrollViewProxy? = nil
+    @State private var highlightTarget: String? = nil
     private var isEditing: Bool { focusedField != nil }
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable { case institution, typicalPayment, apr, startingBalance, balance(Int) }
@@ -142,8 +144,9 @@ struct ReviewImportView: View {
     }
     
     private var mainList: some View {
-        Form {
-            // Prominent error callout at the very top
+        ScrollViewReader { proxy in
+            Form {
+                // Prominent error callout at the very top
 //            if let err = vm.errorMessage, !err.isEmpty {
 //                Section {
 //                    HStack(alignment: .top, spacing: 8) {
@@ -158,293 +161,326 @@ struct ReviewImportView: View {
 //                .listRowBackground(Color.red.opacity(0.08))
 //            }
 
-            // Review-required banner / checklist
-            if !vm.computeCompletenessIssues().isEmpty {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Image(systemName: vm.hasBlockingCompletenessIssues ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
-                                .foregroundStyle(vm.hasBlockingCompletenessIssues ? .orange : .yellow)
-                            Text("Review required")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        Text("We could't parse your statement completly. Please verify and complete the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : ""))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(vm.computeCompletenessIssues()) { issue in
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Image(systemName: issue.severity == .required ? "exclamationmark.triangle" : "exclamationmark.circle")
-                                        .foregroundStyle(issue.severity == .required ? .orange : .yellow)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(issue.title)
-                                            .font(.footnote.weight(.semibold))
-                                        if let detail = issue.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
+                // Review-required banner / checklist
+                if !vm.computeCompletenessIssues().isEmpty {
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: vm.hasBlockingCompletenessIssues ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
+                                    .foregroundStyle(vm.hasBlockingCompletenessIssues ? .orange : .yellow)
+                                Text("Review required")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            Text("We could't parse your statement completly. Please verify and complete the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : ""))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Text("Tap an item to jump to the field below.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(vm.computeCompletenessIssues()) { issue in
+                                    Button {
+                                        #if canImport(UIKit)
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                        #endif
+                                        performChecklistAction(for: issue.title)
+                                    } label: {
+                                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                            Image(systemName: issue.severity == .required ? "exclamationmark.triangle" : "exclamationmark.circle")
+                                                .foregroundStyle(issue.severity == .required ? .orange : .yellow)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(issue.title)
+                                                    .font(.footnote.weight(.semibold))
+                                                if let detail = issue.detail { Text(detail).font(.caption2).foregroundStyle(.secondary) }
+                                            }
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .font(.footnote.weight(.semibold))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(ChecklistRowButtonStyle())
+                                    .hoverEffect(.highlight)
                                 }
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
+                    .listRowBackground(Color.yellow.opacity(0.08))
                 }
-                .listRowBackground(Color.yellow.opacity(0.08))
-            }
 
-            Section() {
-                VStack {
-                    Picker("Account", selection: accountSelectionBinding) {
-                        Text("Create New…").tag(nil as UUID?)
-                        ForEach(accounts, id: \.id) { acct in
-                            Text("\(acct.name) (\(acct.type.rawValue))").tag(Optional(acct.id))
-                        }
-                    }
-                    .onAppear(perform: onAccountSectionAppear)
-                    if selectedAccountId == nil {
-                        TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
-                            .textInputAutocapitalization(.words)
-                            .focused($focusedField, equals: .institution)
-                            .submitLabel(.next)
-                            .onSubmit { moveFocus(1) }
-                            .onTapGesture { selectAllInFirstResponder() }
-                        Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
-                            ForEach(Account.AccountType.allCases, id: \.self) {
-                                Text($0.rawValue)
-                            }
-                        }
-                        if staged.sourceFileName.lowercased().hasSuffix(".pdf") && UIDevice.type == "iPhone" {
-                            Button {
-                                AMLogging.log("ReviewImportView: View PDF tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
-                                showPDFSheet = true
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "doc.text.magnifyingglass")
-                                    Text("View PDF")
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }
-            }  header: {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("File: \(staged.sourceFileName)")
-                        .font(.callout)
-                        .padding(.top, 10)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    HStack {
-                        Text("Transactions: \(staged.transactions.count)")
-                        if !staged.holdings.isEmpty {
-                            Text("Holdings: \(staged.holdings.count)")
-                        }
-                        if !staged.balances.isEmpty {
-                            Text("Balances: \(staged.balances.count)")
-                        }
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom,10)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-                .foregroundStyle(.primary)
-//                .multilineTextAlignment(.center)
-//                .frame(maxWidth: .infinity, alignment: .center)
-            }
-
-            // Loan Terms — single place to edit Typical Payment and APR
-            if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
-                Section("Loan Terms") {
+                Section() {
                     VStack {
-                        LabeledContent("Typical Payment") {
-                            TextField("0.00", text: $typicalPaymentInput)
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.decimalPad)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
-                                    typicalPaymentParsed = parseCurrencyInput(newValue)
-                                }
-                                .focused($focusedField, equals: .typicalPayment)
+                        Picker("Account", selection: accountSelectionBinding) {
+                            Text("Create New…").tag(nil as UUID?)
+                            ForEach(accounts, id: \.id) { acct in
+                                Text("\(acct.name) (\(acct.type.rawValue))").tag(Optional(acct.id))
+                            }
+                        }
+                        .onAppear(perform: onAccountSectionAppear)
+                        if selectedAccountId == nil {
+                            TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
+                                .textInputAutocapitalization(.words)
+                                .focused($focusedField, equals: .institution)
                                 .submitLabel(.next)
                                 .onSubmit { moveFocus(1) }
                                 .onTapGesture { selectAllInFirstResponder() }
-                        }
-                        Text("Used for payoff estimates and budget projections.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        LabeledContent("Interest Rate (APR)") {
-                            TextField("0.00", text: $aprInput)
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.decimalPad)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .focused($focusedField, equals: .apr)
-                                .submitLabel(.done)
-                                .onSubmit { commitAndDismissKeyboard() }
-                                .onTapGesture { selectAllInFirstResponder() }
-                        }
-                        Text("Enter as a percent (e.g., 19.99 for 19.99%).")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-
-            // Starting balance prompt
-            if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
-                StartingBalanceInlineView(
-                    asOfDate: earliestDate,
-                    onSet: { dec, pickedDate in
-                        let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
-                        vm.staged?.balances.append(sb)
-                    },
-                    focusedField: $focusedField,
-                    focusedCase: .startingBalance,
-                    onNext: { moveFocus(1) },
-                    onAmountChange: { dec in
-                        pendingStartingBalance = dec
-                    }
-                )
-            }
-            
-            // Fallback: when there are no transactions and no balances, allow entering an ending balance manually
-            if (vm.staged?.transactions.isEmpty ?? true) && (vm.staged?.balances.isEmpty ?? true) {
-                StartingBalanceInlineView(
-                    asOfDate: Date(),
-                    onSet: { dec, pickedDate in
-                        let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
-                        vm.staged?.balances.append(sb)
-                        AMLogging.log("ReviewImportView: User added ending balance fallback — value=\(dec) date=\(pickedDate)", component: "ReviewImportView")
-                    },
-                    focusedField: $focusedField,
-                    focusedCase: .startingBalance,
-                    onNext: { moveFocus(1) },
-                    title: "Ending Balance",
-                    messageOverride: "Enter the ending balance and choose the statement date.",
-                    onAmountChange: { dec in
-                        pendingStartingBalance = dec
-                    }
-                )
-            }
-
-            // Transactions preview
-            if !staged.transactions.isEmpty {
-                Section("Transactions") {
-                    ForEach(staged.transactions.indices, id: \.self) { idx in
-                        let t = staged.transactions[idx]
-                        HStack(alignment: .firstTextBaseline) {
-                            Toggle("", isOn: transactionIncludeBinding(for: idx))
-                                .labelsHidden()
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(t.payee)
-                                HStack(spacing: 6) {
-                                    if let acct = t.sourceAccountLabel, !acct.isEmpty {
-                                        Text(acct.capitalized)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.secondary.opacity(0.12))
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                                    }
-                                    Text(t.datePosted, style: .date)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                            Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
+                                ForEach(Account.AccountType.allCases, id: \.self) {
+                                    Text($0.rawValue)
                                 }
                             }
-                            Spacer()
-                            Text(t.amount as NSNumber, formatter: currencyFormatter)
-                                .foregroundStyle(t.amount < 0 ? .red : .primary)
-                        }
-                    }
-                }
-            }
-
-            // Holdings
-            if !staged.holdings.isEmpty {
-                Section("Holdings") {
-                    ForEach(staged.holdings.indices, id: \.self) { idx in
-                        let h = staged.holdings[idx]
-                        HStack {
-                            Toggle("", isOn: holdingIncludeBinding(for: idx))
-                            .labelsHidden()
-                            Text("\(h.symbol) — \(h.quantity.description)")
-                            Spacer()
-                            if let mv = h.marketValue {
-                                Text(mv as NSNumber, formatter: currencyFormatter)
+                            if staged.sourceFileName.lowercased().hasSuffix(".pdf") && UIDevice.type == "iPhone" {
+                                Button {
+                                    AMLogging.log("ReviewImportView: View PDF tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
+                                    showPDFSheet = true
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "doc.text.magnifyingglass")
+                                        Text("View PDF")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                     }
+                }  header: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("File: \(staged.sourceFileName)")
+                            .font(.callout)
+                            .padding(.top, 10)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        HStack {
+                            Text("Transactions: \(staged.transactions.count)")
+                            if !staged.holdings.isEmpty {
+                                Text("Holdings: \(staged.holdings.count)")
+                            }
+                            if !staged.balances.isEmpty {
+                                Text("Balances: \(staged.balances.count)")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom,10)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    .foregroundStyle(.primary)
+//                .multilineTextAlignment(.center)
+//                .frame(maxWidth: .infinity, alignment: .center)
                 }
-            }
 
-            if let balances = vm.staged?.balances, !balances.isEmpty {
-                Section("Balances") {
-                    VStack {
-                        ForEach(balances.indices, id: \.self) { idx in
-                            let b = balances[idx]
-                            HStack(alignment: .top) {
-                                Toggle("", isOn: balanceIncludeBinding(for: idx))
+                // Loan Terms — single place to edit Typical Payment and APR
+                if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+                    Section("Loan Terms") {
+                        VStack {
+                            LabeledContent("Typical Payment") {
+                                TextField("0.00", text: $typicalPaymentInput)
+                                    .multilineTextAlignment(.trailing)
+                                    .keyboardType(.decimalPad)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
+                                        typicalPaymentParsed = parseCurrencyInput(newValue)
+                                    }
+                                    .focused($focusedField, equals: .typicalPayment)
+                                    .id("typicalPaymentField")
+                                    .submitLabel(.next)
+                                    .onSubmit { moveFocus(1) }
+                                    .onTapGesture { selectAllInFirstResponder() }
+                                    .background(highlightTarget == "typicalPaymentField" ? Color.accentColor.opacity(0.12) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            Text("Used for payoff estimates and budget projections.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            
+                            LabeledContent("Interest Rate (APR)") {
+                                TextField("0.00", text: $aprInput)
+                                    .multilineTextAlignment(.trailing)
+                                    .keyboardType(.decimalPad)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .focused($focusedField, equals: .apr)
+                                    .id("aprField")
+                                    .submitLabel(.done)
+                                    .onSubmit { commitAndDismissKeyboard() }
+                                    .onTapGesture { selectAllInFirstResponder() }
+                                    .background(highlightTarget == "aprField" ? Color.accentColor.opacity(0.12) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            Text("Enter as a percent (e.g., 19.99 for 19.99%).")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
+                // Starting balance prompt
+                if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
+                    StartingBalanceInlineView(
+                        asOfDate: earliestDate,
+                        onSet: { dec, pickedDate in
+                            let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
+                            vm.staged?.balances.append(sb)
+                        },
+                        focusedField: $focusedField,
+                        focusedCase: .startingBalance,
+                        onNext: { moveFocus(1) },
+                        onAmountChange: { dec in
+                            pendingStartingBalance = dec
+                        }
+                    )
+                    .id("startingBalancePrompt")
+                    .background(highlightTarget == "startingBalancePrompt" ? Color.accentColor.opacity(0.12) : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                
+                // Fallback: when there are no transactions and no balances, allow entering an ending balance manually
+                if (vm.staged?.transactions.isEmpty ?? true) && (vm.staged?.balances.isEmpty ?? true) {
+                    StartingBalanceInlineView(
+                        asOfDate: Date(),
+                        onSet: { dec, pickedDate in
+                            let sb = StagedBalance(asOfDate: pickedDate, balance: dec)
+                            vm.staged?.balances.append(sb)
+                            AMLogging.log("ReviewImportView: User added ending balance fallback — value=\(dec) date=\(pickedDate)", component: "ReviewImportView")
+                        },
+                        focusedField: $focusedField,
+                        focusedCase: .startingBalance,
+                        onNext: { moveFocus(1) },
+                        title: "Ending Balance",
+                        messageOverride: "Enter the ending balance and choose the statement date.",
+                        onAmountChange: { dec in
+                            pendingStartingBalance = dec
+                        }
+                    )
+                    .id("startingBalancePrompt")
+                    .background(highlightTarget == "startingBalancePrompt" ? Color.accentColor.opacity(0.12) : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
+                // Transactions preview
+                if !staged.transactions.isEmpty {
+                    Section("Transactions") {
+                        ForEach(staged.transactions.indices, id: \.self) { idx in
+                            let t = staged.transactions[idx]
+                            HStack(alignment: .firstTextBaseline) {
+                                Toggle("", isOn: transactionIncludeBinding(for: idx))
                                     .labelsHidden()
                                 
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack(spacing: 12) {
-                                        DatePicker("As of", selection: balanceDateBinding(for: idx), displayedComponents: .date)
-                                            .labelsHidden()
-                                        Spacer()
-                                        TextField("0.00", text: balanceAmountTextBinding(for: idx))
-                                            .multilineTextAlignment(.trailing)
-                                            .keyboardType(.decimalPad)
-                                            .textInputAutocapitalization(.never)
-                                            .autocorrectionDisabled()
-                                            .focused($focusedField, equals: .balance(idx))
-                                            .submitLabel(.next)
-                                            .onSubmit { moveFocus(1) }
-                                            .onTapGesture { selectAllInFirstResponder() }
-                                    }
-                                    if let label = b.sourceAccountLabel, !label.isEmpty {
-                                        Text(label.capitalized)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(t.payee)
+                                    HStack(spacing: 6) {
+                                        if let acct = t.sourceAccountLabel, !acct.isEmpty {
+                                            Text(acct.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.secondary.opacity(0.12))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
+                                        Text(t.datePosted, style: .date)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.secondary.opacity(0.12))
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
                                 }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    if var staged = vm.staged, idx < staged.balances.count {
-                                        staged.balances.remove(at: idx)
-                                        vm.staged = staged
-                                    }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                                Spacer()
+                                Text(t.amount as NSNumber, formatter: currencyFormatter)
+                                    .foregroundStyle(t.amount < 0 ? .red : .primary)
                             }
                         }
-                        Button {
-                            var staged = vm.staged ?? StagedImport(parserId: "manual.user", sourceFileName: "Manual Entry", suggestedAccountType: vm.newAccountType, transactions: [], holdings: [], balances: [])
-                            let newBalance = StagedBalance(asOfDate: Date(), balance: 0, interestRateAPR: nil, interestRateScale: nil, include: true, sourceAccountLabel: nil)
-                            staged.balances.append(newBalance)
-                            vm.staged = staged
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "plus.circle")
-                                Text("Add Balance")
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-            }
-            
-            Section() {
+
+                // Holdings
+                if !staged.holdings.isEmpty {
+                    Section("Holdings") {
+                        ForEach(staged.holdings.indices, id: \.self) { idx in
+                            let h = staged.holdings[idx]
+                            HStack {
+                                Toggle("", isOn: holdingIncludeBinding(for: idx))
+                                .labelsHidden()
+                                Text("\(h.symbol) — \(h.quantity.description)")
+                                Spacer()
+                                if let mv = h.marketValue {
+                                    Text(mv as NSNumber, formatter: currencyFormatter)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let balances = vm.staged?.balances, !balances.isEmpty {
+                    Section("Balances") {
+                        VStack {
+                            ForEach(balances.indices, id: \.self) { idx in
+                                let b = balances[idx]
+                                HStack(alignment: .top) {
+                                    Toggle("", isOn: balanceIncludeBinding(for: idx))
+                                        .labelsHidden()
+                                    
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack(spacing: 12) {
+                                            DatePicker("As of", selection: balanceDateBinding(for: idx), displayedComponents: .date)
+                                                .labelsHidden()
+                                            Spacer()
+                                            TextField("0.00", text: balanceAmountTextBinding(for: idx))
+                                                .multilineTextAlignment(.trailing)
+                                                .keyboardType(.decimalPad)
+                                                .textInputAutocapitalization(.never)
+                                                .autocorrectionDisabled()
+                                                .focused($focusedField, equals: .balance(idx))
+                                                .id("balanceField-\(idx)")
+                                                .submitLabel(.next)
+                                                .onSubmit { moveFocus(1) }
+                                                .onTapGesture { selectAllInFirstResponder() }
+                                                .background(highlightTarget == "balanceField-\(idx)" ? Color.accentColor.opacity(0.12) : .clear)
+                                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        }
+                                        if let label = b.sourceAccountLabel, !label.isEmpty {
+                                            Text(label.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.secondary.opacity(0.12))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
+                                    }
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        if var staged = vm.staged, idx < staged.balances.count {
+                                            staged.balances.remove(at: idx)
+                                            vm.staged = staged
+                                        }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                            }
+                            Button {
+                                var staged = vm.staged ?? StagedImport(parserId: "manual.user", sourceFileName: "Manual Entry", suggestedAccountType: vm.newAccountType, transactions: [], holdings: [], balances: [])
+                                let newBalance = StagedBalance(asOfDate: Date(), balance: 0, interestRateAPR: nil, interestRateScale: nil, include: true, sourceAccountLabel: nil)
+                                staged.balances.append(newBalance)
+                                vm.staged = staged
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "plus.circle")
+                                    Text("Add Balance")
+                                }
+                            }
+                            .id("addBalanceButton")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                
+                Section() {
 //                if let err = vm.errorMessage, !err.isEmpty {
 //                    HStack(alignment: .top, spacing: 8) {
 //                        Image(systemName: "exclamationmark.triangle")
@@ -455,31 +491,33 @@ struct ReviewImportView: View {
 //                    }
 //                    .padding(.vertical, 2)
 //                }
-            } header: {
-                VStack {
-                    Text("Notes")
-                        .frame(maxWidth: .infinity,alignment: .leading)
-                    if let info = vm.infoMessage, !info.isEmpty {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(.blue)
-                            Text(info)
-                                .font(.footnote)
+                } header: {
+                    VStack {
+                        Text("Notes")
+                            .frame(maxWidth: .infinity,alignment: .leading)
+                        if let info = vm.infoMessage, !info.isEmpty {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .foregroundStyle(.blue)
+                                Text(info)
+                                    .font(.footnote)
+                            }
+                            .padding(.vertical, 2)
                         }
-                        .padding(.vertical, 2)
+                        if vm.hasBlockingCompletenessIssues || !vm.computeCompletenessIssues().isEmpty { Text("Verify and correct all fields before saving.").font(.footnote).foregroundStyle(.secondary) }
                     }
-                    if vm.hasBlockingCompletenessIssues || !vm.computeCompletenessIssues().isEmpty { Text("Verify and correct all fields before saving.").font(.footnote).foregroundStyle(.secondary) }
-                }
 //                .foregroundStyle(.primary)
+                }
             }
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .listRowSpacing(6)
-        .listSectionSpacing(.compact)
-        .environment(\.defaultMinListRowHeight, 34)
-        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-        .onChange(of: selectedAccountId, initial: false) { _, newValue in
-            AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
+            .onAppear { self.scrollProxy = proxy }
+            .scrollDismissesKeyboard(.interactively)
+            .listRowSpacing(6)
+            .listSectionSpacing(.compact)
+            .environment(\.defaultMinListRowHeight, 34)
+            .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+            .onChange(of: selectedAccountId, initial: false) { _, newValue in
+                AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
+            }
         }
     }
 
@@ -1006,6 +1044,43 @@ struct ReviewImportView: View {
         }
     }
 
+    private func scrollAndFocus(to id: AnyHashable?, focus: FocusedField?) {
+        // Scroll to the anchor and then focus the field with a slight delay to allow layout to settle
+        if let id = id, let proxy = scrollProxy {
+            withAnimation(.snappy) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+        if let f = focus {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                focusedField = f
+            }
+        }
+        if let id = id as? String {
+            withAnimation(.easeInOut(duration: 0.2)) { highlightTarget = id }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                withAnimation(.easeInOut(duration: 0.25)) { highlightTarget = nil }
+            }
+        }
+    }
+
+    private func performChecklistAction(for title: String) {
+        switch title {
+        case "Add a statement balance":
+            if (vm.staged?.balances.isEmpty ?? true) {
+                scrollAndFocus(to: "startingBalancePrompt", focus: .startingBalance)
+            } else {
+                scrollAndFocus(to: "balanceField-0", focus: .balance(0))
+            }
+        case "Enter APR":
+            scrollAndFocus(to: "aprField", focus: .apr)
+        case "Set a typical monthly payment":
+            scrollAndFocus(to: "typicalPaymentField", focus: .typicalPayment)
+        default:
+            break
+        }
+    }
+
     private func commitAndDismissKeyboard() {
         // Reformat Typical Payment
         if let dec = parseCurrencyInput(typicalPaymentInput) {
@@ -1055,3 +1130,12 @@ private struct DismissOverlay: View {
     }
 }
 
+private struct ChecklistRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(configuration.isPressed ? Color.yellow.opacity(0.15) : .clear)
+            .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
+    }
+}

@@ -79,6 +79,8 @@ struct NetWorthChartView: View {
                     .monospacedDigit()
                     .foregroundStyle(titleColor(for: mode))
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
             Chart {
                 ForEach(data) { s in
                     SectorMark(
