@@ -7,6 +7,15 @@ struct AccountDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    private var isIPad: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
 
     // Query the account live by ID so we never hold a detached instance
     @Query private var fetchedAccounts: [Account]
@@ -44,282 +53,36 @@ struct AccountDetailView: View {
     var body: some View {
         Group {
             if let account {
-                List {
-                    Section(header: GroupedSectionHeader("Details")) {
-                        LabeledContent("Name", value: account.name)
-                        LabeledContent(account.type == .property ? "Description" : "Institution") {
-                            TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
-                                get: { account.institutionName ?? "" },
-                                set: { newVal in
-                                    let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    account.institutionName = trimmed
-                                    // Keep account name in sync with institution when edited here (non-property accounts only)
-                                    if account.type != .property, account.name != trimmed {
-                                        account.name = trimmed
-                                    }
-                                    do { try modelContext.save() } catch {}
-                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-                                }
-                            ))
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.words)
-                            .autocorrectionDisabled()
-                            .focused($focusedField, equals: .institution)
-                        }
-                        if account.type != .property && isInvalidInstitutionName(account.institutionName) {
-                            Text("Required. We couldn't derive this from your import.")
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
-                        LabeledContent("Type", value: account.type.rawValue.capitalized)
-                        if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Image(systemName: "info.circle")
-                                        .foregroundStyle(.blue)
-                                    Text("Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance.")
-                                }
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            }
-                            .padding(.top, 4)
-                        }
-                    }
+                Group {
+                    if isRegularWidth {
+                        HStack(spacing: 0) {
+                            detailsList(for: account)
+                                .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                .frame(maxHeight: .infinity)
 
-                    if account.type == .property {
-                        Section(header: GroupedSectionHeader("Financing")) {
-                            Picker("Liability Account", selection: $linkedLiabilityID) {
-                                Text("None").tag(nil as UUID?)
-                                ForEach(liabilityAccounts.filter { $0.id != account.id }, id: \.id) { liab in
-                                    let label = "\(liab.name) — \(liab.type.rawValue.capitalized)"
-                                    Text(label).tag(Optional(liab.id))
+                            ZStack {
+                                NavigationStack {
+                                    AccountTransactionsListView(accountID: account.id)
+                                        .id(account.id)
                                 }
+                                .environment(\.modelContext, modelContext)
                             }
-                            .onChange(of: linkedLiabilityID) { _, newVal in
-                                if suppressLinkOnChange { return }
-                                // If the selection becomes nil because the currently linked account isn't in the available options (e.g., filtered out),
-                                // don't delete the existing link.
-                                if newVal == nil, let active = activeAssetLink, !liabilityAccounts.contains(where: { $0.id == active.liability.id }) {
-                                    return
-                                }
-                                updateAssetLiabilityLink(for: account, to: newVal)
-                            }
-
-                            // Show Equity and LTV when a liability is linked and we have balances
-                            if let liabID = linkedLiabilityID,
-                               let liab = liabilityAccounts.first(where: { $0.id == liabID }) {
-                                let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
-                                let debtMag: Decimal = {
-                                    let bal = lastBalanceSnapshot(for: liab)?.balance ?? 0
-                                    return bal < 0 ? -bal : bal
-                                }()
-                                if assetVal != 0 {
-                                    LabeledContent("Equity") {
-                                        Text(format(amount: assetVal - debtMag))
-                                    }
-                                    LabeledContent("LTV") {
-                                        Text(formatPercent(debtMag / assetVal))
-                                    }
-                                }
-                            }
-
-                            Text("Link a loan to track equity and LTV.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                            .frame(maxHeight: .infinity)
                         }
-                    }
-
-                    if account.type == .loan || account.type == .creditCard {
-                        Section(header: GroupedSectionHeader("Payment Plan")) {
-                            // Typical payment editor
-                            LabeledContent("Typical Payment") {
-                                TextField("0.00", text: Binding<String>(
-                                    get: {
-                                        if let amt = account.loanTerms?.paymentAmount {
-                                            return formatAmountForInput(amt)
-                                        } else { return "" }
-                                    },
-                                    set: { newVal in
-                                        var terms = account.loanTerms ?? LoanTerms()
-                                        if let dec = parseCurrencyInput(newVal) {
-                                            terms.paymentAmount = dec
-                                        } else {
-                                            terms.paymentAmount = nil
-                                        }
-                                        account.loanTerms = terms
-                                        try? modelContext.save()
-                                        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-                                    }
-                                ))
-                                .multilineTextAlignment(.trailing)
-                                .keyboardType(.decimalPad)
-                                .focused($focusedField, equals: .paymentAmount)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                            }
-
-                            // Due day picker
-                            Picker("Due Day", selection: Binding<Int?>(
-                                get: { account.loanTerms?.paymentDayOfMonth },
-                                set: { newVal in
-                                    var terms = account.loanTerms ?? LoanTerms()
-                                    terms.paymentDayOfMonth = newVal
-                                    account.loanTerms = terms
-                                    try? modelContext.save()
-                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-                                }
-                            )) {
-                                Text("None").tag(nil as Int?)
-                                ForEach(1...31, id: \.self) { d in
-                                    Text("\(d)").tag(Optional(d))
-                                }
-                            }
-
-                            if let amt = account.loanTerms?.paymentAmount, amt > 0 {
-                                Text("Used for payoff estimates and budget projections.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("Enter your usual monthly payment to enable payoff estimates.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(alignment: .center) {
+                            Rectangle()
+                                .fill(.separator)
+                                .frame(width: 1)
+                                .frame(maxHeight: .infinity)
                         }
-                    }
-
-                    Section(header: GroupedSectionHeader("Balance Info")) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text("Transactional Balance")
-                                Spacer()
-                                if let derived = cachedDerivedBalance {
-                                    Text(format(amount: derived))
-                                } else {
-                                    Text("Unavailable")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            if lastBalanceSnapshot(for: account) != nil {
-                                Text("Latest recorded balance plus transactions since then.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("Sum of transactions.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text("Latest Recorded Balance")
-                                Button {
-                                    showRecordedBalanceInfo = true
-                                } label: {
-                                    Image(systemName: "info.circle")
-                                }
-                                .buttonStyle(.plain)
-                                Spacer()
-                                if let last = lastBalanceSnapshot(for: account) {
-                                    VStack(alignment: .trailing, spacing: 2) {
-                                        Text(format(amount: last.balance))
-                                        Text(last.asOfDate, style: .date)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        if let apr = last.interestRateAPR {
-                                            Text("APR: \(formatAPR(apr, scale: last.interestRateScale))")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                } else {
-                                    Text("None")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .alert("Recorded balance", isPresented: $showRecordedBalanceInfo) {
-                                Button("OK", role: .cancel) {}
-                            } message: {
-                                Text("Shows the most recent balance recorded from a statement or import. Manual starting balances are added as adjustments and appear below.")
-                            }
-                            Text("Latest recorded balance from a statement or import.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Section(header: GroupedSectionHeader("Balances")) {
-                        ForEach(sortedSnapshots(for: account), id: \.id) { snap in
-                            HStack {
-                                Text(snap.asOfDate, style: .date)
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(format(amount: snap.balance))
-                                    if let apr = snap.interestRateAPR {
-                                        Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-
-                        let adjustmentsList = adjustments(for: account)
-                        if !adjustmentsList.isEmpty {
-                            ForEach(adjustmentsList, id: \.id) { tx in
-                                HStack {
-                                    Text(tx.datePosted, style: .date)
-                                    Spacer()
-                                    Text(format(amount: tx.amount))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-
-                        Button {
-                            showStartingBalanceSheet = true
-                        } label: {
-                            if isMissingStartingBalance(for: account) {
-                                Label("Set Starting Balance", systemImage: "plus.circle")
-                            } else {
-                                Label("Add Balance…", systemImage: "plus.circle")
-                            }
-                        }
-
-                        if !adjustmentsList.isEmpty || !account.balanceSnapshots.isEmpty {
-                            Button {
-                                showStartingBalanceSheet = true
-                            } label: {
-                                Label("Edit Starting Balance…", systemImage: "pencil.circle")
-                            }
-                        }
-                    }
-
-                    Section(header: GroupedSectionHeader("Maintenance")) {
-                        Button(role: .destructive) {
-                            mergeTargetID = nil
-                            showMergeSheet = true
-                        } label: {
-                            Label("Merge Into Another Account…", systemImage: "arrow.triangle.merge")
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .scrollDismissesKeyboard(.interactively)
-                .frame(maxWidth: 760, alignment: .center)
-                .padding(.horizontal)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .overlay(alignment: .topTrailing) {
-                    if isIPadLandscape {
-                        NavigationLink {
-                            AccountTransactionsListView(accountID: account.id)
-                        } label: {
-                            Label("Transactions", systemImage: "list.bullet")
-                        }
-                        .padding(.top, 0)
-                        .padding(.trailing, 50)
+                    } else {
+                        detailsList(for: account)
                     }
                 }
                 .navigationTitle(account.name)
+                .navigationBarBackButtonHidden(isIPad)
                 .sheet(isPresented: $showStartingBalanceSheet) {
                     StartingBalanceSheet(account: account, defaultDate: defaultStartingBalanceDate(for: account))
                 }
@@ -339,7 +102,7 @@ struct AccountDetailView: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        if isIPadLandscape {
+                        if isRegularWidth {
                             EmptyView()
                         } else {
                             NavigationLink {
@@ -410,6 +173,238 @@ struct AccountDetailView: View {
                 }
             }
             .animation(.snappy, value: isEditing)
+        }
+    }
+
+    @ViewBuilder
+    private func detailsList(for account: Account) -> some View {
+        List {
+            Section(header: GroupedSectionHeader("Details")) {
+                LabeledContent("Name", value: account.name)
+                LabeledContent(account.type == .property ? "Description" : "Institution") {
+                    TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
+                        get: { account.institutionName ?? "" },
+                        set: { newVal in
+                            let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                            account.institutionName = trimmed
+                            // Keep account name in sync with institution when edited here (non-property accounts only)
+                            if account.type != .property, account.name != trimmed {
+                                account.name = trimmed
+                            }
+                            do { try modelContext.save() } catch {}
+                            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                        }
+                    ))
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .focused($focusedField, equals: .institution)
+                }
+                if account.type != .property && isInvalidInstitutionName(account.institutionName) {
+                    Text("Required. We couldn't derive this from your import.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+                LabeledContent("Type", value: account.type.rawValue.capitalized)
+                if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.blue)
+                            Text("Brokerage activity won't affect Net Worth until you import a statement with balances/holdings or set a starting balance.")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+
+            if account.type == .property {
+                Section(header: GroupedSectionHeader("Financing")) {
+                    Picker("Liability Account", selection: $linkedLiabilityID) {
+                        Text("None").tag(nil as UUID?)
+                        ForEach(liabilityAccounts.filter { $0.id != account.id }, id: \.id) { liab in
+                            let label = "\(liab.name) — \(liab.type.rawValue.capitalized)"
+                            Text(label).tag(Optional(liab.id))
+                        }
+                    }
+                    .onChange(of: linkedLiabilityID) { _, newVal in
+                        if suppressLinkOnChange { return }
+                        // If the selection becomes nil because the currently linked account isn't in the available options (e.g., filtered out),
+                        // don't delete the existing link.
+                        if newVal == nil, let active = activeAssetLink, !liabilityAccounts.contains(where: { $0.id == active.liability.id }) {
+                            return
+                        }
+                        updateAssetLiabilityLink(for: account, to: newVal)
+                    }
+
+                    // Show Equity and LTV when a liability is linked and we have balances
+                    if let liabID = linkedLiabilityID,
+                       let liab = liabilityAccounts.first(where: { $0.id == liabID }) {
+                        let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
+                        let debtMag: Decimal = {
+                            let bal = lastBalanceSnapshot(for: liab)?.balance ?? 0
+                            return bal < 0 ? -bal : bal
+                        }()
+                        if assetVal != 0 {
+                            LabeledContent("Equity") {
+                                Text(format(amount: assetVal - debtMag))
+                            }
+                            LabeledContent("LTV") {
+                                Text(formatPercent(debtMag / assetVal))
+                            }
+                        }
+                    }
+
+                    Text("Link a loan to track equity and LTV.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if account.type == .loan || account.type == .creditCard {
+                Section(header: GroupedSectionHeader("Payment Plan")) {
+                    // Typical payment editor
+                    LabeledContent("Typical Payment") {
+                        TextField("0.00", text: Binding<String>(
+                            get: {
+                                if let amt = account.loanTerms?.paymentAmount {
+                                    return formatAmountForInput(amt)
+                                } else { return "" }
+                            },
+                            set: { newVal in
+                                var terms = account.loanTerms ?? LoanTerms()
+                                if let dec = parseCurrencyInput(newVal) {
+                                    terms.paymentAmount = dec
+                                } else {
+                                    terms.paymentAmount = nil
+                                }
+                                account.loanTerms = terms
+                                try? modelContext.save()
+                                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                            }
+                        ))
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .paymentAmount)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    }
+
+                    // Due day picker
+                    Picker("Due Day", selection: Binding<Int?>(
+                        get: { account.loanTerms?.paymentDayOfMonth },
+                        set: { newVal in
+                            var terms = account.loanTerms ?? LoanTerms()
+                            terms.paymentDayOfMonth = newVal
+                            account.loanTerms = terms
+                            try? modelContext.save()
+                            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                        }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in
+                            Text("\(d)").tag(Optional(d))
+                        }
+                    }
+
+                    if let amt = account.loanTerms?.paymentAmount, amt > 0 {
+                        Text("Used for payoff estimates and budget projections.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Enter your usual monthly payment to enable payoff estimates.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section(header: GroupedSectionHeader("Balance Info")) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Transactional Balance")
+                        Spacer()
+                        if let derived = cachedDerivedBalance {
+                            Text(format(amount: derived))
+                        } else {
+                            Text("Unavailable")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if lastBalanceSnapshot(for: account) != nil {
+                        Text("Latest recorded balance plus transactions since then.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Sum of transactions.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Latest Recorded Balance")
+                        Button {
+                            showRecordedBalanceInfo = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        if let last = lastBalanceSnapshot(for: account) {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(format(amount: last.balance))
+                                Text(last.asOfDate, style: .date)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let apr = last.interestRateAPR {
+                                    Text("APR: \(formatAPR(apr, scale: last.interestRateScale))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Text("None")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .alert("Recorded balance", isPresented: $showRecordedBalanceInfo) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text("Shows the most recent balance recorded from a statement or import. Manual starting balances are added as adjustments and appear below.")
+                    }
+                    Text("Latest recorded balance from a statement or import.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section(header: GroupedSectionHeader("Maintenance")) {
+                Button(role: .destructive) {
+                    mergeTargetID = nil
+                    showMergeSheet = true
+                } label: {
+                    Label("Merge Into Another Account…", systemImage: "arrow.triangle.merge")
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollDismissesKeyboard(.interactively)
+        .frame(maxWidth: isRegularWidth ? .infinity : 760, alignment: .center)
+        .padding(.horizontal, isRegularWidth ? 0 : 16)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .overlay(alignment: .topTrailing) {
+            if !isRegularWidth {
+                NavigationLink {
+                    AccountTransactionsListView(accountID: account.id)
+                } label: {
+                    Label("Transactions", systemImage: "list.bullet")
+                }
+                .padding(.top, 0)
+                .padding(.trailing, 50)
+            }
         }
     }
 
