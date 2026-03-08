@@ -55,28 +55,34 @@ struct AccountDetailView: View {
             if let account {
                 Group {
                     if isRegularWidth {
-                        HStack(spacing: 0) {
-                            detailsList(for: account)
+                        VStack(spacing: 12) {
+                            glanceableHeader(for: account)
+                                .padding(.horizontal, 24)
+
+                            HStack(spacing: 0) {
+                                detailsList(for: account)
+                                    .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                    .frame(maxHeight: .infinity)
+
+                                ZStack {
+                                    NavigationStack {
+                                        AccountTransactionsListView(accountID: account.id)
+                                            .id(account.id)
+                                    }
+                                    .environment(\.modelContext, modelContext)
+                                }
                                 .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
                                 .frame(maxHeight: .infinity)
-
-                            ZStack {
-                                NavigationStack {
-                                    AccountTransactionsListView(accountID: account.id)
-                                        .id(account.id)
-                                }
-                                .environment(\.modelContext, modelContext)
                             }
-                            .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
-                            .frame(maxHeight: .infinity)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(alignment: .center) {
+                                Rectangle()
+                                    .fill(.separator)
+                                    .frame(width: 1)
+                                    .frame(maxHeight: .infinity)
+                            }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .overlay(alignment: .center) {
-                            Rectangle()
-                                .fill(.separator)
-                                .frame(width: 1)
-                                .frame(maxHeight: .infinity)
-                        }
                     } else {
                         detailsList(for: account)
                     }
@@ -406,6 +412,206 @@ struct AccountDetailView: View {
                 .padding(.trailing, 50)
             }
         }
+    }
+
+    
+    private func glanceableHeader(for account: Account) -> some View {
+        // Only show on iPad/regular width
+        let transactionalBalance: String = {
+            if let derived = cachedDerivedBalance {
+                return format(amount: derived)
+            } else {
+                return "Unavailable"
+            }
+        }()
+
+        let last = lastBalanceSnapshot(for: account)
+        let recordedBalance: String = {
+            if let last = last { return format(amount: last.balance) } else { return "None" }
+        }()
+        let recordedDate: String? = {
+            if let last = last {
+                let df = DateFormatter()
+                df.dateStyle = .medium
+                df.timeStyle = .none
+                return df.string(from: last.asOfDate)
+            }
+            return nil
+        }()
+
+        // Change since recorded balance (if both values exist)
+        let changeSinceRecorded: (text: String, color: Color)? = {
+            guard let derived = cachedDerivedBalance, let lastBal = last?.balance else { return nil }
+            let delta = derived - lastBal
+            let prefix = delta >= 0 ? "+" : ""
+            return (prefix + format(amount: delta), delta >= 0 ? .green : .red)
+        }()
+
+        // Linked liability (for properties)
+        let linkedLiability: Account? = {
+            guard account.type == .property, let liabID = linkedLiabilityID else { return nil }
+            return liabilityAccounts.first(where: { $0.id == liabID })
+        }()
+
+        // Compute Equity and LTV when applicable (properties with a linked loan)
+        func computeEquityAndLTV() -> (String?, String?) {
+            let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
+            guard account.type == .property, let liab = linkedLiability else {
+                return (nil, nil)
+            }
+            let liabilityBalance = lastBalanceSnapshot(for: liab)?.balance ?? 0
+            let debtMag: Decimal = liabilityBalance < 0 ? -liabilityBalance : liabilityBalance
+            guard assetVal != 0 else { return (nil, nil) }
+            let equityText = format(amount: assetVal - debtMag)
+            let ltvText = formatPercent(debtMag / assetVal)
+            return (equityText, ltvText)
+        }
+
+        let (equityText, ltvText) = computeEquityAndLTV()
+
+        // Loan/Credit Card helpers
+        let isLoanLike = account.type == .loan || account.type == .creditCard
+        let aprText: String? = {
+            guard let apr = last?.interestRateAPR else { return nil }
+            return formatAPR(apr, scale: last?.interestRateScale)
+        }()
+        let typicalPaymentText: String? = {
+            guard isLoanLike, let amt = account.loanTerms?.paymentAmount else { return nil }
+            return format(amount: amt)
+        }()
+        func nextDueDate(day: Int) -> Date? {
+            let cal = Calendar.current
+            let now = Date()
+            let today = cal.startOfDay(for: now)
+            var comps = cal.dateComponents([.year, .month], from: today)
+            guard let monthStart = cal.date(from: comps) else { return nil }
+            let range = cal.range(of: .day, in: .month, for: monthStart) ?? 1..<29
+            let clampedDay = min(max(1, day), range.count)
+            comps.day = clampedDay
+            guard let dueThisMonth = cal.date(from: comps) else { return nil }
+            if today <= dueThisMonth { return dueThisMonth }
+            // Next month
+            var nextComps = cal.dateComponents([.year, .month], from: cal.date(byAdding: .month, value: 1, to: monthStart)!)
+            let nextMonthStart = cal.date(from: nextComps)!
+            let nextRange = cal.range(of: .day, in: .month, for: nextMonthStart) ?? 1..<29
+            nextComps.day = min(max(1, day), nextRange.count)
+            return cal.date(from: nextComps)
+        }
+        func daysUntil(_ date: Date) -> Int {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: Date())
+            let end = cal.startOfDay(for: date)
+            return cal.dateComponents([.day], from: start, to: end).day ?? 0
+        }
+        let nextDueParts: (date: String, rel: String)? = {
+            guard isLoanLike, let day = account.loanTerms?.paymentDayOfMonth, let next = nextDueDate(day: day) else { return nil }
+            let df = DateFormatter()
+            df.dateStyle = .medium
+            df.timeStyle = .none
+            let days = daysUntil(next)
+            let rel: String
+            if days > 0 { rel = "in \(days)d" }
+            else if days < 0 { rel = "\(abs(days))d ago" }
+            else { rel = "today" }
+            return (df.string(from: next), rel)
+        }()
+
+        // Brokerage: valuation age
+        let valuationAgeText: String? = {
+            guard account.type == .brokerage, let asOf = last?.asOfDate else { return nil }
+            let cal = Calendar.current
+            let days = cal.dateComponents([.day], from: cal.startOfDay(for: asOf), to: cal.startOfDay(for: Date())).day ?? 0
+            return "\(days)d"
+        }()
+
+        // Property: linked loan details
+        let linkedLoanName: String? = linkedLiability?.name
+        let linkedLoanBalance: String? = {
+            guard let liab = linkedLiability, let bal = lastBalanceSnapshot(for: liab)?.balance else { return nil }
+            let mag = bal < 0 ? -bal : bal
+            return format(amount: mag)
+        }()
+
+        // A helper to render a single-line caption, single-line value, and a single-line sublabel (or a space placeholder)
+        func cell(title: String, value: String, sub: String?) -> some View {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(value)
+                    .font(.title3).bold().monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(sub ?? " ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+
+        return VStack(alignment: .center, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                GridRow {
+                    // Tx Balance
+                    cell(title: "Transaction Balance", value: transactionalBalance, sub: nil)
+
+                    // Recorded (with date below or space)
+                    cell(title: "Recorded Balance", value: recordedBalance, sub: recordedDate)
+
+                    // Δ Since Rec.
+                    if let change = changeSinceRecorded {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Δ Since Rec.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Text(change.text)
+                                .font(.title3).bold().monospacedDigit()
+                                .foregroundStyle(change.color)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            Text(" ")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    }
+
+                    // Equity & LTV
+                    if let eq = equityText { cell(title: "Equity", value: eq, sub: nil) }
+                    if let ltv = ltvText { cell(title: "LTV", value: ltv, sub: nil) }
+
+                    // Property-specific linked loan info
+                    if account.type == .property {
+                        if let name = linkedLoanName { cell(title: "Loan", value: name, sub: nil) }
+                        if let bal = linkedLoanBalance { cell(title: "Loan Bal", value: bal, sub: nil) }
+                    }
+
+                    // Loan/Credit Card items
+                    if isLoanLike {
+                        if let apr = aprText { cell(title: "APR", value: apr, sub: nil) }
+                        if let pay = typicalPaymentText { cell(title: "Payment", value: pay, sub: nil) }
+                        if let parts = nextDueParts { cell(title: "Next Due", value: parts.date, sub: parts.rel) }
+                    }
+
+                    // Brokerage items
+                    if let age = valuationAgeText { cell(title: "Val Age", value: age, sub: nil) }
+                }
+            }
+            .frame(maxWidth: 700, alignment: .center)
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.separator, lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var isIPadLandscape: Bool {
