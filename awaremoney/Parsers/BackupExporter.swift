@@ -276,6 +276,66 @@ enum BackupExporter {
         return (data, filename)
     }
 
+    /// Builds a backup package as a directory FileWrapper containing:
+    /// - manifest.json (the JSON manifest)
+    /// - statements/<batchID>/<sourceFileName> (PDFs when available)
+    /// Returns the root FileWrapper and a suggested filename (without extension).
+    static func makeBackupPackage(context: ModelContext, settings: SettingsStore) throws -> (wrapper: FileWrapper, filename: String) {
+        // Reuse the existing JSON manifest builder
+        let (manifestData, filename) = try makeBackup(context: context, settings: settings)
+
+        var children: [String: FileWrapper] = [:]
+        let manifest = FileWrapper(regularFileWithContents: manifestData)
+        manifest.preferredFilename = "manifest.json"
+        children["manifest.json"] = manifest
+
+        // Build statements directory
+        let statementsDir = FileWrapper(directoryWithFileWrappers: [:])
+        statementsDir.preferredFilename = "statements"
+
+        // Fetch batches to locate available PDFs
+        let batches: [ImportBatch] = (try? context.fetch(FetchDescriptor<ImportBatch>())) ?? []
+        let fm = FileManager.default
+        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
+
+        for b in batches {
+            let fileName = b.sourceFileName
+            guard !fileName.isEmpty, fileName.lowercased().hasSuffix(".pdf") else { continue }
+
+            // Prefer per-batch cached path; fall back to legacy Caches/<sourceFileName>
+            var sourceURL: URL? = nil
+            if let path = b.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
+                sourceURL = URL(fileURLWithPath: path)
+            } else if let caches, fm.fileExists(atPath: caches.appendingPathComponent(fileName).path) {
+                sourceURL = caches.appendingPathComponent(fileName)
+            }
+            guard let src = sourceURL, let data = try? Data(contentsOf: src) else { continue }
+
+            // Batch folder under statements
+            let batchFolder = FileWrapper(directoryWithFileWrappers: [:])
+            batchFolder.preferredFilename = b.id.uuidString
+
+            let pdfWrapper = FileWrapper(regularFileWithContents: data)
+            pdfWrapper.preferredFilename = fileName
+            // Add PDF to batch folder
+            _ = batchFolder.addFileWrapper(pdfWrapper)
+
+            // Add/merge into statements directory (avoid duplicate keys)
+            let key = batchFolder.preferredFilename ?? b.id.uuidString
+            if statementsDir.fileWrappers?[key] == nil {
+                _ = statementsDir.addFileWrapper(batchFolder)
+            }
+        }
+
+        // Attach statements directory if it has any children
+        if let count = statementsDir.fileWrappers?.count, count > 0 {
+            children["statements"] = statementsDir
+        }
+
+        let root = FileWrapper(directoryWithFileWrappers: children)
+        return (root, filename)
+    }
+
     private static func suggestedFilename() -> String {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd_HHmmss"
@@ -288,18 +348,20 @@ enum BackupExporter {
 
 import SwiftUI
 
-struct BackupDocument: FileDocument {
+struct BackupPackageDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.awareMoneyBackup] }
     static var writableContentTypes: [UTType] { [.awareMoneyBackup] }
-    var data: Data
 
-    init(data: Data) { self.data = data }
+    let rootWrapper: FileWrapper
+
+    init(wrapper: FileWrapper) { self.rootWrapper = wrapper }
 
     init(configuration: ReadConfiguration) throws {
-        self.data = configuration.file.regularFileContents ?? Data()
+        // For exporting, we don't rely on reading; provide an empty directory by default
+        self.rootWrapper = configuration.file ?? FileWrapper(directoryWithFileWrappers: [:])
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        return FileWrapper(regularFileWithContents: data)
+        return rootWrapper
     }
 }

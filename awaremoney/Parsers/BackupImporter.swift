@@ -4,6 +4,17 @@
 import Foundation
 import SwiftData
 
+private enum ImportBatchDetailView_PreviewHelpers {
+    static func perBatchPreviewDirectory(for batch: ImportBatch) -> URL? {
+        let fm = FileManager.default
+        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            return caches.appendingPathComponent("StatementPreviews", isDirectory: true)
+                .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+        }
+        return nil
+    }
+}
+
 struct BackupImportSummary: Sendable {
     var settingsUpdated: Bool = false
     var accountsInserted = 0
@@ -23,6 +34,43 @@ struct BackupImportSummary: Sendable {
 }
 
 enum BackupImporter {
+    static func importBackup(wrapper: FileWrapper, context: ModelContext, settings: SettingsStore) throws -> BackupImportSummary {
+        // Find and read manifest.json
+        guard let files = wrapper.fileWrappers,
+              let manifest = files["manifest.json"],
+              let manifestData = manifest.regularFileContents else {
+            throw NSError(domain: "BackupImporter", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing manifest.json in backup."])
+        }
+        var summary = try importBackup(data: manifestData, context: context, settings: settings)
+
+        // Locate statements directory
+        if let statements = files["statements"], statements.isDirectory, let children = statements.fileWrappers {
+            // For each batch folder, expect <batchID>/<sourceFileName>
+            for (batchIDString, batchFolder) in children where batchFolder.isDirectory {
+                guard let batchUUID = UUID(uuidString: batchIDString), let batchChildren = batchFolder.fileWrappers else { continue }
+                // Find the batch by id
+                let pred = #Predicate<ImportBatch> { $0.id == batchUUID }
+                let fetch = FetchDescriptor<ImportBatch>(predicate: pred)
+                let batches = (try? context.fetch(fetch)) ?? []
+                guard let batch = batches.first else { continue }
+                // Expect a single file (prefer .pdf)
+                if let pdfEntry = batchChildren.values.first(where: { ($0.preferredFilename ?? "").lowercased().hasSuffix(".pdf") }),
+                   let data = pdfEntry.regularFileContents {
+                    // Write into per-batch cache and update sourceFileLocalPath
+                    if let dir = ImportBatchDetailView_PreviewHelpers.perBatchPreviewDirectory(for: batch) {
+                        let fm = FileManager.default
+                        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                        let dest = dir.appendingPathComponent(pdfEntry.preferredFilename ?? "statement.pdf")
+                        try? data.write(to: dest, options: .atomic)
+                        batch.sourceFileLocalPath = dest.path
+                        try? context.save()
+                    }
+                }
+            }
+        }
+        return summary
+    }
+
     static func importBackup(data: Data, context: ModelContext, settings: SettingsStore) throws -> BackupImportSummary {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

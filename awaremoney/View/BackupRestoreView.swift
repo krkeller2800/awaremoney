@@ -10,15 +10,19 @@ struct BackupRestoreView: View {
     @Environment(\.dismiss) private var dismiss
 
     // Export
-    @State private var backupDoc: BackupDocument? = nil
+    @State private var backupDoc: BackupPackageDocument? = nil
     @State private var showExporter = false
 
     // Import
     @State private var showImporter = false
 
     // Share
-    @State private var showShareSheet = false
     @State private var shareURL: URL? = nil
+    private struct ShareItem: Identifiable {
+        let url: URL
+        var id: String { url.path }
+    }
+    @State private var shareItem: ShareItem? = nil
 
     var body: some View {
         NavigationStack {
@@ -26,8 +30,8 @@ struct BackupRestoreView: View {
                 Section("Backup & Restore") {
                     Button {
                         do {
-                            let (data, _) = try BackupExporter.makeBackup(context: modelContext, settings: settings)
-                            self.backupDoc = BackupDocument(data: data)
+                            let (wrapper, filename) = try BackupExporter.makeBackupPackage(context: modelContext, settings: settings)
+                            self.backupDoc = BackupPackageDocument(wrapper: wrapper)
                             self.showExporter = true
                         } catch {
                             AMLogging.error("Backup export failed: \(error.localizedDescription)", component: "BackupRestoreView")
@@ -49,7 +53,7 @@ struct BackupRestoreView: View {
                             try? FileManager.default.removeItem(at: tmp)
                             try data.write(to: tmp, options: .atomic)
                             self.shareURL = tmp
-                            self.showShareSheet = true
+                            self.shareItem = ShareItem(url: tmp)
                         } catch {
                             AMLogging.error("Backup share build failed: \(error.localizedDescription)", component: "BackupRestoreView")
                         }
@@ -98,17 +102,21 @@ struct BackupRestoreView: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    let ext = url.pathExtension.lowercased()
-                    if ext != "ambackup" && ext != "json" {
-                        backupCoordinator.alertMessage = "Unsupported file. Please choose a .ambackup or .json backup file."
-                        return
-                    }
                     let started = url.startAccessingSecurityScopedResource()
                     defer { if started { url.stopAccessingSecurityScopedResource() } }
                     do {
-                        let data = try Data(contentsOf: url)
-                        let summary = try BackupImporter.importBackup(data: data, context: modelContext, settings: settings)
-                        backupCoordinator.alertMessage = makeSummaryText(from: summary)
+                        // Try to read as a file package (directory). If not a directory, fall back to Data.
+                        var isDir: ObjCBool = false
+                        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                        if isDir.boolValue {
+                            let wrapper = try FileWrapper(url: url, options: .immediate)
+                            let summary = try BackupImporter.importBackup(wrapper: wrapper, context: modelContext, settings: settings)
+                            backupCoordinator.alertMessage = makeSummaryText(from: summary)
+                        } else {
+                            let data = try Data(contentsOf: url)
+                            let summary = try BackupImporter.importBackup(data: data, context: modelContext, settings: settings)
+                            backupCoordinator.alertMessage = makeSummaryText(from: summary)
+                        }
                     } catch {
                         backupCoordinator.alertMessage = "Import failed: \(error.localizedDescription)"
                     }
@@ -121,18 +129,14 @@ struct BackupRestoreView: View {
             } message: {
                 Text(backupCoordinator.alertMessage ?? "")
             }
-            .sheet(isPresented: $showShareSheet, onDismiss: {
+            .sheet(item: $shareItem, onDismiss: {
                 if let url = shareURL {
                     try? FileManager.default.removeItem(at: url)
                     shareURL = nil
                 }
-            }) {
-                if let url = shareURL {
-                    ActivityView(activityItems: [url])
-                        .ignoresSafeArea()
-                } else {
-                    Text("Preparing backup…")
-                }
+            }) { item in
+                ActivityView(activityItems: [item.url])
+                    .ignoresSafeArea()
             }
         }
     }

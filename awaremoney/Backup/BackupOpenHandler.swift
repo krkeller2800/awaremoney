@@ -16,10 +16,19 @@ final class BackupOpenCoordinator: ObservableObject {
         let didStart = url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         do {
-            let data = try Data(contentsOf: url)
-            let summary = try await BackupImporter.importBackup(data: data, context: context, settings: settings)
-            let text = await Self.makeSummaryText(from: summary)
-            await MainActor.run { self.alertMessage = text }
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                let wrapper = try FileWrapper(url: url, options: .immediate)
+                let summary = try await MainActor.run { try BackupImporter.importBackup(wrapper: wrapper, context: context, settings: settings) }
+                let text = await Self.makeSummaryText(from: summary)
+                await MainActor.run { self.alertMessage = text }
+            } else {
+                let data = try Data(contentsOf: url)
+                let summary = try await MainActor.run { try BackupImporter.importBackup(data: data, context: context, settings: settings) }
+                let text = await Self.makeSummaryText(from: summary)
+                await MainActor.run { self.alertMessage = text }
+            }
         } catch {
             await MainActor.run { self.alertMessage = "Import failed: \(error.localizedDescription)" }
         }

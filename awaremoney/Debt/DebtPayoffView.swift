@@ -30,19 +30,29 @@ struct DebtPayoffView: View {
         return idx < focusOrder.count - 1
     }
 
+    private func focusField(_ field: Field) {
+        focusedField = field
+        // Ensure selection happens after focus
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            selectAllInFirstResponder()
+        }
+    }
+
     var body: some View {
         List {
-            Section("Account") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(viewModel.account.name).font(.headline)
-                    Text(viewModel.account.institutionName ?? "").font(.subheadline).foregroundStyle(.secondary)
-                    Text(viewModel.account.type.rawValue.capitalized).font(.subheadline).foregroundStyle(.secondary)
-                }
-                if let last = viewModel.account.balanceSnapshots.sorted(by: { $0.asOfDate > $1.asOfDate }).first {
-                    LabeledContent("Baseline") {
-                        VStack(alignment: .trailing) {
-                            Text(last.asOfDate, style: .date)
-                            Text(formatCurrency(abs(last.balance)))
+            if UIDevice.type == "iPhone" {
+                Section("Account") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(viewModel.account.name).font(.headline)
+                        Text(viewModel.account.institutionName ?? "").font(.subheadline).foregroundStyle(.secondary)
+                        Text(viewModel.account.type.rawValue.capitalized).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    if let last = viewModel.account.balanceSnapshots.sorted(by: { $0.asOfDate > $1.asOfDate }).first {
+                        LabeledContent("Baseline") {
+                            VStack(alignment: .trailing) {
+                                Text(last.asOfDate, style: .date)
+                                Text(formatCurrency(abs(last.balance)))
+                            }
                         }
                     }
                 }
@@ -58,6 +68,13 @@ struct DebtPayoffView: View {
                             Text(label(for: mode)).tag(mode)
                         }
                     }
+                    .overlay(alignment: .trailing) {
+                        Image(systemName: "pencil")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
+                            .padding(.trailing, 2)
+                            .accessibilityHidden(true)
+                    }
                 }
 
                 HStack {
@@ -69,6 +86,13 @@ struct DebtPayoffView: View {
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .focused($focusedField, equals: .apr)
+
+                    Button(action: { focusField(.apr) }) {
+                        Image(systemName: "pencil")
+                            .imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit APR")
                 }
 
                 HStack {
@@ -80,6 +104,13 @@ struct DebtPayoffView: View {
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .focused($focusedField, equals: .typical)
+
+                    Button(action: { focusField(.typical) }) {
+                        Image(systemName: "pencil")
+                            .imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit typical payment")
                 }
 
                 ProgressView(value: viewModel.confidence) {

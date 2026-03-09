@@ -14,6 +14,8 @@ struct ReviewImportView: View {
     @ObservedObject var vm: ImportViewModel
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
     @Query(sort: [SortDescriptor(\Account.createdAt)]) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
     @State private var showPDFSheet = false
@@ -40,14 +42,28 @@ struct ReviewImportView: View {
         NavigationStack {
             ZStack {
                 Group {
-                    if isPad {
-                        HStack(spacing: 0) {
-                            mainList
-                                .frame(width: 380)
-                            Divider()
-                            pdfPane
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if isRegularWidth {
+                        VStack(spacing: 12) {
+                            HStack(spacing: 0) {
+                                mainList
+                                    .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                    .frame(maxHeight: .infinity)
+
+                                NavigationStack {
+                                    pdfPane
+                                }
+                                .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                .frame(maxHeight: .infinity)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(alignment: .center) {
+                                Rectangle()
+                                    .fill(.separator)
+                                    .frame(width: 1)
+                                    .frame(maxHeight: .infinity)
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         mainList
                     }
@@ -212,24 +228,48 @@ struct ReviewImportView: View {
 
                 Section() {
                     VStack {
-                        Picker("Account", selection: accountSelectionBinding) {
-                            Text("Create New…").tag(nil as UUID?)
-                            ForEach(accounts, id: \.id) { acct in
-                                Text("\(acct.name) (\(acct.type.rawValue))").tag(Optional(acct.id))
-                            }
-                        }
-                        .onAppear(perform: onAccountSectionAppear)
-                        if selectedAccountId == nil {
-                            TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
-                                .textInputAutocapitalization(.words)
-                                .focused($focusedField, equals: .institution)
-                                .submitLabel(.next)
-                                .onSubmit { moveFocus(1) }
-                                .onTapGesture { selectAllInFirstResponder() }
-                            Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
-                                ForEach(Account.AccountType.allCases, id: \.self) {
-                                    Text($0.rawValue)
+                        HStack {
+                            Picker("Account", selection: accountSelectionBinding) {
+                                Text("Create New…").tag(nil as UUID?)
+                                ForEach(accounts, id: \.id) { acct in
+                                    Text("\(acct.name) (\(acct.type.rawValue))").tag(Optional(acct.id))
                                 }
+                            }
+                            .onAppear(perform: onAccountSectionAppear)
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
+                        }
+                        if selectedAccountId == nil {
+                            HStack {
+                                TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
+                                    .textInputAutocapitalization(.words)
+                                    .focused($focusedField, equals: .institution)
+                                    .submitLabel(.next)
+                                    .onSubmit { moveFocus(1) }
+                                    .onTapGesture { selectAllInFirstResponder() }
+                                Button {
+                                    focusedField = .institution
+                                    selectAllInFirstResponder()
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Edit institution")
+                            }
+                            HStack {
+                                Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
+                                    ForEach(Account.AccountType.allCases, id: \.self) {
+                                        Text($0.rawValue)
+                                    }
+                                }
+                                Image(systemName: "pencil")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .accessibilityHidden(true)
                             }
                             if staged.sourceFileName.lowercased().hasSuffix(".pdf") && UIDevice.type == "iPhone" {
                                 Button {
@@ -276,21 +316,33 @@ struct ReviewImportView: View {
                     Section("Loan Terms") {
                         VStack {
                             LabeledContent("Typical Payment") {
-                                TextField("0.00", text: $typicalPaymentInput)
-                                    .multilineTextAlignment(.trailing)
-                                    .keyboardType(.decimalPad)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                    .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
-                                        typicalPaymentParsed = parseCurrencyInput(newValue)
+                                HStack(spacing: 6) {
+                                    TextField("0.00", text: $typicalPaymentInput)
+                                        .multilineTextAlignment(.trailing)
+                                        .keyboardType(.decimalPad)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
+                                        .onChange(of: typicalPaymentInput, initial: false) { _, newValue in
+                                            typicalPaymentParsed = parseCurrencyInput(newValue)
+                                        }
+                                        .focused($focusedField, equals: .typicalPayment)
+                                        .id("typicalPaymentField")
+                                        .submitLabel(.next)
+                                        .onSubmit { moveFocus(1) }
+                                        .onTapGesture { selectAllInFirstResponder() }
+                                        .background(highlightTarget == "typicalPaymentField" ? Color.accentColor.opacity(0.12) : .clear)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    Button {
+                                        focusedField = .typicalPayment
+                                        selectAllInFirstResponder()
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                            .font(.caption)
                                     }
-                                    .focused($focusedField, equals: .typicalPayment)
-                                    .id("typicalPaymentField")
-                                    .submitLabel(.next)
-                                    .onSubmit { moveFocus(1) }
-                                    .onTapGesture { selectAllInFirstResponder() }
-                                    .background(highlightTarget == "typicalPaymentField" ? Color.accentColor.opacity(0.12) : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Edit typical payment")
+                                }
                             }
                             Text("Used for payoff estimates and budget projections.")
                                 .font(.footnote)
@@ -298,18 +350,30 @@ struct ReviewImportView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             
                             LabeledContent("Interest Rate (APR)") {
-                                TextField("0.00", text: $aprInput)
-                                    .multilineTextAlignment(.trailing)
-                                    .keyboardType(.decimalPad)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                    .focused($focusedField, equals: .apr)
-                                    .id("aprField")
-                                    .submitLabel(.done)
-                                    .onSubmit { commitAndDismissKeyboard() }
-                                    .onTapGesture { selectAllInFirstResponder() }
-                                    .background(highlightTarget == "aprField" ? Color.accentColor.opacity(0.12) : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                HStack(spacing: 6) {
+                                    TextField("0.00", text: $aprInput)
+                                        .multilineTextAlignment(.trailing)
+                                        .keyboardType(.decimalPad)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
+                                        .focused($focusedField, equals: .apr)
+                                        .id("aprField")
+                                        .submitLabel(.done)
+                                        .onSubmit { commitAndDismissKeyboard() }
+                                        .onTapGesture { selectAllInFirstResponder() }
+                                        .background(highlightTarget == "aprField" ? Color.accentColor.opacity(0.12) : .clear)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    Button {
+                                        focusedField = .apr
+                                        selectAllInFirstResponder()
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Edit APR")
+                                }
                             }
                             Text("Enter as a percent (e.g., 19.99 for 19.99%).")
                                 .font(.footnote)
@@ -422,13 +486,20 @@ struct ReviewImportView: View {
                                 HStack(alignment: .top) {
                                     Toggle("", isOn: balanceIncludeBinding(for: idx))
                                         .labelsHidden()
-                                    
+
                                     VStack(alignment: .leading, spacing: 6) {
-                                        HStack(spacing: 12) {
+                                        HStack(spacing: 2) {
                                             DatePicker("As of", selection: balanceDateBinding(for: idx), displayedComponents: .date)
                                                 .labelsHidden()
+                                                .datePickerStyle(.compact)
+//                                            Image(systemName: "pencil")
+//                                                .font(.caption)
+//                                                .foregroundStyle(.tertiary)
+//                                                .accessibilityHidden(true)
                                             Spacer()
                                             TextField("0.00", text: balanceAmountTextBinding(for: idx))
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.75)
                                                 .multilineTextAlignment(.trailing)
                                                 .keyboardType(.decimalPad)
                                                 .textInputAutocapitalization(.never)
@@ -440,6 +511,16 @@ struct ReviewImportView: View {
                                                 .onTapGesture { selectAllInFirstResponder() }
                                                 .background(highlightTarget == "balanceField-\(idx)" ? Color.accentColor.opacity(0.12) : .clear)
                                                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            Button {
+                                                focusedField = .balance(idx)
+                                                selectAllInFirstResponder()
+                                            } label: {
+                                                Image(systemName: "pencil")
+                                                    .font(.caption)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundStyle(.secondary)
+                                            .accessibilityLabel("Edit balance amount")
                                         }
                                         if let label = b.sourceAccountLabel, !label.isEmpty {
                                             Text(label.capitalized)
@@ -986,15 +1067,10 @@ struct ReviewImportView: View {
             get: {
                 guard let balances = vm.staged?.balances, index < balances.count else { return "" }
                 let amount = balances[index].balance
-                let nf = NumberFormatter()
-                nf.numberStyle = .decimal
-                nf.minimumFractionDigits = 0
-                nf.maximumFractionDigits = 2
-                return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+                return currencyFormatter.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
             },
             set: { newText in
-                let cleaned = newText.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if let dec = Decimal(string: cleaned) {
+                if let dec = parseCurrencyInput(newText) {
                     if var staged = vm.staged, index < staged.balances.count {
                         staged.balances[index].balance = dec
                         vm.staged = staged
@@ -1139,3 +1215,4 @@ private struct ChecklistRowButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
+

@@ -188,23 +188,35 @@ struct AccountDetailView: View {
             Section(header: GroupedSectionHeader("Details")) {
                 LabeledContent("Name", value: account.name)
                 LabeledContent(account.type == .property ? "Description" : "Institution") {
-                    TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
-                        get: { account.institutionName ?? "" },
-                        set: { newVal in
-                            let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
-                            account.institutionName = trimmed
-                            // Keep account name in sync with institution when edited here (non-property accounts only)
-                            if account.type != .property, account.name != trimmed {
-                                account.name = trimmed
+                    HStack(spacing: 6) {
+                        TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
+                            get: { account.institutionName ?? "" },
+                            set: { newVal in
+                                let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                                account.institutionName = trimmed
+                                // Keep account name in sync with institution when edited here (non-property accounts only)
+                                if account.type != .property, account.name != trimmed {
+                                    account.name = trimmed
+                                }
+                                do { try modelContext.save() } catch {}
+                                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
                             }
-                            do { try modelContext.save() } catch {}
-                            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                        ))
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .focused($focusedField, equals: .institution)
+
+                        Button {
+                            focusedField = .institution
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundStyle(.secondary)
+                                .imageScale(.small)
                         }
-                    ))
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.words)
-                    .autocorrectionDisabled()
-                    .focused($focusedField, equals: .institution)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Edit \(account.type == .property ? "description" : "institution")")
+                    }
                 }
                 if account.type != .property && isInvalidInstitutionName(account.institutionName) {
                     Text("Required. We couldn't derive this from your import.")
@@ -228,12 +240,18 @@ struct AccountDetailView: View {
 
             if account.type == .property {
                 Section(header: GroupedSectionHeader("Financing")) {
-                    Picker("Liability Account", selection: $linkedLiabilityID) {
-                        Text("None").tag(nil as UUID?)
-                        ForEach(liabilityAccounts.filter { $0.id != account.id }, id: \.id) { liab in
-                            let label = "\(liab.name) — \(liab.type.rawValue.capitalized)"
-                            Text(label).tag(Optional(liab.id))
+                    HStack(spacing: 6) {
+                        Picker("Liability Account", selection: $linkedLiabilityID) {
+                            Text("None").tag(nil as UUID?)
+                            ForEach(liabilityAccounts.filter { $0.id != account.id }, id: \.id) { liab in
+                                let label = "\(liab.name) — \(liab.type.rawValue.capitalized)"
+                                Text(label).tag(Optional(liab.id))
+                            }
                         }
+                        Image(systemName: "pencil")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
+                            .accessibilityHidden(true)
                     }
                     .onChange(of: linkedLiabilityID) { _, newVal in
                         if suppressLinkOnChange { return }
@@ -273,46 +291,64 @@ struct AccountDetailView: View {
                 Section(header: GroupedSectionHeader("Payment Plan")) {
                     // Typical payment editor
                     LabeledContent("Typical Payment") {
-                        TextField("0.00", text: Binding<String>(
-                            get: {
-                                if let amt = account.loanTerms?.paymentAmount {
-                                    return formatAmountForInput(amt)
-                                } else { return "" }
-                            },
+                        HStack(spacing: 6) {
+                            TextField("0.00", text: Binding<String>(
+                                get: {
+                                    if let amt = account.loanTerms?.paymentAmount {
+                                        return formatAmountForInput(amt)
+                                    } else { return "" }
+                                },
+                                set: { newVal in
+                                    var terms = account.loanTerms ?? LoanTerms()
+                                    if let dec = parseCurrencyInput(newVal) {
+                                        terms.paymentAmount = dec
+                                    } else {
+                                        terms.paymentAmount = nil
+                                    }
+                                    account.loanTerms = terms
+                                    try? modelContext.save()
+                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                }
+                            ))
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .paymentAmount)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                            Button {
+                                focusedField = .paymentAmount
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .foregroundStyle(.secondary)
+                                    .imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit payment amount")
+                        }
+                    }
+
+                    // Due day picker
+                    HStack(spacing: 6) {
+                        Picker("Due Day", selection: Binding<Int?>(
+                            get: { account.loanTerms?.paymentDayOfMonth },
                             set: { newVal in
                                 var terms = account.loanTerms ?? LoanTerms()
-                                if let dec = parseCurrencyInput(newVal) {
-                                    terms.paymentAmount = dec
-                                } else {
-                                    terms.paymentAmount = nil
-                                }
+                                terms.paymentDayOfMonth = newVal
                                 account.loanTerms = terms
                                 try? modelContext.save()
                                 NotificationCenter.default.post(name: .accountsDidChange, object: nil)
                             }
-                        ))
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .focused($focusedField, equals: .paymentAmount)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    }
-
-                    // Due day picker
-                    Picker("Due Day", selection: Binding<Int?>(
-                        get: { account.loanTerms?.paymentDayOfMonth },
-                        set: { newVal in
-                            var terms = account.loanTerms ?? LoanTerms()
-                            terms.paymentDayOfMonth = newVal
-                            account.loanTerms = terms
-                            try? modelContext.save()
-                            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                        )) {
+                            Text("None").tag(nil as Int?)
+                            ForEach(1...31, id: \.self) { d in
+                                Text("\(d)").tag(Optional(d))
+                            }
                         }
-                    )) {
-                        Text("None").tag(nil as Int?)
-                        ForEach(1...31, id: \.self) { d in
-                            Text("\(d)").tag(Optional(d))
-                        }
+                        Image(systemName: "pencil")
+                            .foregroundStyle(.secondary)
+                            .imageScale(.small)
+                            .accessibilityHidden(true)
                     }
 
                     if let amt = account.loanTerms?.paymentAmount, amt > 0 {

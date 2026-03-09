@@ -396,6 +396,7 @@ struct DebtDetailView: View {
     let account: Account
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var aprInput: String = ""
     @State private var aprScale: Int? = nil
@@ -405,8 +406,11 @@ struct DebtDetailView: View {
     @FocusState private var focusedField: Field?
     private enum Field: Hashable { case apr, payment }
     @State private var showProjection: Bool = false
+    @State private var showDueDayPickerSheet = false
+    @State private var showCCModePickerSheet = false
 
     private var isEditing: Bool { focusedField != nil }
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
 
     private var focusOrder: [Field] { [.payment, .apr] }
 
@@ -421,68 +425,41 @@ struct DebtDetailView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Overview") {
-                LabeledContent("Institution", value: account.institutionName ?? "")
-                LabeledContent("Type", value: account.type.rawValue.capitalized)
-            }
-            Section("Payment Plan") {
-                if account.type == .creditCard {
-                    Picker("Mode", selection: $ccMode) {
-                        ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue.capitalized).tag(mode)
+        Group {
+            if isRegularWidth {
+                VStack(spacing: 12) {
+                    glanceableHeader(for: account)
+                        .padding(.horizontal, 24)
+
+                    HStack(spacing: 0) {
+                        formContent
+                            .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                            .frame(maxHeight: .infinity)
+
+                        NavigationStack {
+                            DebtPayoffView(viewModel: DebtPayoffViewModel(account: account, context: modelContext))
+                                .id(account.id)
                         }
+                        .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                        .frame(maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .center) {
+                        Rectangle()
+                            .fill(.separator)
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
                     }
                 }
-
-                // Payment amount (shown for loans and credit cards)
-                if account.type == .loan || account.type == .creditCard {
-                    LabeledContent("Typical Payment") {
-                        TextField("0.00", text: $paymentInput)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.done)
-                            .focused($focusedField, equals: .payment)
-                    }
-                }
-
-                // Due day of month (optional)
-                Picker("Due Day", selection: Binding<Int?>(
-                    get: { paymentDay },
-                    set: { paymentDay = $0 }
-                )) {
-                    Text("None").tag(nil as Int?)
-                    ForEach(1...31, id: \.self) { d in
-                        Text("\(d)").tag(Optional(d))
-                    }
-                }
-            }
-            Section("Interest Rate") {
-                LabeledContent("APR") {
-                    TextField("0.00", text: $aprInput)
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .focused($focusedField, equals: .apr)
-                }
-                Text("Enter as a percent (e.g., 19.99 for 19.99%).")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Section("Projection") {
-                Button("Project Payoff") { showProjection = true }
-                    .disabled(absDecimal(latestBalance(account)) <= 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                formContent
             }
         }
         .scrollDismissesKeyboard(.interactively)
         .navigationTitle(account.name)
         .task(id: account.id) {
             initializeState()
-            // Reset transient UI state when switching accounts
             focusedField = nil
             showProjection = false
         }
@@ -505,6 +482,46 @@ struct DebtDetailView: View {
                     }
             }
         }
+        .sheet(isPresented: $showCCModePickerSheet) {
+            NavigationStack {
+                Form {
+                    Picker("Mode", selection: $ccMode) {
+                        ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue.capitalized).tag(mode)
+                        }
+                    }
+                }
+                .navigationTitle("Payment Mode")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showCCModePickerSheet = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showDueDayPickerSheet) {
+            NavigationStack {
+                Form {
+                    Picker("Due Day", selection: Binding<Int?>(
+                        get: { paymentDay },
+                        set: { paymentDay = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in
+                            Text("\(d)").tag(Optional(d))
+                        }
+                    }
+                }
+                .navigationTitle("Due Day")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showDueDayPickerSheet = false }
+                    }
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             Group {
                 if isEditing {
@@ -521,6 +538,102 @@ struct DebtDetailView: View {
                 }
             }
             .animation(.snappy, value: isEditing)
+        }
+    }
+
+    private var formContent: some View {
+        Form {
+            Section("Overview") {
+                LabeledContent("Institution", value: account.institutionName ?? "")
+                LabeledContent("Type", value: account.type.rawValue.capitalized)
+            }
+            Section("Payment Plan") {
+                if account.type == .creditCard {
+                    HStack {
+                        Picker("Mode", selection: $ccMode) {
+                            ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue.capitalized).tag(mode)
+                            }
+                        }
+                        Button(action: { showCCModePickerSheet = true }) {
+                            Image(systemName: "pencil")
+                                .imageScale(.small)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 6)
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                    }
+                }
+
+                // Payment amount (shown for loans and credit cards)
+                if account.type == .loan || account.type == .creditCard {
+                    LabeledContent("Typical Payment") {
+                        HStack(spacing: 8) {
+                            TextField("0.00", text: $paymentInput)
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .focused($focusedField, equals: .payment)
+                            Button(action: { focusedField = .payment }) {
+                                Image(systemName: "pencil")
+                                    .imageScale(.small)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                        }
+                    }
+                }
+
+                // Due day of month (optional)
+                HStack {
+                    Picker("Due Day", selection: Binding<Int?>(
+                        get: { paymentDay },
+                        set: { paymentDay = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in
+                            Text("\(d)").tag(Optional(d))
+                        }
+                    }
+                    Image(systemName: "pencil")
+                        .foregroundStyle(.secondary)
+                        .imageScale(.small)
+                        .accessibilityHidden(true)
+                }
+            }
+            Section("Interest Rate") {
+                LabeledContent("APR") {
+                    HStack(spacing: 8) {
+                        TextField("0.00", text: $aprInput)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .focused($focusedField, equals: .apr)
+                        Button(action: { focusedField = .apr }) {
+                            Image(systemName: "pencil")
+                                .imageScale(.small)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                    }
+                }
+                Text("Enter as a percent (e.g., 19.99 for 19.99%).")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if UIDevice.type == "iPhone" {
+                Section("Projection") {
+                    Button("Project Payoff") { showProjection = true }
+                        .disabled(absDecimal(latestBalance(account)) <= 0)
+                }
+            }
         }
     }
 
@@ -690,6 +803,121 @@ struct DebtDetailView: View {
         nf.numberStyle = .percent
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr * 100)%"
+    }
+
+    private func glanceableHeader(for account: Account) -> some View {
+        // Helper cell
+        func cell(title: String, value: String, sub: String? = nil, valueColor: Color? = nil) -> some View {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(value)
+                    .font(.title3).bold().monospacedDigit()
+                    .foregroundStyle(valueColor ?? .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(sub ?? " ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+
+        // Latest recorded balance and date
+        let lastDate = latestSnapshotDate(account)
+        let recorded = latestBalance(account)
+        let recordedText = formatAmount(recorded)
+        let recordedDateText: String? = {
+            guard let d = lastDate else { return nil }
+            let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
+            return df.string(from: d)
+        }()
+
+        // Transactional balance (recorded + transactions since), or sum of all tx if no snapshot
+        let transactionalText: String = {
+            if let d = lastDate {
+                let delta = account.transactions.filter { $0.datePosted > d }.reduce(Decimal.zero) { $0 + $1.amount }
+                return formatAmount(recorded + delta)
+            } else {
+                let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+                return sum == 0 ? "Unavailable" : formatAmount(sum)
+            }
+        }()
+
+        // Change since recorded (when both exist)
+        let changeSinceRecorded: (text: String, color: Color)? = {
+            guard let d = lastDate else { return nil }
+            let delta = account.transactions.filter { $0.datePosted > d }.reduce(Decimal.zero) { $0 + $1.amount }
+            let change = delta
+            let prefix = change >= 0 ? "+" : ""
+            return (prefix + formatAmount(change), change >= 0 ? .green : .red)
+        }()
+
+        // APR and Typical Payment
+        let aprText: String? = {
+            if let apr = account.loanTerms?.apr { return formatAPR(apr, scale: account.loanTerms?.aprScale) }
+            return nil
+        }()
+        let paymentText: String? = {
+            if let p = account.loanTerms?.paymentAmount { return formatAmount(p) }
+            return nil
+        }()
+
+        // Next Due date based on day-of-month
+        func nextDueDate(day: Int) -> Date? {
+            let cal = Calendar.current
+            let today = cal.startOfDay(for: Date())
+            var comps = cal.dateComponents([.year, .month], from: today)
+            guard let monthStart = cal.date(from: comps) else { return nil }
+            let range = cal.range(of: .day, in: .month, for: monthStart) ?? 1..<29
+            comps.day = min(max(1, day), range.count)
+            guard let dueThisMonth = cal.date(from: comps) else { return nil }
+            if today <= dueThisMonth { return dueThisMonth }
+            var nextComps = cal.dateComponents([.year, .month], from: cal.date(byAdding: .month, value: 1, to: monthStart)!)
+            let nextMonthStart = cal.date(from: nextComps)!
+            let nextRange = cal.range(of: .day, in: .month, for: nextMonthStart) ?? 1..<29
+            nextComps.day = min(max(1, day), nextRange.count)
+            return cal.date(from: nextComps)
+        }
+        func daysUntil(_ date: Date) -> Int {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: Date())
+            let end = cal.startOfDay(for: date)
+            return cal.dateComponents([.day], from: start, to: end).day ?? 0
+        }
+        let nextDueParts: (date: String, rel: String)? = {
+            let day = account.loanTerms?.paymentDayOfMonth ?? paymentDay
+            guard let d = day, let next = nextDueDate(day: d) else { return nil }
+            let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
+            let days = daysUntil(next)
+            let rel: String = days > 0 ? "in \(days)d" : (days < 0 ? "\(abs(days))d ago" : "today")
+            return (df.string(from: next), rel)
+        }()
+
+        return VStack(alignment: .center, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                GridRow {
+                    cell(title: "Transaction Balance", value: transactionalText)
+                    cell(title: "Recorded Balance", value: recordedText, sub: recordedDateText)
+                    if let change = changeSinceRecorded { cell(title: "Δ Since Rec.", value: change.text, sub: nil, valueColor: change.color) }
+                    if let apr = aprText { cell(title: "APR", value: apr) }
+                    if let pay = paymentText { cell(title: "Payment", value: pay) }
+                    if let due = nextDueParts { cell(title: "Next Due", value: due.date, sub: due.rel) }
+                }
+            }
+            .frame(maxWidth: 700, alignment: .center)
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.separator, lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 
