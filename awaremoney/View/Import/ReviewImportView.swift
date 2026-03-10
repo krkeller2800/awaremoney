@@ -15,6 +15,7 @@ struct ReviewImportView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var settings: SettingsStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dismiss) private var dismiss
     private var isRegularWidth: Bool { horizontalSizeClass == .regular }
     @Query(sort: [SortDescriptor(\Account.createdAt)]) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
@@ -136,14 +137,18 @@ struct ReviewImportView: View {
                             .padding(.trailing, 12)
                     }
                 } else {
-                    VStack {
+                    ZStack(alignment: .topTrailing) {
                         Text("File: \(staged.sourceFileName)")
                             .font(.subheadline)
+                            .frame(maxWidth: .infinity, alignment: .center)
                         ContentUnavailableView(
                             "PDF Viewer",
                             systemImage: "doc.richtext",
                             description: Text("Original PDF preview isn't available yet.")
                         )
+                        DismissOverlay()
+                            .padding(.top, 12)
+                            .padding(.trailing, 12)
                     }
                     .padding()
                 }

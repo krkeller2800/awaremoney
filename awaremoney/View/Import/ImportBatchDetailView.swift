@@ -20,6 +20,15 @@ struct ImportBatchDetailView: View {
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isRegularWidth: Bool { horizontalSizeClass == .regular }
+    private var isIPad: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteAlert = false
 
@@ -35,6 +44,7 @@ struct ImportBatchDetailView: View {
     @State private var showSummaryAlert = false
     @State private var summaryMessage: String = ""
     @State private var showPDFSheet = false
+    @State private var inlinePDFURL: URL? = nil
 
     @State private var showMappingSheet = false
     @State private var pendingCSVHeaders: [String] = []
@@ -78,54 +88,97 @@ struct ImportBatchDetailView: View {
     var body: some View {
         Group {
             if let batch {
-                listContent(for: batch)
-                    .listStyle(.insetGrouped)
-                    .id(batchID)
-                    .navigationTitle("Update Transactions")
-                    .onAppear { AMLogging.log("ImportBatchDetailView appear batchID=\(batchID)", component: "ImportBatchDetailView") }
-                    .task(id: batchID) { await load() }
-                    .fileImporter(
-                        isPresented: $isImporterPresented,
-                        allowedContentTypes: [UTType.commaSeparatedText, .tabSeparatedText, .text, .plainText, .pdf],
-                        allowsMultipleSelection: false
-                    ) { result in
-                        onFileImportResult(result)
-                    }
-                    .sheet(isPresented: $showConflictsSheet) {
-                        conflictsSheetContent(for: batch)
-                    }
-                    .sheet(isPresented: $showMappingSheet) {
-                        mappingSheetContent(for: batch)
-                    }
-                    .sheet(isPresented: $showPDFSheet) {
-                        pdfSheetContent(for: batch)
-                    }
-                    .alert("Replace Batch", isPresented: $showSummaryAlert) {
-                        Button("OK", role: .cancel) {}
-                    } message: {
-                        Text(summaryMessage)
-                    }
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button(role: .destructive) {
-                                showDeleteAlert = true
-                            } label: {
-                                Image(systemName: "trash")
+                Group {
+                    if isRegularWidth {
+                        VStack(spacing: 12) {
+                            glanceableHeader(for: batch)
+
+                            HStack(spacing: 0) {
+                                // Left column: batch details (Batch/Balances/Holdings)
+                                detailsList(for: batch)
+                                    .padding(.vertical, 8)
+                                    .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                    .frame(maxHeight: .infinity)
+
+                                // Right column: show PDF if available, otherwise transactions
+                                Group {
+                                    if let url = inlinePDFURL {
+                                        PDFKitView(url: url)
+                                    } else {
+                                        transactionsList()
+                                    }
+                                }
+                                .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
+                                .frame(maxHeight: .infinity)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(alignment: .center) {
+                                Rectangle()
+                                    .fill(.separator)
+                                    .frame(width: 1)
+                                    .frame(maxHeight: .infinity)
                             }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+//                        .contentMargins(.zero)
+                    } else {
+                        listContent(for: batch)
+                            .listStyle(.insetGrouped)
                     }
-                    .alert("Delete Batch?", isPresented: $showDeleteAlert) {
-                        Button("Delete", role: .destructive) {
-                            deleteBatch()
+                }
+                .id(batchID)
+                .navigationTitle("Update Transactions")
+                .navigationBarBackButtonHidden(isIPad)
+                .onAppear { AMLogging.log("ImportBatchDetailView appear batchID=\(batchID)", component: "ImportBatchDetailView") }
+                .task(id: batchID) { await load() }
+                .fileImporter(
+                    isPresented: $isImporterPresented,
+                    allowedContentTypes: [UTType.commaSeparatedText, .tabSeparatedText, .text, .plainText, .pdf],
+                    allowsMultipleSelection: false
+                ) { result in
+                    onFileImportResult(result)
+                }
+                .sheet(isPresented: $showConflictsSheet) {
+                    conflictsSheetContent(for: batch)
+                }
+                .sheet(isPresented: $showMappingSheet) {
+                    mappingSheetContent(for: batch)
+                }
+                #if os(iOS)
+                .fullScreenCover(isPresented: $showPDFSheet) {
+                    pdfSheetContent(for: batch)
+                }
+                #else
+                .sheet(isPresented: $showPDFSheet) {
+                    pdfSheetContent(for: batch)
+                }
+                #endif
+                .alert("Replace Batch", isPresented: $showSummaryAlert) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(summaryMessage)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button(role: .destructive) {
+                            showDeleteAlert = true
+                        } label: {
+                            Image(systemName: "trash")
                         }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("This will permanently delete this batch and all associated transactions, balances, and holdings.")
                     }
-                    .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-                        AMLogging.log("ImportBatchDetailView received transactionsDidChange", component: "ImportBatchDetailView")
-                        Task { await load() }
+                }
+                .alert("Delete Batch?", isPresented: $showDeleteAlert) {
+                    Button("Delete", role: .destructive) {
+                        deleteBatch()
                     }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will permanently delete this batch and all associated transactions, balances, and holdings.")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+                    AMLogging.log("ImportBatchDetailView received transactionsDidChange", component: "ImportBatchDetailView")
+                    Task { await load() }
+                }
             } else {
                 ProgressView().task { await load() }
             }
@@ -160,6 +213,94 @@ struct ImportBatchDetailView: View {
             holdingsSection()
         }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    @ViewBuilder private func detailsList(for batch: ImportBatch) -> some View {
+        List {
+            batchSection(batch)
+            balancesSection(for: batch)
+            holdingsSection()
+        }
+        .listStyle(.insetGrouped)
+        .scrollDismissesKeyboard(.interactively)
+        // Mirror AccountDetailView’s sizing behavior to preserve grouped rounded tiles
+        .frame(maxWidth: isRegularWidth ? .infinity : 760, alignment: .center)
+        .padding(.horizontal, isRegularWidth ? 0 : 16)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    @ViewBuilder private func transactionsList() -> some View {
+        List {
+            transactionsSection()
+        }
+        .listStyle(.insetGrouped)
+//        .contentMargins(.zero, for: .scrollContent)
+//        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        .scrollDismissesKeyboard(.interactively)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func glanceableHeader(for batch: ImportBatch) -> some View {
+        // Compute simple metrics for quick glance
+        let includedTxCount = transactions.filter { !$0.isExcluded }.count
+        let balanceCount = balances.filter { !$0.isExcluded }.count
+        let holdingCount = holdings.count
+        let latestBalance = balances.first
+        let latestBalanceText: String = {
+            if let b = latestBalance { return format(amount: b.balance) } else { return "None" }
+        }()
+        let latestBalanceDateText: String? = {
+            if let b = latestBalance {
+                let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
+                return df.string(from: b.asOfDate)
+            }
+            return nil
+        }()
+        let aprText: String? = {
+            if let apr = latestBalance?.interestRateAPR { return formatAPR(apr, scale: latestBalance?.interestRateScale) }
+            return nil
+        }()
+
+        func cell(title: String, value: String, sub: String? = nil, valueColor: Color? = nil) -> some View {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(value)
+                    .font(.title3).bold().monospacedDigit()
+                    .foregroundStyle(valueColor ?? .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(sub ?? " ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+
+        return VStack(alignment: .center, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                GridRow {
+                    cell(title: "Imported", value: batch.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    cell(title: "Transactions", value: "\(includedTxCount)")
+                    cell(title: "Balances", value: "\(balanceCount)")
+                    if holdingCount > 0 { cell(title: "Holdings", value: "\(holdingCount)") }
+                    cell(title: "Latest Balance", value: latestBalanceText, sub: latestBalanceDateText)
+                    if let apr = aprText { cell(title: "APR", value: apr) }
+                }
+            }
+            .frame(maxWidth: 640, alignment: .center)
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.separator, lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     @ViewBuilder private func batchSection(_ batch: ImportBatch) -> some View {
@@ -220,7 +361,7 @@ struct ImportBatchDetailView: View {
                         .labelsHidden()
 
                         VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 12) {
+                            HStack(spacing: 2) {
                                 DatePicker("As of", selection: Binding(get: {
                                     snap.asOfDate
                                 }, set: { newDate in
@@ -254,7 +395,7 @@ struct ImportBatchDetailView: View {
                                 .onSubmit {
                                     commitAndDismissKeyboard()
                                 }
-    #if canImport(UIKit)
+                            #if canImport(UIKit)
                                 .selectAllOnFocus()
                                 .onTapGesture {
                                     // Ensure select-all even if already focused
@@ -262,7 +403,25 @@ struct ImportBatchDetailView: View {
                                         UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
                                     }
                                 }
-    #endif
+                            #endif
+
+                                // Add this tappable pencil to focus the amount field
+                                Button {
+                                    focusedField = .balanceAmount(snap.id)
+                                    // Optional: select-all shortly after focusing to match your tap behavior
+                                    #if canImport(UIKit)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+                                    }
+                                    #endif
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .imageScale(.small)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.leading, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Edit amount")
                             }
                             if let apr = snap.interestRateAPR {
                                 Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
@@ -351,19 +510,21 @@ struct ImportBatchDetailView: View {
 
     @ViewBuilder private func bottomBar() -> some View {
         VStack(spacing: 0) {
-            Divider()
+//            Divider()
             HStack {
-                Button {
-                    AMLogging.log("View PDF tapped for batchID=\(batchID)", component: "ImportBatchDetailView")
-                    showPDFSheet = true
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                        Text("View PDF").lineLimit(1).minimumScaleFactor(0.85).truncationMode(.tail).allowsTightening(true)
+                if !isIPad {
+                    Button {
+                        AMLogging.log("View PDF tapped for batchID=\(batchID)", component: "ImportBatchDetailView")
+                        showPDFSheet = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                            Text("View PDF").lineLimit(1).minimumScaleFactor(0.85).truncationMode(.tail).allowsTightening(true)
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
 
                 Button {
                     AMLogging.log("Replace Batch tapped for batchID=\(batchID)", component: "ImportBatchDetailView")
@@ -378,7 +539,7 @@ struct ImportBatchDetailView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .background(.regularMaterial)
+//        .background(.regularMaterial)
     }
 
     // MARK: - PDF caching helpers
@@ -437,12 +598,37 @@ struct ImportBatchDetailView: View {
     }
 
     private func resolvedPDFURL(for batch: ImportBatch) -> URL? {
-        if let path = batch.sourceFileLocalPath, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+        let fm = FileManager.default
+        // 1) Preferred: stored per-batch local path
+        if let path = batch.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
             AMLogging.log("PDF preview using per-batch local path: \(path)", component: "ImportBatchDetailView")
             return URL(fileURLWithPath: path)
-        } else {
-            AMLogging.log("PDF preview unavailable — missing or invalid per-batch path for file: \(batch.sourceFileName)", component: "ImportBatchDetailView")
         }
+        // 2) Try any file in the per-batch preview directory
+        if let dir = perBatchPreviewDirectory(for: batch) {
+            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil), let first = items.first {
+                AMLogging.log("PDF preview discovered per-batch file: \(first.path)", component: "ImportBatchDetailView")
+                batch.sourceFileLocalPath = first.path
+                try? modelContext.save()
+                return first
+            }
+        }
+        // 3) Legacy fallback: Caches/<sourceFileName>
+        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            let legacy = caches.appendingPathComponent(batch.sourceFileName)
+            if fm.fileExists(atPath: legacy.path) {
+                AMLogging.log("PDF preview using legacy cached file: \(legacy.path)", component: "ImportBatchDetailView")
+                // Attempt to migrate into per-batch cache for future reliability
+                if let newURL = cachePDF(for: batch, from: legacy) {
+                    batch.sourceFileLocalPath = newURL.path
+                    try? modelContext.save()
+                    return newURL
+                } else {
+                    return legacy
+                }
+            }
+        }
+        AMLogging.log("PDF preview unavailable — missing or invalid local path and no legacy cache found for: \(batch.sourceFileName)", component: "ImportBatchDetailView")
         return nil
     }
 
@@ -457,14 +643,19 @@ struct ImportBatchDetailView: View {
                         .padding(.trailing, 12)
                 }
             } else {
-                VStack {
+                ZStack(alignment: .topTrailing) {
                     Text("File: \(batch.sourceFileName)")
                         .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     ContentUnavailableView(
                         "PDF Viewer",
                         systemImage: "doc.richtext",
                         description: Text("Original PDF preview isn't available yet.")
                     )
+                    .ignoresSafeArea()
+                    DismissOverlay()
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
                 }
                 .padding()
             }
@@ -1066,8 +1257,13 @@ struct ImportBatchDetailView: View {
             let found = batches.first
             AMLogging.log("ImportBatchDetailView.load: fetch batch found=\(found != nil ? "yes" : "no") for id=\(batchID)", component: "ImportBatchDetailView")
             self.batch = found
-            guard found != nil else { return }
-            if let b = found { migrateLegacyPDFCacheIfNeeded(for: b) }
+            if let b = found {
+                migrateLegacyPDFCacheIfNeeded(for: b)
+                // Resolve and cache any available PDF URL for inline preview
+                self.inlinePDFURL = resolvedPDFURL(for: b)
+            } else {
+                self.inlinePDFURL = nil
+            }
 
             // Fetch related items
             let txPred = #Predicate<Transaction> { $0.importBatch?.id == batchID }
@@ -1168,7 +1364,31 @@ private struct DismissOverlay: View {
         .accessibilityLabel("Close")
     }
 }
+private struct FrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
 
+private extension View {
+    func logFrame(_ label: String, in space: CoordinateSpace = .global) -> some View {
+        self
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .preference(key: FrameKey.self, value: proxy.frame(in: space))
+                }
+            )
+            .onPreferenceChange(FrameKey.self) { rect in
+                print("[\(label)] frame in \(space): origin=(\(Int(rect.minX)), \(Int(rect.minY))) size=(\(Int(rect.width)) x \(Int(rect.height)))")
+            }
+    }
+
+    func debugBorder(_ color: Color) -> some View {
+        self.overlay(Rectangle().stroke(color, lineWidth: 2))
+    }
+}
 #Preview {
     Text("Preview requires model data")
 }

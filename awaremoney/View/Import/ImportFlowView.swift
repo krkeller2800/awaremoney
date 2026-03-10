@@ -965,31 +965,40 @@ struct ImportFlowView: View {
     @ViewBuilder
     private var ipadDetailContent: some View {
         NavigationStack {
-            Group {
-                if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
-                    ImportBatchDetailView(batch: batch)
-                        .environment(\.modelContext, modelContext)
-                        .id(batch.persistentModelID)
-                        .onAppear {
-                            AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "ImportFlowView")
-                        }
-                } else {
-                    ContentUnavailableView(
-                        "Select an Import",
-                        systemImage: "tray",
-                        description: Text("Choose an import from the sidebar.")
-                    )
+            HStack(alignment: .top, spacing: 0) {
+                Spacer(minLength: 0)
+                Group {
+                    if let pid = selectedBatchID, let batch = batches.first(where: { $0.persistentModelID == pid }) {
+                        ImportBatchDetailView(batch: batch)
+                            .environment(\.modelContext, modelContext)
+                            .id(batch.persistentModelID)
+                            .onAppear {
+                                AMLogging.log("ImportFlowView: presenting detail for label=\(batch.label) id=\(batch.id) pid=\(batch.persistentModelID)", component: "ImportFlowView")
+                            }
+                    } else {
+                        ContentUnavailableView(
+                            "Select an Import",
+                            systemImage: "tray",
+                            description: Text("Choose an import from the sidebar.")
+                        )
+                    }
                 }
+                .frame(maxWidth: 640) // constrain inner content width
+                .padding(.horizontal, 16)
+                Spacer(minLength: 0)
             }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(selectedBatchID == nil ? "" : "Update Transactions")
-                        .font(.largeTitle).bold()
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top) // fill detail column, keep top aligned
+           
             .navigationBarTitleDisplayMode(.inline)
-            .frame(maxWidth: 640, maxHeight: .infinity, alignment: .topLeading)
+//            .listStyle(.insetGrouped)
+//            .contentMargins(.horizontal, 0, for: .scrollContent)
         }
+//        .toolbar {
+//            ToolbarItem(placement: .topBarLeading) {
+//                Text(selectedBatchID == nil ? "" : "Update Transactions")
+//                    .font(.largeTitle).bold()
+//            }
+//        }
     }
 
     private var ipadBody: some View {
