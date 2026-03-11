@@ -20,6 +20,7 @@ struct DataBackup: Codable {
     let csvMappings: [CSVColumnMappingDTO]
     let cashFlowItems: [CashFlowItemDTO]
     let assetLiabilityLinks: [AssetLiabilityLinkDTO]
+    let embeddedStatements: [EmbeddedStatementDTO]?
 }
 
 struct SettingsBackup: Codable {
@@ -120,9 +121,39 @@ struct AssetLiabilityLinkDTO: Codable {
     let endDate: Date?
 }
 
+struct EmbeddedStatementDTO: Codable {
+    let batchID: UUID
+    let fileName: String
+    let data: Data
+}
+
 // MARK: - Backup Exporter
 
 enum BackupExporter {
+
+    /// Collect available statement PDFs for all import batches and return as embedded DTOs.
+    private static func collectStatementPDFs(context: ModelContext) -> [EmbeddedStatementDTO] {
+        let batches: [ImportBatch] = (try? context.fetch(FetchDescriptor<ImportBatch>())) ?? []
+        AMLogging.log("BackupExporter: collectStatementPDFs — batches fetched=\(batches.count)", component: "BackupExporter")
+        let fm = FileManager.default
+        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
+        var results: [EmbeddedStatementDTO] = []
+        for b in batches {
+            let fileName = b.sourceFileName
+            if fileName.isEmpty || !fileName.lowercased().hasSuffix(".pdf") { continue }
+            var sourceURL: URL? = nil
+            if let path = b.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
+                sourceURL = URL(fileURLWithPath: path)
+            } else if let caches, fm.fileExists(atPath: caches.appendingPathComponent(fileName).path) {
+                sourceURL = caches.appendingPathComponent(fileName)
+            }
+            guard let src = sourceURL, let data = try? Data(contentsOf: src) else { continue }
+            results.append(EmbeddedStatementDTO(batchID: b.id, fileName: fileName, data: data))
+        }
+        AMLogging.log("BackupExporter: collectStatementPDFs — embedded count=\(results.count)", component: "BackupExporter")
+        return results
+    }
+
     /// Builds a JSON backup `Data` and a suggested filename.
     static func makeBackup(context: ModelContext, settings: SettingsStore) throws -> (data: Data, filename: String) {
         // Fetch all model objects
@@ -240,6 +271,13 @@ enum BackupExporter {
             )
         }
 
+        let embeddedStatementDTOs: [EmbeddedStatementDTO] = Self.collectStatementPDFs(context: context)
+
+        AMLogging.log(
+            "BackupExporter: preparing manifest — accounts=\(accountDTOs.count) tx=\(txDTOs.count) balances=\(balDTOs.count) holdings=\(holdDTOs.count) batches=\(batchDTOs.count) mappings=\(mappingDTOs.count) cashFlows=\(cashDTOs.count) links=\(linkDTOs.count)",
+            component: "BackupExporter"
+        )
+
         let settingsDTO = SettingsBackup(
             currencyCode: settings.currencyCode,
             importAutoApplyMappings: settings.importAutoApplyMappings,
@@ -261,7 +299,8 @@ enum BackupExporter {
             importBatches: batchDTOs,
             csvMappings: mappingDTOs,
             cashFlowItems: cashDTOs,
-            assetLiabilityLinks: linkDTOs
+            assetLiabilityLinks: linkDTOs,
+            embeddedStatements: embeddedStatementDTOs
         )
 
         let encoder = JSONEncoder()
@@ -272,6 +311,9 @@ enum BackupExporter {
         encoder.dateEncodingStrategy = .iso8601
 
         let data = try encoder.encode(payload)
+
+        AMLogging.log("BackupExporter: manifest encoded — size=\(data.count) bytes", component: "BackupExporter")
+
         let filename = BackupExporter.suggestedFilename()
         return (data, filename)
     }
@@ -283,6 +325,8 @@ enum BackupExporter {
     static func makeBackupPackage(context: ModelContext, settings: SettingsStore) throws -> (wrapper: FileWrapper, filename: String) {
         // Reuse the existing JSON manifest builder
         let (manifestData, filename) = try makeBackup(context: context, settings: settings)
+        AMLogging.log("BackupExporter: package build start — manifest size=\(manifestData.count) bytes filename=\(filename)", component: "BackupExporter")
+        AMLogging.log("BackupExporter: building package backup", component: "BackupExporter")
 
         var children: [String: FileWrapper] = [:]
         let manifest = FileWrapper(regularFileWithContents: manifestData)
@@ -293,46 +337,43 @@ enum BackupExporter {
         let statementsDir = FileWrapper(directoryWithFileWrappers: [:])
         statementsDir.preferredFilename = "statements"
 
-        // Fetch batches to locate available PDFs
-        let batches: [ImportBatch] = (try? context.fetch(FetchDescriptor<ImportBatch>())) ?? []
-        let fm = FileManager.default
-        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
-
-        for b in batches {
-            let fileName = b.sourceFileName
-            guard !fileName.isEmpty, fileName.lowercased().hasSuffix(".pdf") else { continue }
-
-            // Prefer per-batch cached path; fall back to legacy Caches/<sourceFileName>
-            var sourceURL: URL? = nil
-            if let path = b.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
-                sourceURL = URL(fileURLWithPath: path)
-            } else if let caches, fm.fileExists(atPath: caches.appendingPathComponent(fileName).path) {
-                sourceURL = caches.appendingPathComponent(fileName)
+        let statementDTOs = Self.collectStatementPDFs(context: context)
+        var batchFolders: [UUID: FileWrapper] = [:]
+        var embeddedCount = 0
+        var includedSummaries: [String] = []
+        for dto in statementDTOs {
+            let batchID = dto.batchID
+            let fileName = dto.fileName
+            let data = dto.data
+            let batchFolder: FileWrapper
+            if let existing = batchFolders[batchID] {
+                batchFolder = existing
+            } else {
+                let folder = FileWrapper(directoryWithFileWrappers: [:])
+                folder.preferredFilename = batchID.uuidString
+                _ = statementsDir.addFileWrapper(folder)
+                batchFolder = folder
+                batchFolders[batchID] = folder
             }
-            guard let src = sourceURL, let data = try? Data(contentsOf: src) else { continue }
-
-            // Batch folder under statements
-            let batchFolder = FileWrapper(directoryWithFileWrappers: [:])
-            batchFolder.preferredFilename = b.id.uuidString
-
             let pdfWrapper = FileWrapper(regularFileWithContents: data)
             pdfWrapper.preferredFilename = fileName
-            // Add PDF to batch folder
             _ = batchFolder.addFileWrapper(pdfWrapper)
-
-            // Add/merge into statements directory (avoid duplicate keys)
-            let key = batchFolder.preferredFilename ?? b.id.uuidString
-            if statementsDir.fileWrappers?[key] == nil {
-                _ = statementsDir.addFileWrapper(batchFolder)
-            }
+            embeddedCount += 1
+            includedSummaries.append("[id=\(batchID), file=\(fileName), bytes=\(data.count)]")
         }
+
+        AMLogging.log("BackupExporter: embedded PDFs summary — count=\(embeddedCount) items=\(includedSummaries.joined(separator: ", "))", component: "BackupExporter")
+
+        AMLogging.log("BackupExporter: statements directory children=\(statementsDir.fileWrappers?.count ?? 0) PDFs included=\(embeddedCount)", component: "BackupExporter")
 
         // Attach statements directory if it has any children
         if let count = statementsDir.fileWrappers?.count, count > 0 {
             children["statements"] = statementsDir
+            AMLogging.log("BackupExporter: attached statements directory to package", component: "BackupExporter")
         }
 
         let root = FileWrapper(directoryWithFileWrappers: children)
+        AMLogging.log("BackupExporter: package build complete (filename=\(filename))", component: "BackupExporter")
         return (root, filename)
     }
 
@@ -348,7 +389,7 @@ enum BackupExporter {
 
 import SwiftUI
 
-struct BackupPackageDocument: FileDocument {
+@MainActor final class BackupPackageDocument: @preconcurrency FileDocument {
     static var readableContentTypes: [UTType] { [.awareMoneyBackup] }
     static var writableContentTypes: [UTType] { [.awareMoneyBackup] }
 
@@ -358,10 +399,11 @@ struct BackupPackageDocument: FileDocument {
 
     init(configuration: ReadConfiguration) throws {
         // For exporting, we don't rely on reading; provide an empty directory by default
-        self.rootWrapper = configuration.file ?? FileWrapper(directoryWithFileWrappers: [:])
+        self.rootWrapper = configuration.file
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         return rootWrapper
     }
 }
+

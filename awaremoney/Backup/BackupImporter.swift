@@ -41,30 +41,49 @@ enum BackupImporter {
               let manifestData = manifest.regularFileContents else {
             throw NSError(domain: "BackupImporter", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing manifest.json in backup."])
         }
-        var summary = try importBackup(data: manifestData, context: context, settings: settings)
+        AMLogging.log("BackupImporter: manifest.json read — size=\(manifestData.count) bytes", component: "BackupImporter")
+        let summary = try importBackup(data: manifestData, context: context, settings: settings)
+        AMLogging.log(
+            "BackupImporter: core data import complete — settingsUpdated=\(summary.settingsUpdated) accounts(i=\(summary.accountsInserted), u=\(summary.accountsUpdated)) batches(i=\(summary.batchesInserted), u=\(summary.batchesUpdated)) balances(i=\(summary.balanceSnapsInserted), u=\(summary.balanceSnapsUpdated)) mappings(i=\(summary.csvMappingsInserted), u=\(summary.csvMappingsUpdated)) cashFlows(i=\(summary.cashFlowsInserted), u=\(summary.cashFlowsUpdated)) links(i=\(summary.linksInserted), u=\(summary.linksUpdated)) skipped(tx=\(summary.transactionsSkipped), holdings=\(summary.holdingsSkipped))",
+            component: "BackupImporter"
+        )
 
         // Locate statements directory
         if let statements = files["statements"], statements.isDirectory, let children = statements.fileWrappers {
+            AMLogging.log("BackupImporter: statements directory found — batchFolderCount=\(children.count)", component: "BackupImporter")
             // For each batch folder, expect <batchID>/<sourceFileName>
             for (batchIDString, batchFolder) in children where batchFolder.isDirectory {
+                AMLogging.log("BackupImporter: processing statements folder — idString=\(batchIDString)", component: "BackupImporter")
                 guard let batchUUID = UUID(uuidString: batchIDString), let batchChildren = batchFolder.fileWrappers else { continue }
                 // Find the batch by id
                 let pred = #Predicate<ImportBatch> { $0.id == batchUUID }
                 let fetch = FetchDescriptor<ImportBatch>(predicate: pred)
                 let batches = (try? context.fetch(fetch)) ?? []
-                guard let batch = batches.first else { continue }
-                // Expect a single file (prefer .pdf)
-                if let pdfEntry = batchChildren.values.first(where: { ($0.preferredFilename ?? "").lowercased().hasSuffix(".pdf") }),
-                   let data = pdfEntry.regularFileContents {
-                    // Write into per-batch cache and update sourceFileLocalPath
-                    if let dir = ImportBatchDetailView_PreviewHelpers.perBatchPreviewDirectory(for: batch) {
-                        let fm = FileManager.default
-                        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-                        let dest = dir.appendingPathComponent(pdfEntry.preferredFilename ?? "statement.pdf")
-                        try? data.write(to: dest, options: .atomic)
-                        batch.sourceFileLocalPath = dest.path
-                        try? context.save()
+                if let batch = batches.first {
+                    AMLogging.log("BackupImporter: inspecting batch folder — childCount=\(batchChildren.count) label=\(batch.label)", component: "BackupImporter")
+                    // Expect a single file (prefer .pdf)
+                    if let pdfEntry = batchChildren.values.first(where: { ($0.preferredFilename ?? "").lowercased().hasSuffix(".pdf") }),
+                       let data = pdfEntry.regularFileContents {
+                        AMLogging.log("BackupImporter: PDF entry found — filename=\(pdfEntry.preferredFilename ?? "(unnamed)") bytes=\(data.count)", component: "BackupImporter")
+                        // Write into per-batch cache and update sourceFileLocalPath
+                        if let dir = ImportBatchDetailView_PreviewHelpers.perBatchPreviewDirectory(for: batch) {
+                            AMLogging.log("BackupImporter: per-batch preview directory resolved — path=\(dir.path)", component: "BackupImporter")
+                            let fm = FileManager.default
+                            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                            let dest = dir.appendingPathComponent(pdfEntry.preferredFilename ?? "statement.pdf")
+                            AMLogging.log("BackupImporter: writing PDF cache — dest=\(dest.path)", component: "BackupImporter")
+                            try? data.write(to: dest, options: .atomic)
+                            AMLogging.log("BackupImporter: cached PDF for batch id=\(batch.id) at path=\(dest.path)", component: "BackupImporter")
+                            batch.sourceFileLocalPath = dest.path
+                            try? context.save()
+                            AMLogging.log("BackupImporter: updated batch.sourceFileLocalPath and saved context for batch id=\(batch.id)", component: "BackupImporter")
+                        }
+                    } else {
+                        AMLogging.log("BackupImporter: no PDF found in statements folder for batch id=\(batch.id) (children=\(batchChildren.keys))", component: "BackupImporter")
                     }
+                } else {
+                    AMLogging.log("BackupImporter: no ImportBatch found for id=\(String(describing: batchUUID)) — skipping folder", component: "BackupImporter")
+                    continue
                 }
             }
         }
@@ -75,6 +94,7 @@ enum BackupImporter {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let backup = try decoder.decode(DataBackup.self, from: data)
+        AMLogging.log("BackupImporter: data manifest decoded — version=\(backup.version) accounts=\(backup.accounts.count) tx=\(backup.transactions.count) balances=\(backup.balanceSnapshots.count) holdings=\(backup.holdingSnapshots.count) batches=\(backup.importBatches.count) mappings=\(backup.csvMappings.count) cashFlows=\(backup.cashFlowItems.count) links=\(backup.assetLiabilityLinks.count) embedded=\(backup.embeddedStatements?.count ?? 0)", component: "BackupImporter")
 
         var summary = BackupImportSummary()
 
@@ -163,6 +183,28 @@ enum BackupImporter {
                 batchMap[dto.id] = b
                 summary.batchesInserted += 1
             }
+        }
+
+        // Restore embedded statement PDFs (if present) now that batches exist
+        if let embedded = backup.embeddedStatements {
+            AMLogging.log("BackupImporter: embedded statements in manifest — count=\(embedded.count)", component: "BackupImporter")
+            let fm = FileManager.default
+            for item in embedded {
+                guard let batch = batchMap[item.batchID] else {
+                    AMLogging.log("BackupImporter: embedded PDF skipped — no batch found for id=\(item.batchID)", component: "BackupImporter")
+                    continue
+                }
+                if let dir = ImportBatchDetailView_PreviewHelpers.perBatchPreviewDirectory(for: batch) {
+                    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let dest = dir.appendingPathComponent(item.fileName)
+                    try? item.data.write(to: dest, options: .atomic)
+                    batch.sourceFileLocalPath = dest.path
+                    try? context.save()
+                    AMLogging.log("BackupImporter: restored embedded PDF for batch id=\(batch.id) at path=\(dest.path)", component: "BackupImporter")
+                }
+            }
+        } else {
+            AMLogging.log("BackupImporter: no embedded statements in manifest", component: "BackupImporter")
         }
 
         // CSV mappings (upsert)
@@ -270,6 +312,11 @@ enum BackupImporter {
         summary.holdingsSkipped = backup.holdingSnapshots.count
 
         try context.save()
+        AMLogging.log(
+            "BackupImporter: data import complete — settingsUpdated=\(summary.settingsUpdated) accounts(i=\(summary.accountsInserted), u=\(summary.accountsUpdated)) batches(i=\(summary.batchesInserted), u=\(summary.batchesUpdated)) balances(i=\(summary.balanceSnapsInserted), u=\(summary.balanceSnapsUpdated)) mappings(i=\(summary.csvMappingsInserted), u=\(summary.csvMappingsUpdated)) cashFlows(i=\(summary.cashFlowsInserted), u=\(summary.cashFlowsUpdated)) links(i=\(summary.linksInserted), u=\(summary.linksUpdated)) skipped(tx=\(summary.transactionsSkipped), holdings=\(summary.holdingsSkipped))",
+            component: "BackupImporter"
+        )
         return summary
     }
 }
+
