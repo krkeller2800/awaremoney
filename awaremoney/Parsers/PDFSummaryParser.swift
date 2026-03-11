@@ -53,7 +53,11 @@ struct PDFSummaryParser: StatementParser {
             for fmt in [
                 "MM/dd/yyyy", "M/d/yy", "MM/dd/yy", "M/d/yyyy",
                 "MMMM d, yyyy", "MMM d, yyyy", "MMMM dd, yyyy", "MMM dd, yyyy",
-                "MMMM d yyyy", "MMM d yyyy"
+                "MMMM d yyyy", "MMM d yyyy",
+                // Added hyphenated formats
+                "MM-dd-yyyy", "M-d-yyyy", "MM-dd-yy", "M-d-yy",
+                // Allow month-day without year (used with inference below)
+                "MM-dd", "M-d"
             ] {
                 df.dateFormat = fmt
                 if let d = df.date(from: s) { return d }
@@ -170,9 +174,10 @@ struct PDFSummaryParser: StatementParser {
             }
 
             // Context words that usually indicate fees or warnings rather than purchase APRs
-            let badWords = [
-                "fee", "minimum", "min", "of the new balance", "transaction fee",
-                "foreign", "balance transfer fee", "cash advance fee", "late fee", "overlimit",
+            // Split disqualifiers into line-scoped and global to avoid rejecting valid APRs due to distant 'fee' mentions
+            let lineScopedBadWords = ["fee", "minimum", "min", "of the new balance"]
+            let globalBadWords = [
+                "transaction fee", "foreign", "balance transfer fee", "cash advance fee", "late fee", "overlimit",
                 "penalty", "penalty apr", "late payment", "late payment warning"
             ]
             let promoWords = ["promo", "promotional", "intro", "introductory", "offer"]
@@ -287,9 +292,31 @@ struct PDFSummaryParser: StatementParser {
                     }
                 }
 
-                if badWords.contains(where: { ctx.contains($0) }) {
-                    AMLogging.log("extractAPRAndScale: rejecting candidate due to penalty/fee/minimum context: token=\(token), ctx=\(ctx)", component: LOG_COMPONENT)
-                    return
+                // Refine bad-word rejection: only treat generic 'fee/minimum' as disqualifying if on the same line as the APR token;
+                // keep strict global disqualifiers anywhere in the local context window.
+                do {
+                    // Determine the single line within `ctx` that contains the APR token
+                    let ctxNSString = ctx as NSString
+                    let relLoc = max(0, min(ctxNSString.length, matchRange.location - ctxRange.location))
+                    let beforeRange = NSRange(location: 0, length: relLoc)
+                    let afterRange = NSRange(location: relLoc, length: max(0, ctxNSString.length - relLoc))
+                    let prevNL = ctxNSString.range(of: "\n", options: [.backwards], range: beforeRange)
+                    let nextNL = ctxNSString.range(of: "\n", options: [], range: afterRange)
+                    let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
+                    let lineEnd = nextNL.location == NSNotFound ? ctxNSString.length : nextNL.location
+                    let lineRange = NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+                    let ctxLineLower = ctxNSString.substring(with: lineRange).lowercased()
+
+                    // Reject on strong/global disqualifiers anywhere in the window
+                    if globalBadWords.contains(where: { ctx.contains($0) }) {
+                        AMLogging.log("extractAPRAndScale: rejecting candidate due to global penalty/fee context near APR", component: LOG_COMPONENT)
+                        return
+                    }
+                    // Only reject generic 'fee/minimum' when present on the same line as the APR token
+                    if lineScopedBadWords.contains(where: { ctxLineLower.contains($0) }) {
+                        AMLogging.log("extractAPRAndScale: rejecting candidate due to same-line 'fee/minimum' context", component: LOG_COMPONENT)
+                        return
+                    }
                 }
 
                 // If the document mentions penalty APR and this candidate is extremely high (>= 28%),
@@ -875,12 +902,39 @@ struct PDFSummaryParser: StatementParser {
 
             // Only accept CC "New Balance" (avoid multiple snapshots); keep other statement/loan summaries as before
             // In credit card documents, ignore generic loan-like summaries (beginning/ending/current due) to avoid picking the wrong balance
-            let isRelevant = isStatementSummary || isCCNewBalance || (!hasCreditCardIndicators && isLoanSummary)
+            let isNonCCContext = (currentAccountContext == "savings" || currentAccountContext == "loan")
+                || rowCombinedNorm.contains("savings") || rowCombinedNorm.contains("checking")
+                || rowCombinedNorm.contains("loan") || rowCombinedNorm.contains("mortgage")
+
+            let isRelevant = isStatementSummary
+                || isCCNewBalance
+                || (!hasCreditCardIndicators && isLoanSummary)
+                || (hasCreditCardIndicators && isLoanSummary && isNonCCContext)
+
             guard isRelevant else { continue }
 
             // Date selection: prefer the statement closing date for CC "New Balance"
             let rowDateStr = value(row, map, key: "date")
-            let rowDate = rowDateStr.flatMap(parseDate)
+            var rowDate = rowDateStr.flatMap(parseDate)
+
+            // Year inference for month-day (e.g., "01-31") when no year was present
+            if rowDate == nil, let ds = rowDateStr {
+                // Prefer closing date, then end, then start
+                if let anchor = statementClosingDate ?? asOfForSummaryEnd ?? asOfForSummaryStart {
+                    let year = Calendar.current.component(.year, from: anchor)
+                    if ds.range(of: #"^\d{1,2}-\d{1,2}$"#, options: .regularExpression) != nil {
+                        let parts = ds.split(separator: "-")
+                        if parts.count == 2, let m = Int(parts[0]), let d = Int(parts[1]) {
+                            let df = DateFormatter()
+                            df.locale = Locale(identifier: "en_US_POSIX")
+                            df.timeZone = TimeZone(secondsFromGMT: 0)
+                            df.dateFormat = "M/d/yyyy"
+                            rowDate = df.date(from: "\(m)/\(d)/\(year)")
+                        }
+                    }
+                }
+            }
+
             let date: Date
             if isCCNewBalance, let cd = statementClosingDate {
                 date = cd
@@ -898,11 +952,30 @@ struct PDFSummaryParser: StatementParser {
                 continue
             }
 
-            // If this summary row describes an amount due or auto debit, capture it as a typical payment
-            let balStr = value(row, map, key: "balance") ?? value(row, map, key: "amount")
-            guard let balRaw = balStr else { continue }
-            let cleaned = balRaw.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
-            guard let dec = Decimal(string: cleaned) else { continue }
+            // Prefer explicit balance/amount cell
+            var amountDec: Decimal? = nil
+            if let balStr = (value(row, map, key: "balance") ?? value(row, map, key: "amount")) {
+                let cleaned = balStr.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
+                amountDec = Decimal(string: cleaned)
+            }
+
+            // Fallback: parse from the combined row text if needed
+            if amountDec == nil {
+                let values = extractCurrencyValues(from: rowCombinedRaw)
+                if !values.isEmpty {
+                    if rowCombinedNorm.contains("statement ending balance") || rowCombinedNorm.contains("ending balance") {
+                        // Prefer the largest number on ending balance lines to avoid small dues (e.g., 5.00)
+                        amountDec = values.max(by: { (l, r) in
+                            (l as NSDecimalNumber).doubleValue < (r as NSDecimalNumber).doubleValue
+                        })
+                    } else {
+                        amountDec = values.last
+                    }
+                }
+            }
+
+            guard let dec = amountDec else { continue }
+
             // For credit card contexts, store balances as negative liabilities
             var amount = dec
             if isCreditCardSummary || hasCreditCardIndicators {
@@ -991,25 +1064,16 @@ struct PDFSummaryParser: StatementParser {
                 }
             }
             // Prefer explicit Account column, fallback to description text; bias to credit card when CC context is present anywhere in the document
-            if isCreditCardSummary || hasCreditCardIndicators {
+            if isCreditCardSummary || (hasCreditCardIndicators && !isNonCCContext) {
                 sb.sourceAccountLabel = "creditcard"
             } else {
                 var accountKey = normalizedLabel(value(row, map, key: "account")) ?? normalizedLabel(desc)
-                // Suppress stray creditcard labels in non-CC documents for summary-like rows
-                if (accountKey == "creditcard") && !hasCreditCardIndicators {
-                    if isStatementSummary || isLoanSummary || isCreditCardSummary || isCCNewBalance {
-                        AMLogging.log("RowSummary: suppressing stray 'creditcard' label in non-CC document for summary row desc='" + (descRawOriginal ?? "") + "'", component: LOG_COMPONENT)
-                        accountKey = nil
-                    }
-                }
-                // Fallback to rolling section context when explicit labels are absent
                 if accountKey == nil, let ctx = currentAccountContext { accountKey = ctx }
-                // Bias to loan when loan phrases are present
-                let loanPhrases = ["loan", "mortgage", "principal balance", "outstanding principal", "amount due", "payment due"]
-                if accountKey == nil {
-                    if loanPhrases.contains(where: { lower.contains($0) }) {
-                        accountKey = "loan"
-                    }
+                let loanPhrases = ["loan", "mortgage", "principal balance", "outstanding principal", "amount due", "payment due", "savings", "checking"]
+                if accountKey == nil, loanPhrases.contains(where: { lower.contains($0) }) {
+                    if lower.contains("savings") { accountKey = "savings" }
+                    else if lower.contains("checking") { accountKey = "checking" }
+                    else { accountKey = "loan" }
                 }
                 sb.sourceAccountLabel = accountKey
             }
@@ -1020,6 +1084,39 @@ struct PDFSummaryParser: StatementParser {
         func extractTypicalPayment(from text: String) -> Decimal? {
             let lower = text.lowercased()
             AMLogging.log("TypicalPayment: scanning text length=\(lower.count)", component: LOG_COMPONENT)
+            
+            // Early pass: detect "payment ... due" phrases with bare amounts (allows no "$" only in this strict context)
+              do {
+                  let ns = lower as NSString
+                  let fullRange = NSRange(location: 0, length: ns.length)
+                  // Require a decimal point to avoid integers/dates; allow optional "$" and parentheses
+                  let duePatterns = [
+                      #"\bpayment\s+(?:amount\s+)?(?:of\s+)?\(?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\.[0-9]{1,4}\s*\)?\s+(?:is\s+)?due\b"#,
+                      #"\b(?:amount\s+due|payment\s+due)\s*[:\-]?\s*\(?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\.[0-9]{1,4}\s*\)?\b"#
+                  ]
+                  for pat in duePatterns {
+                      if let rx = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]),
+                         let m = rx.firstMatch(in: lower, options: [], range: fullRange),
+                         m.numberOfRanges >= 2,
+                         let r = Range(m.range(at: 1), in: lower) {
+                          let token = String(lower[r]).replacingOccurrences(of: ",", with: "")
+                          if let dec = Decimal(string: token), (dec as NSDecimalNumber).doubleValue > 0 {
+                              // Log the single line containing the match for diagnostics
+                              let beforeRange = NSRange(location: 0, length: m.range.location)
+                              let afterStart = m.range.location + m.range.length
+                              let afterRange = NSRange(location: afterStart, length: max(0, ns.length - afterStart))
+                              let prevNL = ns.range(of: "\n", options: [.backwards], range: beforeRange)
+                              let nextNL = ns.range(of: "\n", options: [], range: afterRange)
+                              let lineStart = prevNL.location == NSNotFound ? 0 : (prevNL.location + prevNL.length)
+                              let lineEnd = nextNL.location == NSNotFound ? ns.length : nextNL.location
+                              let line = ns.substring(with: NSRange(location: lineStart, length: max(0, lineEnd - lineStart)))
+                              AMLogging.log("TypicalPayment: due-phrase candidate value=\(dec) line='" + String(line.lowercased().prefix(200)) + "'", component: LOG_COMPONENT)
+                              AMLogging.log("TypicalPayment: selected candidate (due-phrase) value=\(dec)", component: LOG_COMPONENT)
+                              return dec
+                          }
+                      }
+                  }
+              }
 
             // Find trigger occurrences (store trigger label with range for diagnostics)
             let triggers = [

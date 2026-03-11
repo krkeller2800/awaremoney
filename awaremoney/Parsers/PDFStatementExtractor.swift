@@ -114,14 +114,14 @@ enum PDFStatementExtractor {
                           "jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,"aug":8,"sep":9,"sept":9,"oct":10,"nov":11,"dec":12]
             if let m = months.first(where: { lower.hasPrefix($0.key) })?.value { return m }
             // numeric mm/dd
-            let comps = token.split(separator: "/")
+            let comps = token.split(whereSeparator: { $0 == "/" || $0 == "-" })
             if comps.count >= 1, let m = Int(comps[0]) { return max(1, min(12, m)) }
             return nil
         }
         func extractMonthYear(from token: String) -> (month: Int?, day: Int?, year: Int?) {
             let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "")
-            // Try numeric mm/dd(/yy)
-            let comps = trimmed.split(separator: "/")
+            // Try numeric mm/dd(/yy) or mm-dd(-yy)
+            let comps = trimmed.split(whereSeparator: { $0 == "/" || $0 == "-" })
             if comps.count >= 2, let m = Int(comps[0]), let d = Int(comps[1]) {
                 let y: Int?
                 if comps.count >= 3, let yy = Int(comps[2]) {
@@ -158,10 +158,10 @@ enum PDFStatementExtractor {
         }
         func detectStatementPeriod(in lines: [String]) -> StatementPeriod? {
             // Local date token and range regex to avoid capturing outer variables before declaration
-            let dateTokenLocal = #"(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
+            let dateTokenLocal = #"(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
             let dateRangeRegexLocal = try! NSRegularExpression(
-                pattern: "^\\s*(" + dateTokenLocal + ")(?:\\s*(?:through|to|–|—|-|—)\\s*)(" + dateTokenLocal + ")\\s*$",
-                options: [.caseInsensitive]
+                            pattern: "(" + dateTokenLocal + ")(?:\\s*(?:through|thru|to|–|—|-|—)\\s*)(" + dateTokenLocal + ")",
+                            options: [.caseInsensitive]
             )
             for line in lines {
                 if let m = dateRangeRegexLocal.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)) {
@@ -190,13 +190,13 @@ enum PDFStatementExtractor {
         let headers = ["Date", "Description", "Amount", "Balance", "Account"]
 
         // Date patterns: numeric and month-name with optional year
-        let dateStartPattern = #"^(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
+        let dateStartPattern = #"^(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
         let dateStartRegex = try NSRegularExpression(pattern: dateStartPattern)
 
         // Money patterns: handle leading/trailing minus, parentheses, optional $ and CR/DR markers
         let moneyCore = #"\d{1,3}(?:,\d{3})*(?:\.\d{2})?"#
         let moneyToken = #"\(?-?\s?\$?"# + moneyCore + #"-?\)?(?:\s*(?:CR|DR|CREDIT|DEBIT))?"#
-        let dateToken = #"(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
+        let dateToken = #"(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
 
         // Full single-line row: Date [PostDate] Description Amount [Balance]
         let rowPattern = #"^(\#(dateToken))(?:\s+(\#(dateToken)))?\s+(.*?)\s+(\#(moneyToken))(?:\s+(\#(moneyToken)))?$"#
@@ -216,7 +216,7 @@ enum PDFStatementExtractor {
 
         // Date + [PostDate] + Description (no trailing amount)
         let dateAndDescRegex = try NSRegularExpression(
-            pattern: #"^((?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))(?:\s+(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))?\s+(.*)$"#,
+            pattern: #"^((?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))(?:\s+(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))?\s+(.*)$"#,
             options: [.caseInsensitive]
         )
 
@@ -437,6 +437,7 @@ enum PDFStatementExtractor {
             // If numeric M/d without year, append inferred year or period-derived year
             let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let numericNoYear = try! NSRegularExpression(pattern: #"^\d{1,2}/\d{1,2}$"#)
+            let numericNoYearHyphen = try! NSRegularExpression(pattern: #"^\d{1,2}-\d{1,2}$"#)
             let monthNoYear = try! NSRegularExpression(pattern: #"^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?$"#, options: [.caseInsensitive])
 
             func pickYear(for month: Int) -> Int? {
@@ -453,6 +454,12 @@ enum PDFStatementExtractor {
                     return trimmed + "/" + String(y)
                 }
             }
+            if numericNoYearHyphen.firstMatch(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count)) != nil {
+                let parts = trimmed.split(separator: "-")
+                if parts.count >= 2, let compsMonth = Int(parts[0]), let y = pickYear(for: compsMonth) {
+                    return parts[0] + "/" + parts[1] + "/" + String(y)
+                }
+            }
             if monthNoYear.firstMatch(in: trimmed, options: [], range: NSRange(location: 0, length: trimmed.utf16.count)) != nil {
                 if let m = monthNumber(from: trimmed), let y = pickYear(for: m) {
                     return trimmed.replacingOccurrences(of: ",", with: "") + ", " + String(y)
@@ -466,6 +473,7 @@ enum PDFStatementExtractor {
                 "dd-MMM-yyyy", "d-MMM-yy", "dd MMM yyyy", "d MMM yy",
                 "MMM d, yyyy", "MMMM d, yyyy", "MMM d, yy", "MMMM d, yy",
                 "MMM d yyyy", "MMMM d yyyy",
+                "MM-dd-yyyy", "M-d-yyyy", "MM-dd-yy", "M-d-yy",
             ]
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
@@ -1569,10 +1577,10 @@ enum PDFStatementExtractor {
             
             // Inserted code to detect loan payment and append suggested payment row
             // Detect a loan/mortgage context and suggest a monthly payment from the statement
-            var suggestedPayment: String? = nil
+            var suggestedPayment: (amount: String, dueDate: String?)? = nil
+            AMLogging.log("DEBUG guard: docLooksLoan=\(docLooksLoan) docIsCC=\(docIsCC)", component: "PDFStatementExtractor")
             if docLooksLoan && !docIsCC {
-                func detectLoanPaymentAmount(in src: [String]) -> String? {
-                    // Prefer Amount Due; fall back to Regular/Scheduled/Monthly Payment
+                func detectLoanPaymentAmount(in src: [String]) -> (String, String?)? {
                     let dueLabels = [
                         "current amount due", "total amount due", "amount due", "payment due", "amount due now", "due now"
                     ]
@@ -1580,30 +1588,54 @@ enum PDFStatementExtractor {
                         "regular monthly payment amount", "regular payment amount", "scheduled payment", "monthly payment", "installment amount", "payment amount"
                     ]
 
+                    // Local date token and regex to capture a date after "due on"
+                    let dateTokenLocal = #"(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?)"#
+                    let dueOnDateRegex = try! NSRegularExpression(
+                        pattern: #"(?i)\bdue\s+on\s+("# + dateTokenLocal + #")"#
+                    )
+
+                    func dueDateNear(lineIndex: Int, in lines: [String]) -> String? {
+                        guard lineIndex >= 0 && lineIndex < lines.count else { return nil }
+                        let current = lines[lineIndex]
+                        let full = NSRange(location: 0, length: (current as NSString).length)
+                        if let m = dueOnDateRegex.firstMatch(in: current, options: [], range: full), m.numberOfRanges >= 2,
+                           let r = Range(m.range(at: 1), in: current) {
+                            let raw = String(current[r])
+                            return normalizeDateString(raw, inferredYear: inferredYear)
+                        }
+                        if lineIndex + 1 < lines.count {
+                            let next = lines[lineIndex + 1]
+                            let fullNext = NSRange(location: 0, length: (next as NSString).length)
+                            if let m = dueOnDateRegex.firstMatch(in: next, options: [], range: fullNext), m.numberOfRanges >= 2,
+                               let r = Range(m.range(at: 1), in: next) {
+                                let raw = String(next[r])
+                                return normalizeDateString(raw, inferredYear: inferredYear)
+                            }
+                        }
+                        return nil
+                    }
+
                     func amountNearLabel(lineIndex: Int, labels: [String]) -> String? {
                         guard lineIndex >= 0 && lineIndex < src.count else { return nil }
                         let line = src[lineIndex]
                         let lower = line.lowercased()
-                        // If label is on this line, prefer the rightmost amount on the same line; otherwise, check the next line
                         for lbl in labels {
                             if let r = lower.range(of: lbl) {
                                 let suffix = String(line[r.upperBound...])
-                                let matches = amountAnywhereRegex.matches(in: suffix, options: [], range: NSRange(location: 0, length: suffix.utf16.count))
+                                let matches = amountAnywhereRegex.matches(in: suffix, options: [], range: NSRange(location: 0, length: (suffix as NSString).length))
                                 if let chosen = matches.last, let rr = Range(chosen.range, in: suffix) {
                                     return sanitizeAmount(String(suffix[rr]))
                                 }
-                                // Try same line anywhere if suffix failed
-                                let sameMatches = amountAnywhereRegex.matches(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count))
+                                let sameMatches = amountAnywhereRegex.matches(in: line, options: [], range: NSRange(location: 0, length: (line as NSString).length))
                                 if let chosen2 = sameMatches.last, let rr2 = Range(chosen2.range, in: line) {
                                     return sanitizeAmount(String(line[rr2]))
                                 }
-                                // Try next line
                                 if lineIndex + 1 < src.count {
                                     let next = src[lineIndex + 1]
-                                    if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count)) != nil {
+                                    if amountOnlyRegex.firstMatch(in: next, options: [], range: NSRange(location: 0, length: (next as NSString).length)) != nil {
                                         return sanitizeAmount(next)
                                     }
-                                    let nextMatches = amountAnywhereRegex.matches(in: next, options: [], range: NSRange(location: 0, length: next.utf16.count))
+                                    let nextMatches = amountAnywhereRegex.matches(in: next, options: [], range: NSRange(location: 0, length: (next as NSString).length))
                                     if let chosen3 = nextMatches.last, let rr3 = Range(chosen3.range, in: next) {
                                         return sanitizeAmount(String(next[rr3]))
                                     }
@@ -1617,16 +1649,40 @@ enum PDFStatementExtractor {
                     for (idx, raw) in src.enumerated() {
                         let lower = raw.lowercased()
                         if dueLabels.contains(where: { lower.contains($0) }) {
-                            if let amt = amountNearLabel(lineIndex: idx, labels: dueLabels) { return amt }
+                            if let amt = amountNearLabel(lineIndex: idx, labels: dueLabels) {
+                                let dd = dueDateNear(lineIndex: idx, in: src)
+                                return (amt, dd)
+                            }
                         }
                     }
+
                     // 2) Fall back to typical/regular payment labels
                     for (idx, raw) in src.enumerated() {
                         let lower = raw.lowercased()
                         if typicalLabels.contains(where: { lower.contains($0) }) {
-                            if let amt = amountNearLabel(lineIndex: idx, labels: typicalLabels) { return amt }
+                            if let amt = amountNearLabel(lineIndex: idx, labels: typicalLabels) {
+                                let dd = dueDateNear(lineIndex: idx, in: src)
+                                return (amt, dd)
+                            }
                         }
                     }
+
+                    // 3) Fallback: "payment of <amount> is due ..."
+                    let paymentOfDueRegex = try! NSRegularExpression(
+                        pattern: #"(?i)\bpayment\s+of\s+([0-9][0-9,]*(?:\.[0-9]{2})?)\s+(?:is\s+)?due\b"#
+                    )
+                    for (idx, raw) in src.enumerated() {
+                        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let full = NSRange(location: 0, length: (line as NSString).length)
+                        if let m = paymentOfDueRegex.firstMatch(in: line, options: [], range: full), m.numberOfRanges >= 2,
+                           let r = Range(m.range(at: 1), in: line) {
+                            let amount = sanitizeAmount(String(line[r]))
+                            let dd = dueDateNear(lineIndex: idx, in: src)
+                            AMLogging.log("PDF summary: detected loan payment via fallback phrase amount=\(amount) dueDate=\(dd ?? "nil")", component: "PDFStatementExtractor")
+                            return (amount, dd)
+                        }
+                    }
+
                     return nil
                 }
                 suggestedPayment = detectLoanPaymentAmount(in: lines)
@@ -1639,23 +1695,26 @@ enum PDFStatementExtractor {
                 AMLogging.log("PDF summary: skipping loan payment synthesis because document detected as credit card", component: "PDFStatementExtractor")
             }
 
-            // Choose a date for the suggested payment row (use statement end date if available)
-            var paymentDateStr: String? = nil
-            if let sp = statementPeriod, let (_, endDate) = summaryDates(from: sp) {
-                let df = DateFormatter()
-                df.locale = Locale(identifier: "en_US_POSIX")
-                df.timeZone = TimeZone(secondsFromGMT: 0)
-                df.dateFormat = "MM/dd/yyyy"
-                paymentDateStr = df.string(from: endDate)
-            } else if let latest = latestDate {
-                let df = DateFormatter()
-                df.locale = Locale(identifier: "en_US_POSIX")
-                df.timeZone = TimeZone(secondsFromGMT: 0)
-                df.dateFormat = "MM/dd/yyyy"
-                paymentDateStr = df.string(from: latest)
+            // Choose a date for the suggested payment row, preferring an explicit due date if detected
+            var paymentDateStr: String? = suggestedPayment?.dueDate
+            if paymentDateStr == nil {
+                if let sp = statementPeriod, let (_, endDate) = summaryDates(from: sp) {
+                    let df = DateFormatter()
+                    df.locale = Locale(identifier: "en_US_POSIX")
+                    df.timeZone = TimeZone(secondsFromGMT: 0)
+                    df.dateFormat = "MM/dd/yyyy"
+                    paymentDateStr = df.string(from: endDate)
+                } else if let latest = latestDate {
+                    let df = DateFormatter()
+                    df.locale = Locale(identifier: "en_US_POSIX")
+                    df.timeZone = TimeZone(secondsFromGMT: 0)
+                    df.dateFormat = "MM/dd/yyyy"
+                    paymentDateStr = df.string(from: latest)
+                }
             }
 
-            if let pay = suggestedPayment, let pDate = paymentDateStr {
+            if let sp = suggestedPayment, let pDate = paymentDateStr {
+                let pay = sp.amount
                 // Duplication guard: avoid appending a second loan payment row if one already exists
                 let hasExistingLoanPayment = rows.contains { r in
                     guard r.count >= 5 else { return false }
