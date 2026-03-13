@@ -386,36 +386,6 @@
             endingLineNumber = "143"
             landmarkName = "importBackup(data:context:settings:)"
             landmarkType = "7">
-            <Locations>
-               <Location
-                  uuid = "83DC144A-89DD-44E9-A369-CCEDF6AE7424 - 9c9d46f82aacb458"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "static awaremoney.BackupImporter.importBackup(data: Foundation.Data, context: SwiftData.ModelContext, settings: awaremoney.SettingsStore) throws -&gt; awaremoney.BackupImportSummary"
-                  moduleName = "awaremoney.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Volumes/XcodeSSD/Users/karldev/Documents/awaremoney/awaremoney/Backup/BackupImporter.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "143"
-                  endingLineNumber = "143">
-               </Location>
-               <Location
-                  uuid = "83DC144A-89DD-44E9-A369-CCEDF6AE7424 - 9c9d46f82aacb458"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "static awaremoney.BackupImporter.importBackup(data: Foundation.Data, context: SwiftData.ModelContext, settings: awaremoney.SettingsStore) throws -&gt; awaremoney.BackupImportSummary"
-                  moduleName = "awaremoney.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Volumes/XcodeSSD/Users/karldev/Documents/awaremoney/awaremoney/Backup/BackupImporter.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "143"
-                  endingLineNumber = "143">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
@@ -432,6 +402,22 @@
             endingLineNumber = "94"
             landmarkName = "importBackup(data:context:settings:)"
             landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "8D4C9E4A-AC02-4371-B195-F1C0E36F1A86"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "awaremoney/View/Import/ReviewImportView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "151"
+            endingLineNumber = "151"
+            landmarkName = "body"
+            landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

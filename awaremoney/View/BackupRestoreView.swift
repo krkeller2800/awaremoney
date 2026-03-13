@@ -30,7 +30,7 @@ struct BackupRestoreView: View {
                 Section("Backup & Restore") {
                     Button {
                         do {
-                            let (wrapper, filename) = try BackupExporter.makeBackupPackage(context: modelContext, settings: settings)
+                            let (wrapper, _) = try BackupExporter.makeBackupPackage(context: modelContext, settings: settings)
                             self.backupDoc = BackupPackageDocument(wrapper: wrapper)
                             self.showExporter = true
                         } catch {

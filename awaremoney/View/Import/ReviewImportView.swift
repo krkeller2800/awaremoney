@@ -38,7 +38,15 @@ struct ReviewImportView: View {
         return false
         #endif
     }
-
+    
+    private var isQFXSource: Bool {
+        let lower = staged.sourceFileName.lowercased()
+        return lower.hasSuffix(".qfx") || lower.hasSuffix(".ofx") || lower.hasSuffix(".ofc") || lower.hasSuffix(".qbo")
+    }
+    private var hasStagedPreviewData: Bool {
+            return !staged.transactions.isEmpty || !staged.balances.isEmpty || !staged.holdings.isEmpty
+    }
+    
     var body: some View {
         NavigationStack {
             ZStack {
@@ -79,6 +87,8 @@ struct ReviewImportView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
+            .navigationTitle("Review Import")
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 let hasStaged = (vm.staged != nil)
                 let balancesCount = vm.staged?.balances.count ?? 0
@@ -136,13 +146,21 @@ struct ReviewImportView: View {
                             .padding(.top, 12)
                             .padding(.trailing, 12)
                     }
+                } else if hasStagedPreviewData {
+                    ZStack(alignment: .topTrailing) {
+                        StatementPreviewView(staged: staged)
+                            .ignoresSafeArea()
+                        DismissOverlay()
+                            .padding(.top, 12)
+                            .padding(.trailing, 12)
+                    }
                 } else {
                     ZStack(alignment: .topTrailing) {
                         Text("File: \(staged.sourceFileName)")
                             .font(.subheadline)
                             .frame(maxWidth: .infinity, alignment: .center)
                         ContentUnavailableView(
-                            "PDF Viewer",
+                            "Statement Viewer",
                             systemImage: "doc.richtext",
                             description: Text("Original PDF preview isn't available yet.")
                         )
@@ -153,7 +171,7 @@ struct ReviewImportView: View {
                     .padding()
                 }
             }
-            .navigationTitle("View PDF")
+            .navigationTitle("View Statement")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showPDFSheet = false }
@@ -192,7 +210,7 @@ struct ReviewImportView: View {
                                 Text("Review required")
                                     .font(.subheadline.weight(.semibold))
                             }
-                            Text("We could't parse your statement completly. Please verify and complete the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : ""))
+                            Text("We couldn't parse your statement completely. Please verify and complete the fields below." + (UIDevice.type == "iPhone" ? " Tap '\(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "view PDF" : "view statement")' for reference." : ""))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Text("Tap an item to jump to the field below.")
@@ -229,6 +247,7 @@ struct ReviewImportView: View {
                         .padding(.vertical, 4)
                     }
                     .listRowBackground(Color.yellow.opacity(0.08))
+                    
                 }
 
                 Section() {
@@ -276,14 +295,14 @@ struct ReviewImportView: View {
                                     .foregroundStyle(.tertiary)
                                     .accessibilityHidden(true)
                             }
-                            if staged.sourceFileName.lowercased().hasSuffix(".pdf") && UIDevice.type == "iPhone" {
+                            if (staged.sourceFileName.lowercased().hasSuffix(".pdf") || hasStagedPreviewData) && UIDevice.type == "iPhone" {
                                 Button {
-                                    AMLogging.log("ReviewImportView: View PDF tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
+                                    AMLogging.log("ReviewImportView: View Statement tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
                                     showPDFSheet = true
                                 } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: "doc.text.magnifyingglass")
-                                        Text("View PDF")
+                                        Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Statement")
                                     }
                                 }
                                 .buttonStyle(.bordered)
@@ -955,14 +974,20 @@ struct ReviewImportView: View {
     }
     
     private func resolvedPDFURL() -> URL? {
-        // Prefer a directly cached local URL from the import flow
+        // Only use lastPickedLocalURL when it's a PDF
         if let direct = vm.lastPickedLocalURL {
-            AMLogging.log("ReviewImportView: PDF preview using lastPickedLocalURL=\(direct.path)", component: "ReviewImportView")
-            return direct
+            if direct.pathExtension.lowercased() == "pdf" {
+                AMLogging.log("ReviewImportView: PDF preview using lastPickedLocalURL=\(direct.path)", component: "ReviewImportView")
+                return direct
+            } else {
+                AMLogging.log("ReviewImportView: ignoring non-PDF lastPickedLocalURL=\(direct.path)", component: "ReviewImportView")
+            }
         }
-        // Fallback: look in Caches using the staged file name
+
+        // Fallback: look in Caches using the staged file name (only for .pdf)
         let lower = staged.sourceFileName.lowercased()
-        if lower.hasSuffix(".pdf"), let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+        if lower.hasSuffix(".pdf"),
+           let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
             let candidate = caches.appendingPathComponent(staged.sourceFileName)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 AMLogging.log("ReviewImportView: PDF preview using caches candidate=\(candidate.path)", component: "ReviewImportView")
@@ -981,9 +1006,11 @@ struct ReviewImportView: View {
             if let url = resolvedPDFURL() {
                 PDFKitView(url: url)
                     .ignoresSafeArea()
+            } else if hasStagedPreviewData {
+                StatementPreviewView(staged: staged)
             } else {
                 ContentUnavailableView(
-                    "PDF Preview",
+                    "Statement Preview",
                     systemImage: "doc.richtext",
                     description: Text("No preview available")
                 )

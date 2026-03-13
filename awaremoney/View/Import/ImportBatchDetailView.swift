@@ -96,18 +96,33 @@ struct ImportBatchDetailView: View {
                             HStack(spacing: 0) {
                                 // Left column: batch details (Batch/Balances/Holdings)
                                 detailsList(for: batch)
+                                    .id("left-\(batch.id)")
                                     .padding(.vertical, 8)
                                     .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
                                     .frame(maxHeight: .infinity)
 
                                 // Right column: show PDF if available, otherwise transactions
+                                // Right column: prefer transactions; otherwise PDF; otherwise source-file preview; otherwise placeholder
                                 Group {
-                                    if let url = inlinePDFURL {
-                                        PDFKitView(url: url)
-                                    } else {
+                                    if !transactions.isEmpty {
                                         transactionsList()
+                                            .id("tx-\(batch.id)")
+                                    } else if let url = inlinePDFURL {
+                                        PDFKitView(url: url)
+                                            .id("pdf-\(url.path)")
+                                    } else if let sourceURL = resolvedSourceFileURL(for: batch) {
+                                        SourceFilePreview(url: sourceURL)
+                                            .id("src-\(sourceURL.path)")
+                                    } else {
+                                        ContentUnavailableView(
+                                            "No Content",
+                                            systemImage: "doc",
+                                            description: Text("This batch has no transactions to show and its source file isn’t available.")
+                                        )
+                                        .id("empty-\(batch.id)")
                                     }
                                 }
+                                .id("right-\(batch.id)")
                                 .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
                                 .frame(maxHeight: .infinity)
                             }
@@ -631,12 +646,30 @@ struct ImportBatchDetailView: View {
         AMLogging.log("PDF preview unavailable — missing or invalid local path and no legacy cache found for: \(batch.sourceFileName)", component: "ImportBatchDetailView")
         return nil
     }
+    private func resolvedSourceFileURL(for batch: ImportBatch) -> URL? {
+        let fm = FileManager.default
 
+        // If a local path is set (unlikely for non-PDF), prefer it.
+        if let path = batch.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+
+        // Fallback: legacy caches/<sourceFileName> (used by CSV mapping editor flow)
+        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            let candidate = caches.appendingPathComponent(batch.sourceFileName)
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        return nil
+    }
     @ViewBuilder private func pdfSheetContent(for batch: ImportBatch) -> some View {
         NavigationStack {
             if let url = resolvedPDFURL(for: batch) {
                 ZStack(alignment: .topTrailing) {
                     PDFKitView(url: url)
+                        .id(url.path)
                         .ignoresSafeArea()
                     DismissOverlay()
                         .padding(.top, 12)
@@ -847,42 +880,31 @@ struct ImportBatchDetailView: View {
             // Decide parser pathway by extension; we will reuse ImportViewModel's existing parsers best-effort
             let rowsAndHeaders: ([[String]], [String])
             if fileExtension == "pdf" {
-                // Prefer Summary mode for PDFs so we can capture balances and APR/interest details from statements
-                rowsAndHeaders = try PDFStatementExtractor.parse(url: url)
-                AMLogging.log("PDF extractor returned rows=\(rowsAndHeaders.0.count) headers=\(rowsAndHeaders.1)", component: "ImportBatchDetailView")
+                // Perform PDF parsing and text extraction off the main actor to avoid UI stalls
+                let result: ([[String]], [String]) = try await Task.detached(priority: .userInitiated) {
+                    let rowsAndHeaders = try await PDFStatementExtractor.parse(url: url)
+                    var rows = rowsAndHeaders.0
+                    let headers = rowsAndHeaders.1
 
-                // Long-term APR reliability: also extract raw text and append the Interest Charges section as a synthetic row
-                if let fullText = PDFTextExtractor.extractText(from: url) {
-                    AMLogging.log("PDF raw text length=\(fullText.count)", component: "ImportBatchDetailView")
-                    var augmentedRows = rowsAndHeaders.0
-
-                    if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: fullText) {
-                        AMLogging.log("Interest Charges section found — length=\(interestSection.count)", component: "ImportBatchDetailView")
-                        augmentedRows.append([interestSection])
-                    } else {
-                        AMLogging.log("Interest Charges section not found in raw text", component: "ImportBatchDetailView")
+                    // Extract small targeted sections only; avoid appending the full document text to prevent memory spikes
+                    if let fullText = await PDFTextExtractor.extractText(from: url) {
+                        if let interestSection = await PDFTextExtractor.extractInterestChargesSection(from: fullText) {
+                            rows.append([interestSection])
+                        }
+                        if let balanceSection = await PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
+                            rows.append([balanceSection])
+                        }
                     }
+                    return (rows, headers)
+                }.value
 
-                    if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
-                        AMLogging.log("Balance Summary section found — length=\(balanceSection.count)", component: "ImportBatchDetailView")
-                        augmentedRows.append([balanceSection])
-                    } else {
-                        AMLogging.log("Balance Summary section not found in raw text", component: "ImportBatchDetailView")
-                    }
-
-                    AMLogging.log("ImportBatchDetailView: appending full document text as synthetic row", component: "ImportBatchDetailView")
-                    augmentedRows.append([fullText])
-
-                    parsedRows = augmentedRows
-                    parsedHeaders = rowsAndHeaders.1
-                } else {
-                    AMLogging.log("PDF raw text unavailable — proceeding without synthetic sections", component: "ImportBatchDetailView")
-                    parsedRows = rowsAndHeaders.0
-                    parsedHeaders = rowsAndHeaders.1
-                }
+                parsedRows = result.0
+                parsedHeaders = result.1
+                AMLogging.log("PDF extractor returned rows=\(parsedRows.count) headers=\(parsedHeaders)", component: "ImportBatchDetailView")
             } else {
-                let data = try Data(contentsOf: url)
-                rowsAndHeaders = try CSV.read(data: data)
+                // Load data off the main actor as well
+                let data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
+                let rowsAndHeaders = try CSV.read(data: data)
                 AMLogging.log("CSV read returned rows=\(rowsAndHeaders.0.count) headers=\(rowsAndHeaders.1)", component: "ImportBatchDetailView")
                 parsedRows = rowsAndHeaders.0
                 parsedHeaders = rowsAndHeaders.1
@@ -1362,6 +1384,116 @@ private struct DismissOverlay: View {
         .buttonStyle(.plain)
         .background(.ultraThinMaterial, in: Circle())
         .accessibilityLabel("Close")
+    }
+}
+
+private struct SourceFilePreview: View {
+    let url: URL
+
+    var body: some View {
+        switch url.pathExtension.lowercased() {
+        case "csv", "tsv":
+            CSVPreview(url: url)
+        case "qfx", "ofx":
+            TextPreview(url: url) // Show raw text for now
+        default:
+            TextPreview(url: url)
+        }
+    }
+}
+
+private struct CSVPreview: View {
+    let url: URL
+    @State private var rows: [[String]] = []
+    @State private var headers: [String] = []
+    @State private var error: String?
+
+    var body: some View {
+        Group {
+            if let error {
+                ContentUnavailableView(
+                    "Unable to preview CSV",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(error)
+                )
+            } else if !rows.isEmpty || !headers.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !headers.isEmpty {
+                            HStack(spacing: 12) {
+                                ForEach(headers, id: \.self) { Text($0).font(.caption).bold() }
+                            }
+                        }
+                        ForEach(Array(rows.prefix(50).enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: 12) {
+                                ForEach(row, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+                            }
+                        }
+                        if rows.count > 50 {
+                            Text("Showing first 50 rows")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+            } else {
+                ProgressView().task { await load() }
+            }
+        }
+    }
+
+    @MainActor private func load() async {
+        do {
+            let data = try Data(contentsOf: url)
+            let read = try CSV.read(data: data)
+            self.rows = read.rows
+            self.headers = read.headers
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+private struct TextPreview: View {
+    let url: URL
+    @State private var text: String = ""
+    @State private var error: String?
+
+    var body: some View {
+        Group {
+            if let error {
+                ContentUnavailableView(
+                    "Unable to preview file",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(error)
+                )
+            } else if !text.isEmpty {
+                ScrollView {
+                    Text(text)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding()
+                }
+            } else {
+                ProgressView().task { await load() }
+            }
+        }
+    }
+
+    @MainActor private func load() async {
+        do {
+            let data = try Data(contentsOf: url)
+            if let s = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) {
+                self.text = String(s.prefix(200_000)) // keep preview light
+            } else {
+                self.error = "Unknown text encoding"
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 }
 private struct FrameKey: PreferenceKey {

@@ -5,6 +5,11 @@ import Darwin
 struct PDFKitView: UIViewRepresentable {
     let url: URL
 
+    class Coordinator {
+        var lastURL: URL?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     // Silences stdout/stderr temporarily to suppress noisy PDFKit/CoreGraphics console logs
     private func withSilencedConsole<T>(_ body: () throws -> T) rethrows -> T {
         fflush(stdout)
@@ -34,11 +39,21 @@ struct PDFKitView: UIViewRepresentable {
         pdfView.backgroundColor = .clear
         let doc: PDFDocument? = withSilencedConsole { PDFDocument(url: url) }
         if let doc { pdfView.document = doc }
+        context.coordinator.lastURL = url
         return pdfView
     }
 
     func updateUIView(_ uiView: PDFView, context: Context) {
+        // Only reload if the URL actually changed to avoid redundant work
+        guard context.coordinator.lastURL != url else { return }
         let doc: PDFDocument? = withSilencedConsole { PDFDocument(url: url) }
-        if let doc { uiView.document = doc }
+        uiView.document = doc
+        context.coordinator.lastURL = url
+    }
+
+    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+        // Explicitly release the document to ensure file handles and observers are torn down
+        uiView.document = nil
+        coordinator.lastURL = nil
     }
 }

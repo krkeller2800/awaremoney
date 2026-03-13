@@ -19,4 +19,13 @@ extension UTType {
     static var awareMoneyBackupByExtension: UTType? {
         UTType(tag: "ambackup", tagClass: .filenameExtension, conformingTo: .json)
     }
+    
+    // Additional statement/document types supported by the import pipeline
+    static var ofx: UTType? { UTType(tag: "ofx", tagClass: .filenameExtension, conformingTo: .data) }
+    static var qfx: UTType? { UTType(tag: "qfx", tagClass: .filenameExtension, conformingTo: .data) }
+    static var qif: UTType? { UTType(tag: "qif", tagClass: .filenameExtension, conformingTo: .text) }
+    static var xlsx: UTType? { UTType(tag: "xlsx", tagClass: .filenameExtension, conformingTo: .data) }
+    static var xls: UTType? { UTType(tag: "xls", tagClass: .filenameExtension, conformingTo: .data) }
+    static var zip: UTType? { UTType(tag: "zip", tagClass: .filenameExtension, conformingTo: .data) }
+    static var tsv: UTType? { UTType(tag: "tsv", tagClass: .filenameExtension, conformingTo: .text) }
 }

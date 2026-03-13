@@ -33,6 +33,8 @@
             <array>
                 <string>com.komakode.awaremoney.backup</string>
             </array>
+            <key>LSTypeIsPackage</key>
+            <true/>
             <key>LSSupportsOpeningDocumentsInPlace</key>
             <true/>
             <key>UISupportsDocumentBrowser</key>

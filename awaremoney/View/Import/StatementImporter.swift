@@ -62,6 +62,22 @@ struct StatementImporter {
 
             return gatePDF(rows: augmentedRows, headers: headers, mode: mode)
 
+        case .ofx, .qfx:
+            let (rows, headers) = try OFXStatementExtractor.parse(url: url)
+            return gateCSV(rows: rows, headers: headers)
+
+        case .qif:
+            let (rows, headers) = try QIFStatementExtractor.parse(url: url)
+            return gateCSV(rows: rows, headers: headers)
+
+        case .excel:
+            let (rows, headers) = try ExcelStatementExtractor.parse(url: url)
+            return gateCSV(rows: rows, headers: headers)
+
+        case .archive:
+            let (rows, headers) = try ZipStatementExtractor.parse(url: url)
+            return gateCSV(rows: rows, headers: headers)
+
         case .unknown:
             throw ImportError.unknownFormat
         }
@@ -69,12 +85,17 @@ struct StatementImporter {
 
     // MARK: - Kind detection
 
-    private enum FileKind { case pdf, csv, unknown }
+    private enum FileKind { case pdf, csv, ofx, qfx, qif, excel, archive, unknown }
 
     private func detectKind(_ url: URL) -> FileKind {
         let ext = url.pathExtension.lowercased()
         if ext == "pdf" { return .pdf }
-        if ["csv", "tsv"].contains(ext) { return .csv }
+        if ["csv", "tsv", "txt"].contains(ext) { return .csv }
+        if ext == "ofx" { return .ofx }
+        if ext == "qfx" { return .qfx }
+        if ext == "qif" { return .qif }
+        if ["xlsx", "xls"].contains(ext) { return .excel }
+        if ext == "zip" { return .archive }
         return .unknown
     }
 

@@ -79,16 +79,59 @@ struct ImportFlowView: View {
     private func allowedTypesForCurrentPicker() -> [UTType] {
         switch pickerKind {
         case .csv:
-            var types: [UTType] = [.commaSeparatedText]
-            if let byExt = UTType(filenameExtension: "csv") { types.append(byExt) }
-            return types
+            var types: [UTType] = []
+            // CSV/TSV/plain text
+            types.append(.commaSeparatedText)
+            types.append(.tabSeparatedText)
+            types.append(.plainText)
+            if let tsv = UTType.tsv { types.append(tsv) } // explicit by extension
+            if let csvByExt = UTType(filenameExtension: "csv") { types.append(csvByExt) }
+
+            // Financial interchange formats
+            if let ofx = UTType.ofx { types.append(ofx) }
+            if let qfx = UTType.qfx { types.append(qfx) }
+            if let qif = UTType.qif { types.append(qif) }
+
+            // Excel workbooks
+            if let xlsx = UTType.xlsx { types.append(xlsx) }
+            if let xls = UTType.xls { types.append(xls) }
+
+            // Archives (some banks deliver zipped statements)
+            if let zip = UTType.zip { types.append(zip) }
+
+            // De-duplicate while preserving order
+            var seen: Set<String> = []
+            let unique = types.filter { t in
+                let id = t.identifier
+                if seen.contains(id) { return false }
+                seen.insert(id)
+                return true
+            }
+            return unique
         case .pdf:
             return [.pdf]
         default:
-            // Default to CSV to avoid overly broad file types
-            var types: [UTType] = [.commaSeparatedText]
-            if let byExt = UTType(filenameExtension: "csv") { types.append(byExt) }
-            return types
+            // Mirror CSV case for safety
+            var types: [UTType] = []
+            types.append(.commaSeparatedText)
+            types.append(.tabSeparatedText)
+            types.append(.plainText)
+            if let tsv = UTType.tsv { types.append(tsv) }
+            if let csvByExt = UTType(filenameExtension: "csv") { types.append(csvByExt) }
+            if let ofx = UTType.ofx { types.append(ofx) }
+            if let qfx = UTType.qfx { types.append(qfx) }
+            if let qif = UTType.qif { types.append(qif) }
+            if let xlsx = UTType.xlsx { types.append(xlsx) }
+            if let xls = UTType.xls { types.append(xls) }
+            if let zip = UTType.zip { types.append(zip) }
+            var seen: Set<String> = []
+            let unique = types.filter { t in
+                let id = t.identifier
+                if seen.contains(id) { return false }
+                seen.insert(id)
+                return true
+            }
+            return unique
         }
     }
 
@@ -196,6 +239,15 @@ struct ImportFlowView: View {
     }
 
     private func autoApplyMappingIfPossible(headers: [String], rows: [[String]]) {
+        // Quick guard: skip CSV auto-apply for OFX/QFX preamble headers
+        let lowerHeaders = headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        if lowerHeaders.count == 1 {
+            let h = lowerHeaders[0]
+            if h.hasPrefix("ofxheader") {
+                AMLogging.log("ImportFlowView: autoApplyMapping — skipping auto-apply for OFX/QFX-like content (header '\(headers[0])'); awaiting dedicated OFX parser", component: "Import")
+                return
+            }
+        }
         do {
             let saved = try modelContext.fetch(FetchDescriptor<CSVColumnMapping>())
             AMLogging.log("ImportFlowView: autoApplyMapping — savedMappings=\(saved.count), headers=\(headers), headerSet=\(Set(headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }))", component: "Import")
@@ -753,87 +805,91 @@ struct ImportFlowView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Menu {
-                            Button("Loan Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .loan
-                                vm.newAccountType = .loan
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Bank Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .checking
-                                vm.newAccountType = .checking
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Brokerage Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .brokerage
-                                vm.newAccountType = .brokerage
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Credit Card Statement") {
-                                pickerKind = .pdf
-                                vm.userSelectedDocHint = .creditCard
-                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                vm.newAccountType = .creditCard
-                                AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Divider()
-                            Button("User-defined…") {
-                                // Present a manual staged import so the user can add a balance immediately
-                                vm.userSelectedDocHint = .creditCard
-                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                vm.newAccountType = .creditCard
-                                let manual = StagedImport(
-                                    parserId: "manual.user",
-                                    sourceFileName: "Manual Entry",
-                                    inferredInstitutionName: nil,
-                                    suggestedAccountType: vm.newAccountType,
-                                    transactions: [],
-                                    holdings: [],
-                                    balances: []
-                                )
-                                vm.staged = manual
-                                vm.mappingSession = nil
-                                AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
+                            Section("PDF") {
+                                Button("Credit Card Statement") {
+                                    pickerKind = .pdf
+                                    vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                    vm.newAccountType = .creditCard
+                                    AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Loan Statement") {
+                                    pickerKind = .pdf
+                                    vm.userSelectedDocHint = .loan
+                                    vm.newAccountType = .loan
+                                    AMLogging.log("ImportFlowView: presenting PDF picker (Loan Statement)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Bank Statement") {
+                                    pickerKind = .pdf
+                                    vm.userSelectedDocHint = .checking
+                                    vm.newAccountType = .checking
+                                    AMLogging.log("ImportFlowView: presenting PDF picker (Bank Statement)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Brokerage Statement") {
+                                    pickerKind = .pdf
+                                    vm.userSelectedDocHint = .brokerage
+                                    vm.newAccountType = .brokerage
+                                    AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Divider()
+                                Button("User-defined…") {
+                                    // Present a manual staged import so the user can add a balance immediately
+                                    vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                    vm.newAccountType = .creditCard
+                                    let manual = StagedImport(
+                                        parserId: "manual.user",
+                                        sourceFileName: "Manual Entry",
+                                        inferredInstitutionName: nil,
+                                        suggestedAccountType: vm.newAccountType,
+                                        transactions: [],
+                                        holdings: [],
+                                        balances: []
+                                    )
+                                    vm.staged = manual
+                                    vm.mappingSession = nil
+                                    AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
+                                }
                             }
                         } label: {
-                            PlanMenuLabel(title: "PDF")
+                            PlanMenuLabel(title: "Stmt")
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            Button("Loan CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .loan
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Bank CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .checking
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Brokerage CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .brokerage
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                                isImporterPresented = true
-                            }
-                            Button("Credit Card CSV") {
-                                pickerKind = .csv
-                                vm.userSelectedDocHint = .creditCard
-                                vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
-                                isImporterPresented = true
+                            Section("CSV, OFX, QFX, QIF, XLSX, & ZIP") {
+                                Button("Credit Card Trans") {
+                                    pickerKind = .csv
+                                    vm.userSelectedDocHint = .creditCard
+                                    vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                    AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Loan Transactions") {
+                                    pickerKind = .csv
+                                    vm.userSelectedDocHint = .loan
+                                    AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Bank Transactions") {
+                                    pickerKind = .csv
+                                    vm.userSelectedDocHint = .checking
+                                    AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Brokerage Transactions") {
+                                    pickerKind = .csv
+                                    vm.userSelectedDocHint = .brokerage
+                                    AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
+                                    isImporterPresented = true
+                                }
                             }
                         } label: {
-                            PlanMenuLabel(title: "CSV")
+                            PlanMenuLabel(title: "Trans")
                         }
                     }
                 }
@@ -1010,6 +1066,14 @@ struct ImportFlowView: View {
                       ToolbarItem(placement: .topBarLeading) {
                           Menu {
                               Section("PDF") {
+                                  Button("Credit Card Statement") {
+                                      pickerKind = .pdf
+                                      vm.userSelectedDocHint = .creditCard
+                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      vm.newAccountType = .creditCard
+                                      AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
+                                      isImporterPresented = true
+                                  }
                                   Button("Loan Statement") {
                                       pickerKind = .pdf
                                       vm.userSelectedDocHint = .loan
@@ -1031,14 +1095,6 @@ struct ImportFlowView: View {
                                       AMLogging.log("ImportFlowView: presenting PDF picker (Brokerage Statement)", component: "Import")
                                       isImporterPresented = true
                                   }
-                                  Button("Credit Card Statement") {
-                                      pickerKind = .pdf
-                                      vm.userSelectedDocHint = .creditCard
-                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                      vm.newAccountType = .creditCard
-                                      AMLogging.log("ImportFlowView: presenting PDF picker (Credit Card Statement)", component: "Import")
-                                      isImporterPresented = true
-                                  }
                                   Divider()
                                   Button("User-defined…") {
                                       vm.userSelectedDocHint = .creditCard
@@ -1058,30 +1114,30 @@ struct ImportFlowView: View {
                                       AMLogging.log("ImportFlowView: started manual user-defined import (credit card) — presenting ReviewImportView with empty staged import to add a balance", component: "Import")
                                   }
                               }
-                              Section("CSV") {
-                                  Button("Loan CSV") {
+                              Section("CSV, OFX, QFX, QIF, XLSX, & ZIP") {
+                                  Button("Credit Card Transactions") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .creditCard
+                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Loan Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .loan
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
-                                  Button("Bank CSV") {
+                                  Button("Bank Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .checking
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
-                                  Button("Brokerage CSV") {
+                                  Button("Brokerage Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .brokerage
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
-                                      isImporterPresented = true
-                                  }
-                                  Button("Credit Card CSV") {
-                                      pickerKind = .csv
-                                      vm.userSelectedDocHint = .creditCard
-                                      vm.creditCardFlipOverride = settings.creditCardFlipDefault
-                                      AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
                               }
@@ -1319,7 +1375,44 @@ struct ImportFlowView: View {
         // Determine if PDF or not; handle accordingly
         if url.pathExtension.lowercased() == "pdf" {
             handlePDFSnapshotImport(url: url)
+        } else if ["qfx", "ofx"].contains(url.pathExtension.lowercased()) {
+            await MainActor.run { vm.isImporting = true }
+            defer { DispatchQueue.main.async { vm.isImporting = false } }
+
+            do {
+                AMLogging.log("ImportFlowView: using OFXStatementExtractor for \(url.lastPathComponent)", component: "Import")
+                let (rows, headers) = try OFXStatementExtractor.parse(url: url)
+
+                let parsers = ImportViewModel.defaultParsers()
+                // For OFX/QFX content, avoid PDF-only summary parsers
+                let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
+                if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
+                    AMLogging.log("ImportFlowView: selected non-PDF parser for OFX/QFX — \(type(of: parser))", component: "Import")
+                    var staged = try parser.parse(rows: rows, headers: headers)
+                    // Add the file name here for OFX/QFX imports
+                    staged.sourceFileName = url.lastPathComponent
+                    await MainActor.run {
+                        vm.staged = staged
+                        vm.mappingSession = nil
+                    }
+                    AMLogging.log("ImportFlowView: OFX parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
+                } else {
+                    await MainActor.run {
+                        // Fall back to mapping editor with extracted headers/rows
+                        vm.mappingSession = .init(kind: .bank,headers: headers, sampleRows: Array(rows.prefix(50)))
+                        vm.staged = nil
+                    }
+                    AMLogging.log("ImportFlowView: OFX parsed but no parser matched headers; opened mapping editor", component: "Import")
+                }
+            } catch {
+                await MainActor.run {
+                    vm.errorMessage = "We couldn’t read this OFX/QFX file."
+                    showImportError = true
+                }
+                AMLogging.error("ImportFlowView: OFXStatementExtractor failed — \(error.localizedDescription)", component: "Import")
+            }
         } else {
+            // existing non-PDF path} else {
             await MainActor.run {
                 vm.isImporting = true
             }

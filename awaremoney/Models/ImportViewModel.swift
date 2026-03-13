@@ -11,6 +11,7 @@ import SwiftData
 import UniformTypeIdentifiers
 import Combine
 import PDFKit
+import UIKit
 
 @MainActor
 final class ImportViewModel: ObservableObject {
@@ -981,6 +982,33 @@ final class ImportViewModel: ObservableObject {
 
                 // Extract rows/headers (heavy work)
                 let ext = url.pathExtension.lowercased()
+                if ext == "qfx" || ext == "ofx" {
+                    await AMLogging.log("ImportViewModel: routing \(url.lastPathComponent) to OFXStatementExtractor", component: "Import")
+                    do {
+                        let (rows, headers) = try await OFXStatementExtractor.parse(url: url)
+                        let matching: [StatementParser] = await MainActor.run { self.parsers.filter { $0.canParse(headers: headers) } }
+                        if let parser = matching.first {
+                            let staged = try await parser.parse(rows: rows, headers: headers)
+                            await MainActor.run {
+                                self.staged = staged
+                                self.mappingSession = nil
+                            }
+                            await AMLogging.log("ImportViewModel: OFX parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
+                        } else {
+                            await MainActor.run {
+                                self.mappingSession = .init(kind: .bank,headers: headers, sampleRows: Array(rows.prefix(50)))
+                                self.staged = nil
+                            }
+                            await AMLogging.log("ImportViewModel: OFX parsed but no parser matched; opened mapping editor", component: "Import")
+                        }
+                    } catch {
+                        await MainActor.run {
+                            self.errorMessage = "We couldn’t read this OFX/QFX file."
+                        }
+                        await AMLogging.error("ImportViewModel: OFX parse failed — \(error.localizedDescription)", component: "Import")
+                    }
+                    return
+                }
                 let rowsAndHeaders: ([[String]], [String])
                 if ext == "pdf" {
                     // Try summary-only first; if it fails, retry transactions mode to salvage activity/summary
@@ -1003,8 +1031,8 @@ final class ImportViewModel: ObservableObject {
                     }
                 }
                 let (rows, headers) = rowsAndHeaders
-
-                await MainActor.run { [coordinatorResult] in
+                let cr = coordinatorResult
+                await MainActor.run { () -> Void in
                     self.detectedTypicalPaymentByLabel = [:]
                     self.detectedDueDateByLabel = [:]
                     guard !headers.isEmpty else {
@@ -1065,12 +1093,13 @@ final class ImportViewModel: ObservableObject {
                         }
                     }
 
-                    let matchingParsers = self.parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
+                    let matchingParsers: [String] = self.parsers.compactMap { $0.canParse(headers: headers) ? String(describing: type(of: $0)) : nil }
                     AMLogging.log("Parsers matching headers: \(matchingParsers)", component: "ImportViewModel")
 
                     let sampleForGuess = Array(rows.prefix(50))
                     AMLogging.log("Guessing account type — file: \(url.lastPathComponent), headers: \(headers)", component: "ImportViewModel")
-                    if let parser = self.parsers.first(where: { $0.canParse(headers: headers) }) {
+                    let selectedParser: StatementParser? = self.parsers.first(where: { $0.canParse(headers: headers) })
+                    if let parser = selectedParser {
                         AMLogging.log("Using parser: \(String(describing: type(of: parser)))", component: "ImportViewModel")  // DEBUG LOG
                         do {
                             var stagedImport = try parser.parse(rows: rows, headers: headers)
@@ -1299,7 +1328,7 @@ final class ImportViewModel: ObservableObject {
 
                             // Build info messages
                             var messages: [String] = []
-                            if let res = coordinatorResult {
+                            if let res = cr {
                                 for w in res.warnings { if !messages.contains(w) { messages.append(w) } }
                                 if res.source == .pdf && res.confidence <= .low {
 //                                    let warn = "Low parsing confidence. PDFs are best for monthly snapshots; use CSV for mid-month transaction detail."
@@ -1331,7 +1360,7 @@ final class ImportViewModel: ObservableObject {
                             AMLogging.log("Prefilled institution guess for import screen (mapping): \(guessedInst)", component: "ImportViewModel")
                         }
 
-                        if let res = coordinatorResult, (!res.warnings.isEmpty || res.confidence <= .low) {
+                        if let res = cr, (!res.warnings.isEmpty || res.confidence <= .low) {
                             var msgs: [String] = []
                             for w in res.warnings { if !msgs.contains(w) { msgs.append(w) } }
                             if res.source == .pdf && res.confidence <= .low {
