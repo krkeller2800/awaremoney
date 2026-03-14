@@ -64,6 +64,7 @@ private struct StartingBalanceInlineViewImpl<FocusKey: Hashable>: View {
 
     @State private var amountText: String = ""
     @State private var date: Date
+    @FocusState private var localAmountFocused: Bool
 
     private var focusedField: FocusState<FocusKey?>.Binding?
     private var focusedCase: FocusKey?
@@ -105,6 +106,19 @@ private struct StartingBalanceInlineViewImpl<FocusKey: Hashable>: View {
 #if canImport(UIKit)
                     .onTapGesture { selectAllInFirstResponder(after: 0.05) }
 #endif
+                Button {
+                    focusAmountField()
+#if canImport(UIKit)
+                    selectAllInFirstResponder(after: 0.05)
+#endif
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .opacity(0.6)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit amount")
             }
             if let msg = messageOverride {
                 Text(msg)
@@ -139,8 +153,17 @@ private struct StartingBalanceInlineViewImpl<FocusKey: Hashable>: View {
                 .autocorrectionDisabled()
         } else {
             TextField("0.00", text: $amountText)
+                .focused($localAmountFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+        }
+    }
+
+    private func focusAmountField() {
+        if let binding = focusedField, let fcase = focusedCase {
+            binding.wrappedValue = fcase
+        } else {
+            localAmountFocused = true
         }
     }
 
@@ -172,3 +195,4 @@ private struct StartingBalanceInlineViewImpl<FocusKey: Hashable>: View {
     }
 #endif
 }
+

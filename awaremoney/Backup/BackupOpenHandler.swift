@@ -20,12 +20,12 @@ final class BackupOpenCoordinator: ObservableObject {
             FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
             if isDir.boolValue {
                 let wrapper = try FileWrapper(url: url, options: .immediate)
-                let summary = try await MainActor.run { try BackupImporter.importBackup(wrapper: wrapper, context: context, settings: settings) }
+                let summary = try await BackupImporter.importBackup(wrapper: wrapper, context: context, settings: settings)
                 let text = await Self.makeSummaryText(from: summary)
                 await MainActor.run { self.alertMessage = text }
             } else {
                 let data = try Data(contentsOf: url)
-                let summary = try await MainActor.run { try BackupImporter.importBackup(data: data, context: context, settings: settings) }
+                let summary = try await BackupImporter.importBackup(data: data, context: context, settings: settings)
                 let text = await Self.makeSummaryText(from: summary)
                 await MainActor.run { self.alertMessage = text }
             }

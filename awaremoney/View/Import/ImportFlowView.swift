@@ -90,6 +90,7 @@ struct ImportFlowView: View {
             // Financial interchange formats
             if let ofx = UTType.ofx { types.append(ofx) }
             if let qfx = UTType.qfx { types.append(qfx) }
+            if let qbo = UTType(filenameExtension: "qbo") { types.append(qbo) }
             if let qif = UTType.qif { types.append(qif) }
 
             // Excel workbooks
@@ -120,6 +121,7 @@ struct ImportFlowView: View {
             if let csvByExt = UTType(filenameExtension: "csv") { types.append(csvByExt) }
             if let ofx = UTType.ofx { types.append(ofx) }
             if let qfx = UTType.qfx { types.append(qfx) }
+            if let qbo = UTType(filenameExtension: "qbo") { types.append(qbo) }
             if let qif = UTType.qif { types.append(qif) }
             if let xlsx = UTType.xlsx { types.append(xlsx) }
             if let xls = UTType.xls { types.append(xls) }
@@ -209,7 +211,7 @@ struct ImportFlowView: View {
             Image(systemName: "lightbulb")
                 .imageScale(.medium)
                 .foregroundStyle(.secondary)
-            Text("Tip: For best results, import PDFs of current statements and add CSV activity for mid-month updates.")
+            Text("Tip: For best results, import PDFs of current statements and add CSV/QFX activity for mid-month updates.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
@@ -262,7 +264,7 @@ struct ImportFlowView: View {
                 return Set(values).isSubset(of: headerSet)
             }) {
                 do {
-                    let parser = GenericCSVParser(mapping: mapping)
+                    let parser = GenericCSVParser(mapping: mapping, sourceFileName: vm.lastPickedLocalURL?.lastPathComponent ?? "Mapped CSV")
                     let staged = try parser.parse(rows: rows, headers: headers)
                     vm.staged = staged
                     vm.mappingSession = nil
@@ -750,7 +752,7 @@ struct ImportFlowView: View {
                         }
                         // Immediately parse using the session's rows and headers
                         do {
-                            let parser = GenericCSVParser(mapping: mapping)
+                            let parser = GenericCSVParser(mapping: mapping, sourceFileName: vm.lastPickedLocalURL?.lastPathComponent ?? "Mapped CSV")
                             let staged = try parser.parse(rows: session.sampleRows, headers: session.headers)
                             vm.staged = staged
                             vm.mappingSession = nil
@@ -866,24 +868,35 @@ struct ImportFlowView: View {
                                     pickerKind = .csv
                                     vm.userSelectedDocHint = .creditCard
                                     vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                    vm.newAccountType = .creditCard // ADD THIS
                                     AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                     isImporterPresented = true
                                 }
                                 Button("Loan Transactions") {
                                     pickerKind = .csv
                                     vm.userSelectedDocHint = .loan
+                                    vm.newAccountType = .loan // ADD THIS
                                     AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
                                     isImporterPresented = true
                                 }
-                                Button("Bank Transactions") {
+                                Button("Checking Transactions") {
                                     pickerKind = .csv
                                     vm.userSelectedDocHint = .checking
+                                    vm.newAccountType = .checking // ADD THIS
                                     AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                    isImporterPresented = true
+                                }
+                                Button("Savings Transactions") {
+                                    pickerKind = .csv
+                                    vm.userSelectedDocHint = .checking
+                                    vm.newAccountType = .savings
+                                    AMLogging.log("ImportFlowView: presenting CSV picker (Savings CSV)", component: "Import")
                                     isImporterPresented = true
                                 }
                                 Button("Brokerage Transactions") {
                                     pickerKind = .csv
                                     vm.userSelectedDocHint = .brokerage
+                                    vm.newAccountType = .brokerage // ADD THIS
                                     AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
                                     isImporterPresented = true
                                 }
@@ -1119,24 +1132,35 @@ struct ImportFlowView: View {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .creditCard
                                       vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                                      vm.newAccountType = .creditCard // ADD THIS
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Credit Card CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
                                   Button("Loan Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .loan
+                                      vm.newAccountType = .loan // ADD THIS
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Loan CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
-                                  Button("Bank Transactions") {
+                                  Button("Checking Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .checking
+                                      vm.newAccountType = .checking // ADD THIS
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Bank CSV)", component: "Import")
+                                      isImporterPresented = true
+                                  }
+                                  Button("Savings Transactions") {
+                                      pickerKind = .csv
+                                      vm.userSelectedDocHint = .checking
+                                      vm.newAccountType = .savings
+                                      AMLogging.log("ImportFlowView: presenting CSV picker (Savings CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
                                   Button("Brokerage Transactions") {
                                       pickerKind = .csv
                                       vm.userSelectedDocHint = .brokerage
+                                      vm.newAccountType = .brokerage // ADD THIS
                                       AMLogging.log("ImportFlowView: presenting CSV picker (Brokerage CSV)", component: "Import")
                                       isImporterPresented = true
                                   }
@@ -1372,55 +1396,144 @@ struct ImportFlowView: View {
     }
 
     private func handleImport(_ url: URL) async {
+        await MainActor.run { vm.lastPickedLocalURL = url }
         // Determine if PDF or not; handle accordingly
         if url.pathExtension.lowercased() == "pdf" {
             handlePDFSnapshotImport(url: url)
-        } else if ["qfx", "ofx"].contains(url.pathExtension.lowercased()) {
+        } else if ["qfx", "ofx", "qbo"].contains(url.pathExtension.lowercased()) {
             await MainActor.run { vm.isImporting = true }
+            await MainActor.run { vm.lastPickedLocalURL = url }
             defer { DispatchQueue.main.async { vm.isImporting = false } }
 
-            do {
-                AMLogging.log("ImportFlowView: using OFXStatementExtractor for \(url.lastPathComponent)", component: "Import")
-                let (rows, headers) = try OFXStatementExtractor.parse(url: url)
+            // Local async helper functions inside this branch
+            @MainActor
+            func setNewAccountTypeFromHint() {
+                switch vm.userSelectedDocHint {
+                case .creditCard: vm.newAccountType = .creditCard
+                case .loan:       vm.newAccountType = .loan
+                case .brokerage:  vm.newAccountType = .brokerage
+                case .checking:   vm.newAccountType = .checking
+                default:          break
+                }
+            }
 
+            func handleParsedOFXLike(rows: [[String]], headers: [String], url: URL) async throws {
                 let parsers = ImportViewModel.defaultParsers()
-                // For OFX/QFX content, avoid PDF-only summary parsers
                 let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
                 if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
-                    AMLogging.log("ImportFlowView: selected non-PDF parser for OFX/QFX — \(type(of: parser))", component: "Import")
+                    await setNewAccountTypeFromHint()
                     var staged = try parser.parse(rows: rows, headers: headers)
-                    // Add the file name here for OFX/QFX imports
                     staged.sourceFileName = url.lastPathComponent
+                    staged.suggestedAccountType = vm.newAccountType
                     await MainActor.run {
                         vm.staged = staged
                         vm.mappingSession = nil
                     }
-                    AMLogging.log("ImportFlowView: OFX parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
+                    AMLogging.log("ImportFlowView: OFX-like parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
+                } else {
+                    await MainActor.run {
+                        vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
+                        vm.staged = nil
+                    }
+                    AMLogging.log("ImportFlowView: OFX-like parsed but no parser matched headers; opened mapping editor", component: "Import")
+                }
+            }
+
+            let ext = url.pathExtension.lowercased()
+            if ext == "qbo" {
+                do {
+                    AMLogging.log("ImportFlowView: using QBOStatementExtractor for \(url.lastPathComponent)", component: "Import")
+                    let (rows, headers) = try QBOStatementExtractor.parse(url: url)
+                    try await handleParsedOFXLike(rows: rows, headers: headers, url: url)
+                    return
+                } catch {
+                    await MainActor.run {
+                        vm.errorMessage = "We couldn’t read this QBO file."
+                        showImportError = true
+                    }
+                    AMLogging.error("ImportFlowView: QBOStatementExtractor failed — \(error.localizedDescription)", component: "Import")
+                    return
+                }
+            } else {
+                do {
+                    AMLogging.log("ImportFlowView: using OFXStatementExtractor for \(url.lastPathComponent)", component: "Import")
+                    let (rows, headers) = try OFXStatementExtractor.parse(url: url)
+                    try await handleParsedOFXLike(rows: rows, headers: headers, url: url)
+                    return
+                } catch {
+                    await MainActor.run {
+                        vm.errorMessage = "We couldn’t read this OFX/QFX file."
+                        showImportError = true
+                    }
+                    AMLogging.error("ImportFlowView: OFXStatementExtractor failed — \(error.localizedDescription)", component: "Import")
+                    return
+                }
+            }
+        } else if url.pathExtension.lowercased() == "qif" {
+            await MainActor.run { vm.isImporting = true }
+            await MainActor.run { vm.lastPickedLocalURL = url }
+            defer { DispatchQueue.main.async { vm.isImporting = false } }
+
+            do {
+                AMLogging.log("ImportFlowView: using QIFStatementExtractor for \(url.lastPathComponent)", component: "Import")
+                let (rows, headers) = try QIFStatementExtractor.parse(url: url)
+
+                let parsers = ImportViewModel.defaultParsers()
+                // Avoid PDF-only summary parsers
+                let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
+                if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
+                    AMLogging.log("ImportFlowView: selected non-PDF parser for QIF — \(type(of: parser))", component: "Import")
+                    // Set newAccountType as per current hint
+                    await MainActor.run {
+                        switch vm.userSelectedDocHint {
+                        case .creditCard: vm.newAccountType = .creditCard
+                        case .loan:       vm.newAccountType = .loan
+                        case .brokerage:  vm.newAccountType = .brokerage
+                        case .checking:   vm.newAccountType = .checking
+                        default:          break
+                        }
+                    }
+
+                    var staged = try parser.parse(rows: rows, headers: headers)
+                    staged.sourceFileName = url.lastPathComponent
+                    staged.suggestedAccountType = vm.newAccountType
+
+                    await MainActor.run {
+                        vm.staged = staged
+                        vm.mappingSession = nil
+                    }
+                    AMLogging.log("ImportFlowView: QIF parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
                 } else {
                     await MainActor.run {
                         // Fall back to mapping editor with extracted headers/rows
-                        vm.mappingSession = .init(kind: .bank,headers: headers, sampleRows: Array(rows.prefix(50)))
+                        vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
                         vm.staged = nil
                     }
-                    AMLogging.log("ImportFlowView: OFX parsed but no parser matched headers; opened mapping editor", component: "Import")
+                    AMLogging.log("ImportFlowView: QIF parsed but no parser matched headers; opened mapping editor", component: "Import")
                 }
             } catch {
                 await MainActor.run {
-                    vm.errorMessage = "We couldn’t read this OFX/QFX file."
+                    vm.errorMessage = "We couldn’t read this QIF file."
                     showImportError = true
                 }
-                AMLogging.error("ImportFlowView: OFXStatementExtractor failed — \(error.localizedDescription)", component: "Import")
+                AMLogging.error("ImportFlowView: QIFStatementExtractor failed — \(error.localizedDescription)", component: "Import")
             }
         } else {
             // existing non-PDF path} else {
             await MainActor.run {
+                // Ensure type is set using the user’s hint before parsing
+                switch vm.userSelectedDocHint {
+                case .creditCard: vm.newAccountType = .creditCard
+                case .loan:       vm.newAccountType = .loan
+                case .brokerage:  vm.newAccountType = .brokerage
+                case .checking:   vm.newAccountType = .checking
+                default:          break
+                }
+                vm.lastPickedLocalURL = url
                 vm.isImporting = true
             }
-            defer {
-                DispatchQueue.main.async {
-                    vm.isImporting = false
-                }
-            }
+            defer { DispatchQueue.main.async { vm.isImporting = false } }
+
             await MainActor.run {
                 vm.handlePickedURL(url)
             }

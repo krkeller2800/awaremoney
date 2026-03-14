@@ -200,8 +200,8 @@ struct ReviewImportView: View {
 //                .listRowBackground(Color.red.opacity(0.08))
 //            }
 
-                // Review-required banner / checklist
-                if !vm.computeCompletenessIssues().isEmpty {
+                // Suppress banner when transactions are present
+                if staged.transactions.isEmpty && !vm.computeCompletenessIssues().isEmpty {
                     Section {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
@@ -252,6 +252,26 @@ struct ReviewImportView: View {
 
                 Section() {
                     VStack {
+                        if !staged.transactions.isEmpty {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.footnote).italic()
+                                    .foregroundStyle(.yellow)
+                                Group {
+                                    if selectedAccountId == nil {
+                                        Text("Select an existing account, or keep “Create New…” to create a new account for these transactions.")
+                                    } else {
+                                        let name = accounts.first(where: { $0.id == selectedAccountId })?.name ?? "the selected account"
+                                        Text("These transactions will be saved to \(name).")
+                                    }
+                                }
+                                .font(.footnote).italic()
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .multilineTextAlignment(.center)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
                         HStack {
                             Picker("Account", selection: accountSelectionBinding) {
                                 Text("Create New…").tag(nil as UUID?)
@@ -302,7 +322,7 @@ struct ReviewImportView: View {
                                 } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: "doc.text.magnifyingglass")
-                                        Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Statement")
+                                        Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Transactions")
                                     }
                                 }
                                 .buttonStyle(.bordered)
@@ -609,7 +629,11 @@ struct ReviewImportView: View {
                             }
                             .padding(.vertical, 2)
                         }
-                        if vm.hasBlockingCompletenessIssues || !vm.computeCompletenessIssues().isEmpty { Text("Verify and correct all fields before saving.").font(.footnote).foregroundStyle(.secondary) }
+                        if staged.transactions.isEmpty && (vm.hasBlockingCompletenessIssues || !vm.computeCompletenessIssues().isEmpty) {
+                            Text("Verify and correct all fields before saving.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 //                .foregroundStyle(.primary)
                 }

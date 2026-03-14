@@ -39,12 +39,12 @@ struct StatementPreviewView: View {
     private var transactionsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transactions")
-                .font(.headline)
+//                .font(.headline)
             ForEach(staged.transactions.indices, id: \.self) { idx in
                 let t = staged.transactions[idx]
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(t.payee)
+                        Text(t.payee).font(.caption)
                         HStack(spacing: 6) {
                             if let acct = t.sourceAccountLabel, !acct.isEmpty {
                                 Text(acct.capitalized)
@@ -63,7 +63,7 @@ struct StatementPreviewView: View {
                     Spacer()
                     Text(t.amount as NSNumber, formatter: currencyFormatter)
                         .foregroundStyle(t.amount < 0 ? .red : .primary)
-                        .font(.callout.weight(.semibold))
+                        .font(.caption)
                 }
                 .padding(.vertical, 4)
                 Divider()

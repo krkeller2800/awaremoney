@@ -37,11 +37,20 @@ extension ImportViewModel {
         switch self.newAccountType {
         case .creditCard, .loan:
             if !hasAnyBalance {
-                issues.append(CompletenessIssue(
-                    severity: .required,
-                    title: "Add a statement balance",
-                    detail: "Enter the balance as of the statement date."
-                ))
+                if hasAnyTx {
+                    // When importing transactions (CSV/QFX/OFX/etc.), do not require a balance to proceed.
+                    issues.append(CompletenessIssue(
+                        severity: .recommended,
+                        title: "Add a statement balance",
+                        detail: "Helps reconcile your account."
+                    ))
+                } else {
+                    issues.append(CompletenessIssue(
+                        severity: .required,
+                        title: "Add a statement balance",
+                        detail: "Enter the balance as of the statement date."
+                    ))
+                }
             }
             if !hasAPR {
                 issues.append(CompletenessIssue(
@@ -57,7 +66,7 @@ extension ImportViewModel {
                     detail: "Used for payoff estimates and budgeting."
                 ))
             }
-        case .checking:
+        case .checking, .savings:
             if !hasAnyTx && !hasAnyBalance {
                 issues.append(CompletenessIssue(
                     severity: .required,

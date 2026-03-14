@@ -878,7 +878,7 @@ struct ImportBatchDetailView: View {
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         do {
             // Decide parser pathway by extension; we will reuse ImportViewModel's existing parsers best-effort
-            let rowsAndHeaders: ([[String]], [String])
+//            let rowsAndHeaders: ([[String]], [String])
             if fileExtension == "pdf" {
                 // Perform PDF parsing and text extraction off the main actor to avoid UI stalls
                 let result: ([[String]], [String]) = try await Task.detached(priority: .userInitiated) {
@@ -1394,7 +1394,7 @@ private struct SourceFilePreview: View {
         switch url.pathExtension.lowercased() {
         case "csv", "tsv":
             CSVPreview(url: url)
-        case "qfx", "ofx":
+        case "qfx", "ofx", "qbo":
             TextPreview(url: url) // Show raw text for now
         default:
             TextPreview(url: url)
