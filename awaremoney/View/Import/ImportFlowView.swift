@@ -1513,8 +1513,9 @@ struct ImportFlowView: View {
                 }
             } catch {
                 await MainActor.run {
-                    vm.errorMessage = "We couldn’t read this QIF file."
-                    showImportError = true
+                    let message = error.localizedDescription.isEmpty ? "We couldn’t process this QIF file." : error.localizedDescription
+                        vm.errorMessage = message
+                        showImportError = true
                 }
                 AMLogging.error("ImportFlowView: QIFStatementExtractor failed — \(error.localizedDescription)", component: "Import")
             }
