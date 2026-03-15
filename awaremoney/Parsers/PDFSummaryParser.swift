@@ -1347,7 +1347,7 @@ struct PDFSummaryParser: StatementParser {
 
         func extractCurrencyValues(from line: String) -> [Decimal] {
             // Match currency/decimal tokens like 1,234.56, ($123.45), 25.00, 0.00
-            let pattern = #"\(?\$?\s*[-+]?[0-9]+(?:\.[0-9]{1,4})?\)?|\(?\$?\s*[-+]?[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,4})?"#
+            let pattern = #"\(?\$?\s*[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{1,4})?\)?-?"#
             guard let rx = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
             let ns = line as NSString
             let fullRange = NSRange(location: 0, length: ns.length)
@@ -1550,13 +1550,52 @@ struct PDFSummaryParser: StatementParser {
             var sectionLabel: String? = nil
 
             for raw in ls {
-                // 2) In the inner loop `for raw in ls {`, revert the header/product filtering to skip any line containing "account" regardless of values,
-                // and move `values` extraction back after label detection.
                 let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if s.isEmpty { continue }
                 let lower = s.lowercased()
+
+                // Skip qualification/marketing lines (e.g., "keep an average beginning day balance ... qualifying linked deposits and investments")
+                do {
+                    let isQualificationLine: Bool = {
+                        if lower.contains("keep an average") { return true }
+                        if lower.contains("average beginning day balance") { return true }
+                        if lower.contains("avoid the monthly service fee") || lower.contains("monthly service fee") { return true }
+                        if lower.contains("qualifying") && (lower.contains("linked deposits") || lower.contains("investments")) { return true }
+                        if lower.hasPrefix("or,") && (lower.contains("keep") || lower.contains("balance of")) { return true }
+                        return false
+                    }()
+                    if isQualificationLine {
+                        AMLogging.log("BalanceSummary: skipping qualification/marketing line '" + s + "'", component: LOG_COMPONENT)
+                        continue
+                    }
+                }
+                // INSERTED: guard to skip transaction-like lines
+                do {
+                    let leadingTwoDates = s.range(of: #"^\s*\d{1,2}[/-]\d{1,2}\s+\d{1,2}[/-]\d{1,2}"#, options: .regularExpression) != nil
+                    let leadingDate = s.range(of: #"^\s*\d{1,2}[/-]\d{1,2}"#, options: .regularExpression) != nil
+                    let txnWords = [
+                        "online payment", "bill pay", "ach", "atm", "pos", "purchase",
+                        "deposit", "withdrawal", "transfer", "check", "debit card", "credit card"
+                    ]
+                    let hasTxnWord = txnWords.contains(where: { lower.contains($0) })
+                    if leadingTwoDates || (leadingDate && hasTxnWord) {
+                        AMLogging.log("BalanceSummary: skipping transaction-like line '" + s + "'", component: LOG_COMPONENT)
+                        continue
+                    }
+                }
+
                 // Detect an explicit section header like "Checking Account — 3360" to seed a rolling label
-                let labelProbe = normalizedLabel(s)
+                // REPLACED: direct labelProbe assignment with suppression logic for 'loan'
+                var labelProbe = normalizedLabel(s)
+                // Suppress 'loan' label unless the line also contains clear loan/summary cues
+                if labelProbe == "loan" {
+                    let loanCueTokens = ["balance", "principal", "outstanding", "amount due", "current amount due", "payment due"]
+                    let hasLoanCue = loanCueTokens.contains(where: { lower.contains($0) })
+                    if !hasLoanCue {
+                        AMLogging.log("BalanceSummary: suppressing 'loan' label without loan cues on line '" + s + "'", component: LOG_COMPONENT)
+                        labelProbe = nil
+                    }
+                }
                 // Extract currency values first
                 let headerValues = extractCurrencyValues(from: s)
                 // Treat as header if it contains 'account' and either has no currency values

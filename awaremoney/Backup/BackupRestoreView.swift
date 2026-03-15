@@ -124,11 +124,6 @@ struct BackupRestoreView: View {
                     backupCoordinator.alertMessage = "Import canceled: \(err.localizedDescription)"
                 }
             }
-            .alert("Import Backup", isPresented: Binding(get: { backupCoordinator.alertMessage != nil }, set: { if !$0 { backupCoordinator.alertMessage = nil } })) {
-                Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
-            } message: {
-                Text(backupCoordinator.alertMessage ?? "")
-            }
             .sheet(item: $shareItem, onDismiss: {
                 if let url = shareURL {
                     try? FileManager.default.removeItem(at: url)

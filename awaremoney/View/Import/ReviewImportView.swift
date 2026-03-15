@@ -289,6 +289,7 @@ struct ReviewImportView: View {
                             HStack {
                                 TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
                                     .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled()
                                     .focused($focusedField, equals: .institution)
                                     .submitLabel(.next)
                                     .onSubmit { moveFocus(1) }

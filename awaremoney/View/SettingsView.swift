@@ -82,6 +82,15 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                #if DEBUG
+                Section("Developer") {
+                    Toggle("Show Debug Tools", isOn: $settings.showDebugTools)
+                    Text("Hides the in-app Debug toolbar button and related developer UI.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
             }
             .navigationTitle("Settings")
             .alert(

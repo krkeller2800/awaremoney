@@ -141,7 +141,7 @@ struct ImportFlowView: View {
         ContentUnavailableView(
             "No Imports Yet",
             systemImage: "tray",
-            description: Text("Import CSV account activity or a PDF statement to get started.")
+            description: Text("Import PDF statements or account transactions to get started.")
         )
         .listRowInsets(EdgeInsets())
     }
@@ -528,6 +528,24 @@ struct ImportFlowView: View {
                     }
                 }
 
+                // In a bank/checking context, drop any accidental brokerage labels if there are no holdings
+                if hint == .checking, staged.holdings.isEmpty {
+                    var scrubbed = 0
+                    for i in staged.balances.indices {
+                        let lbl = (staged.balances[i].sourceAccountLabel ?? "")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .lowercased()
+                        if lbl == "brokerage" || lbl == "investment" || lbl == "investments" {
+                            // Prefer relabeling to 'checking'; set to nil if you prefer to drop the label entirely
+                            staged.balances[i].sourceAccountLabel = "checking"
+                            scrubbed += 1
+                        }
+                    }
+                    if scrubbed > 0 {
+                        AMLogging.log("ImportFlowView: scrubbed \(scrubbed) accidental brokerage label(s) in bank context", component: "Import")
+                    }
+                }
+                
                 AMLogging.log("Pre-dedupe balances: " + staged.balances.map { b in
                     let lbl = (b.sourceAccountLabel ?? "nil")
                     return "[date=\(b.asOfDate), amt=\(b.balance), label=\(lbl)]"
@@ -1346,11 +1364,6 @@ struct ImportFlowView: View {
             Button("OK", role: .cancel) { vm.errorMessage = nil }
         } message: {
             Text(vm.errorMessage ?? "Unknown error")
-        }
-        .alert("Import Backup", isPresented: Binding(get: { backupCoordinator.alertMessage != nil }, set: { if !$0 { backupCoordinator.alertMessage = nil } })) {
-            Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
-        } message: {
-            Text(backupCoordinator.alertMessage ?? "")
         }
         .sheet(isPresented: $showBackupSheet) {
             BackupRestoreView()

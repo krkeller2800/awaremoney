@@ -3,6 +3,7 @@ import SwiftData
 
 struct AccountsListView: View {
     @Query(sort: \Account.name) private var accounts: [Account]
+    @EnvironmentObject private var settings: SettingsStore
 #if DEBUG
     @State private var isDebugSettingsPresented: Bool = false
 #endif
@@ -59,11 +60,13 @@ struct AccountsListView: View {
                             }
                         }
 #if DEBUG
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                isDebugSettingsPresented = true
-                            } label: {
-                                Label("Debug", systemImage: "ladybug")
+                        if settings.showDebugTools {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button {
+                                    isDebugSettingsPresented = true
+                                } label: {
+                                    Label("Debug", systemImage: "ladybug")
+                                }
                             }
                         }
 #endif
@@ -144,11 +147,13 @@ struct AccountsListView: View {
                             }
                         }
 #if DEBUG
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                isDebugSettingsPresented = true
-                            } label: {
-                                Label("Debug", systemImage: "ladybug")
+                        if settings.showDebugTools {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button {
+                                    isDebugSettingsPresented = true
+                                } label: {
+                                    Label("Debug", systemImage: "ladybug")
+                                }
                             }
                         }
 #endif
@@ -169,4 +174,5 @@ struct AccountsListView: View {
 
 #Preview {
     AccountsListView()
+        .environmentObject(SettingsStore())
 }

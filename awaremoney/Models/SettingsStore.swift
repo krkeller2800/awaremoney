@@ -36,6 +36,11 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(hapticsEnabled, forKey: "haptics_enabled") }
     }
 
+    // Developer
+    @Published var showDebugTools: Bool {
+        didSet { UserDefaults.standard.set(showDebugTools, forKey: "show_debug_tools") }
+    }
+
     init() {
         if let stored = UserDefaults.standard.string(forKey: "currency_code"), !stored.isEmpty {
             self.currencyCode = stored
@@ -53,5 +58,11 @@ final class SettingsStore: ObservableObject {
         // Appearance & UX
         self.showHintBars = UserDefaults.standard.object(forKey: "show_hint_bars") as? Bool ?? true
         self.hapticsEnabled = UserDefaults.standard.object(forKey: "haptics_enabled") as? Bool ?? true
+        
+        #if DEBUG
+        self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true
+        #else
+        self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? false
+        #endif
     }
 }

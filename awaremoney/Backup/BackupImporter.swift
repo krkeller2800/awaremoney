@@ -87,6 +87,11 @@ enum BackupImporter {
                 }
             }
         }
+
+        // Notify UI to refresh after restoring data and caching PDFs
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+
         return summary
     }
 
@@ -316,6 +321,11 @@ enum BackupImporter {
             "BackupImporter: data import complete — settingsUpdated=\(summary.settingsUpdated) accounts(i=\(summary.accountsInserted), u=\(summary.accountsUpdated)) batches(i=\(summary.batchesInserted), u=\(summary.batchesUpdated)) balances(i=\(summary.balanceSnapsInserted), u=\(summary.balanceSnapsUpdated)) mappings(i=\(summary.csvMappingsInserted), u=\(summary.csvMappingsUpdated)) cashFlows(i=\(summary.cashFlowsInserted), u=\(summary.cashFlowsUpdated)) links(i=\(summary.linksInserted), u=\(summary.linksUpdated)) skipped(tx=\(summary.transactionsSkipped), holdings=\(summary.holdingsSkipped))",
             component: "BackupImporter"
         )
+
+        // Notify UI to refresh after core data import completes
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
+
         return summary
     }
 }

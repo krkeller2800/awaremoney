@@ -350,16 +350,18 @@ private struct NetWorthKPIsGrid: View {
     let netWorth: Decimal
     let assets: Decimal
     let liabilities: Decimal
-    let mtdChange: Decimal
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12), count: 4), alignment: .center, spacing: 12) {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 3),
+            alignment: .center,
+            spacing: 10
+        ) {
             NetWorthKPICard(title: "Net Worth", amount: netWorth)
             NetWorthKPICard(title: "Assets", amount: assets)
             NetWorthKPICard(title: "Liabilities", amount: liabilities)
-            NetWorthKPICard(title: "MTD Change", amount: mtdChange, emphasizePositive: true)
         }
-        .padding(.horizontal)
+        .padding(.trailing, 16)
     }
 }
 
@@ -369,12 +371,11 @@ private struct NetWorthKPIsView: View {
     @State private var netWorth: Decimal = .zero
     @State private var assets: Decimal = .zero
     @State private var liabilities: Decimal = .zero
-    @State private var mtdChange: Decimal = .zero
 
     var body: some View {
-        VStack(alignment: .center, spacing: 12) {
-            NetWorthKPIsGrid(netWorth: netWorth, assets: assets, liabilities: liabilities, mtdChange: mtdChange)
-                .frame(maxWidth: 720)
+        VStack(alignment: .center, spacing: 5) {
+            NetWorthKPIsGrid(netWorth: netWorth, assets: assets, liabilities: liabilities)
+                .frame(maxWidth: UIDevice.type == "iPhone" ? 360 : 720)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
         .task { await load() }
@@ -408,37 +409,37 @@ private struct NetWorthKPIsView: View {
                 if value < 0 { totalLiabilities += (-value) }
             }
 
-            let mtd = computeMonthToDateDelta(accounts: accounts)
+//            let mtd = computeMonthToDateDelta(accounts: accounts)
             let nw = totalAssets - totalLiabilities
 
             await MainActor.run {
                 self.assets = totalAssets
                 self.liabilities = totalLiabilities
                 self.netWorth = nw
-                self.mtdChange = mtd
+//                self.mtdChange = mtd
             }
         } catch {
             await MainActor.run {
                 self.assets = .zero
                 self.liabilities = .zero
                 self.netWorth = .zero
-                self.mtdChange = .zero
+//                self.mtdChange = .zero
             }
         }
     }
 
-    private func computeMonthToDateDelta(accounts: [Account]) -> Decimal {
-        let cal = Calendar.current
-        guard let startOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: Date())) else {
-            return .zero
-        }
-        var delta: Decimal = .zero
-        for account in accounts {
-            let tx = account.transactions.filter { $0.datePosted >= startOfMonth && $0.isExcluded == false }
-            delta += tx.reduce(.zero) { $0 + $1.amount }
-        }
-        return delta
-    }
+//    private func computeMonthToDateDelta(accounts: [Account]) -> Decimal {
+//        let cal = Calendar.current
+//        guard let startOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: Date())) else {
+//            return .zero
+//        }
+//        var delta: Decimal = .zero
+//        for account in accounts {
+//            let tx = account.transactions.filter { $0.datePosted >= startOfMonth && $0.isExcluded == false }
+//            delta += tx.reduce(.zero) { $0 + $1.amount }
+//        }
+//        return delta
+//    }
 }
 
 private struct NetWorthDashboardSheet: View {
@@ -460,7 +461,7 @@ private struct NetWorthDashboardSheet: View {
                                 .frame(width: chartSize, height: chartSize)
                             Spacer()
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.trailing, 16)
                     }
                     .padding(.top, 8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

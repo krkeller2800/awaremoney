@@ -4,6 +4,9 @@ struct QBOStatementExtractor {
     /// Parse a QBO (OFX) file into simple rows and headers that downstream parsers can consume.
     /// Produced headers are ["Date", "Description", "Amount", "Account"].
     static func parse(url: URL) throws -> ([[String]], [String]) {
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+
         let data = try Data(contentsOf: url)
         guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else {
             throw NSError(domain: "QBOStatementExtractor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown text encoding"])
@@ -32,7 +35,7 @@ struct QBOStatementExtractor {
             rows.append([date, desc, amount, acct])
         }
 
-        let headers = ["Date", "Description", "Amount", "Account"]
+        let headers = ["date", "description", "amount", "account"]
         return (rows, headers)
     }
 

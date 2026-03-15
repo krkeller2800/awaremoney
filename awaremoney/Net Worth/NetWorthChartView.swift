@@ -101,7 +101,14 @@ struct NetWorthChartView: View {
                     }
                 }
             }
-            .chartLegend(.visible)
+            .chartLegend(position: .bottom)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartPlotStyle { plot in
+                plot
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding()
     }

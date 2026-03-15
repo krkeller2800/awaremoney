@@ -66,11 +66,6 @@ struct awaremoneyApp: App {
                         AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
                     }
                 }
-                .alert("Import Backup", isPresented: Binding(get: { backupCoordinator.alertMessage != nil }, set: { if !$0 { backupCoordinator.alertMessage = nil } })) {
-                    Button("OK", role: .cancel) { backupCoordinator.alertMessage = nil }
-                } message: {
-                    Text(backupCoordinator.alertMessage ?? "")
-                }
                 .onChange(of: scenePhase) { _, newPhase in
                     AMLogging.log("Scene phase changed to: \(newPhase)", component: "App")
                 }
