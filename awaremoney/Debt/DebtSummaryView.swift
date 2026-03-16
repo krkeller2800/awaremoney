@@ -35,8 +35,8 @@ struct DebtSummaryView: View {
     }()
     @State private var appliedPlanDate: Date? = nil
     private enum PlanMode: String, CaseIterable {
-        case currentInputs = "Current inputs"
-        case projectedAtDate = "Projected at date"
+        case currentInputs = "Start now"
+        case projectedAtDate = "Start on date"
     }
     @State private var tempPlanMode: PlanMode = .currentInputs
     @State private var appliedPlanMode: PlanMode = .currentInputs
@@ -73,14 +73,18 @@ struct DebtSummaryView: View {
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
                         if isPortrait && proxy.size.width < 844 {
+                            let paddingH: CGFloat = compact ? 6 : 12
+                            let contentWidth: CGFloat = 844 - 2 * paddingH
                             ScrollView(.horizontal, showsIndicators: false) {
-                                summaryStack(compact: compact)
-                                    .padding(.horizontal, compact ? 6 : 12)
+                                summaryStack(compact: compact, availableWidth: contentWidth)
+                                    .padding(.horizontal, paddingH)
                                     .frame(width: 844, alignment: .topLeading)
                             }
                         } else {
-                            summaryStack(compact: compact)
-                                .padding(.horizontal, compact ? 6 : 12)
+                            let paddingH: CGFloat = compact ? 6 : 12
+                            let contentWidth: CGFloat = proxy.size.width - 2 * paddingH
+                            summaryStack(compact: compact, availableWidth: contentWidth)
+                                .padding(.horizontal, paddingH)
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     }
@@ -104,7 +108,7 @@ struct DebtSummaryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        PlanToolbarButton("Project",fixedWidth: 70) {
+                        PlanToolbarButton("Start Date",fixedWidth: 100) {
                             showPlanSheet = true
                         }
 
@@ -131,6 +135,39 @@ struct DebtSummaryView: View {
         #endif
     }
 
+    // Dynamic column widths that scale to fill available width
+    private struct ColumnWidths {
+        let account: CGFloat
+        let apr: CGFloat
+        let balance: CGFloat
+        let payment: CGFloat
+        let interest: CGFloat
+        let afterPayment: CGFloat
+        let payoff: CGFloat
+    }
+
+    private func columnWidths(for totalWidth: CGFloat, compact: Bool) -> ColumnWidths {
+        let gap: CGFloat = compact ? 2 : 12
+        let gaps = 6 // number of gaps between 7 columns
+        let totalSpacing = gap * CGFloat(gaps)
+        let usable = max(0, totalWidth - totalSpacing)
+        // Baseline widths taken from existing fixed widths to preserve proportions
+        let base: [CGFloat] = compact
+            ? [100, 60, 100, 100, 100, 110, 110]
+            : [160, 90, 120, 120, 120, 140, 130]
+        let sum = base.reduce(0, +)
+        let factor: CGFloat = sum > 0 ? (usable / sum) : 1
+        func w(_ i: Int) -> CGFloat { max(0, base[i] * factor) }
+        return ColumnWidths(
+            account: w(0),
+            apr: w(1),
+            balance: w(2),
+            payment: w(3),
+            interest: w(4),
+            afterPayment: w(5),
+            payoff: w(6)
+        )
+    }
 
     // MARK: - View Builders
 
@@ -141,21 +178,21 @@ struct DebtSummaryView: View {
         return "Payoff order: " + order
     }
 
-    private func summaryStack(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-            // Removed planHeader(compact: compact) as per instructions
+    private func summaryStack(compact: Bool, availableWidth: CGFloat) -> some View {
+        let widths = columnWidths(for: availableWidth, compact: compact)
+        return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
             if let s = payoffOrderString() {
                 Text(s)
                     .font(compact ? .caption2 : .caption)
                     .foregroundStyle(.secondary)
             }
-            headerRow(compact: compact)
+            headerRow(compact: compact, widths: widths)
             Divider()
             ForEach(accounts, id: \.id) { acct in
-                row(for: acct, compact: compact)
+                row(for: acct, compact: compact, widths: widths)
                 Divider()
             }
-            totalRow(compact: compact)
+            totalRow(compact: compact, widths: widths)
         }
     }
 
@@ -163,21 +200,21 @@ struct DebtSummaryView: View {
         NavigationStack {
             List {
                 Section {
-                    DatePicker("Target date", selection: $tempPlanDate, displayedComponents: .date)
+                    DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .onChange(of: tempPlanDate) { _, newValue in
                             let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
                             tempPlanMode = isToday ? .currentInputs : .projectedAtDate
                         }
                 } footer: {
-                    Text("Choose a target date to plan against. The selected date will appear above the summary headers.")
+                    Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 Section("Mode") {
-                    Picker("Summary mode", selection: $tempPlanMode) {
-                        Text("Current inputs").tag(PlanMode.currentInputs)
-                        Text("Projected at date").tag(PlanMode.projectedAtDate)
+                    Picker("Start mode", selection: $tempPlanMode) {
+                        Text("Start now").tag(PlanMode.currentInputs)
+                        Text("Start on date").tag(PlanMode.projectedAtDate)
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: tempPlanMode) { _, newValue in
@@ -185,6 +222,14 @@ struct DebtSummaryView: View {
                             tempPlanDate = Date()
                         }
                     }
+                }
+                Section("Strategy") {
+                    Picker("Strategy", selection: $tempStrategy) {
+                        Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
+                        Text("Snowball").tag(PayoffStrategy.snowball)
+                        Text("Avalanche").tag(PayoffStrategy.avalanche)
+                    }
+                    .pickerStyle(.segmented)
                 }
                 Section {
                     LabeledContent("Monthly budget") {
@@ -268,25 +313,17 @@ struct DebtSummaryView: View {
                     .disabled(computedMonthlyNet <= 0)
                 }
                 
-                Section("Strategy") {
-                    Picker("Strategy", selection: $tempStrategy) {
-                        Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
-                        Text("Snowball").tag(PayoffStrategy.snowball)
-                        Text("Avalanche").tag(PayoffStrategy.avalanche)
-                    }
-                    .pickerStyle(.segmented)
-                }
                 Section("Current Plan") {
                     if tempPlanMode == .projectedAtDate {
                         HStack(spacing: 4) {
-                            Text("Plan as of \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
+                            Text("Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
                             Text("• \(tempStrategyDisplay)\(tempBudgetText)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         HStack(spacing: 4) {
-                            Text("Current inputs")
+                            Text("Start now")
                             Text("• \(tempStrategyDisplay)\(tempBudgetText)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -295,7 +332,7 @@ struct DebtSummaryView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Projection plan")
+            .navigationTitle("Strategy start")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 // Prefill strategy
@@ -528,7 +565,7 @@ struct DebtSummaryView: View {
             Spacer()
             if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
                 HStack(spacing: 4) {
-                    Text("Plan as of \(date.formatted(date: .abbreviated, time: .omitted))")
+                    Text("Start on \(date.formatted(date: .abbreviated, time: .omitted))")
                         .font(compact ? .caption2 : .caption)
                         .foregroundStyle(.secondary)
                     Text("• \(appliedStrategyDisplay)\(appliedBudgetText)")
@@ -537,7 +574,7 @@ struct DebtSummaryView: View {
                 }
             } else {
                 HStack(spacing: 4) {
-                    Text("Current inputs")
+                    Text("Start now")
                         .font(compact ? .caption2 : .caption)
                         .foregroundStyle(.secondary)
                     Text("• \(appliedStrategyDisplay)\(appliedBudgetText)")
@@ -562,9 +599,9 @@ struct DebtSummaryView: View {
     
     private var planSubtitleText: String {
         if appliedPlanMode == .projectedAtDate, let date = appliedPlanDate {
-            return "Plan as of \(date.formatted(date: .abbreviated, time: .omitted)) • \(appliedStrategyDisplay)\(appliedBudgetText)"
+            return "Start on \(date.formatted(date: .abbreviated, time: .omitted)) • \(appliedStrategyDisplay)\(appliedBudgetText)"
         } else {
-            return "Current inputs • \(appliedStrategyDisplay)\(appliedBudgetText)"
+            return "Start now • \(appliedStrategyDisplay)\(appliedBudgetText)"
         }
     }
 
@@ -587,52 +624,52 @@ struct DebtSummaryView: View {
         }
     }
 
-    private func headerRow(compact: Bool) -> some View {
+    private func headerRow(compact: Bool, widths: ColumnWidths) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
             Text("Account")
-                .frame(width: compact ? 100 : 150, alignment: .leading)
+                .frame(width: widths.account, alignment: .leading)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("APR")
-                .frame(width: compact ? 60 : 80, alignment: .trailing)
+                .frame(width: widths.apr, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("Balance")
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.balance, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("Payment/mo")
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.payment, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("Interest/mo")
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.interest, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("After Payment")
-                .frame(width: compact ? 110 : 130, alignment: .trailing)
+                .frame(width: widths.afterPayment, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text("Payoff")
-                .frame(width: compact ? 110 : 120, alignment: .trailing)
+                .frame(width: widths.payoff, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -640,7 +677,7 @@ struct DebtSummaryView: View {
         }
     }
 
-    private func row(for account: Account, compact: Bool) -> some View {
+    private func row(for account: Account, compact: Bool, widths: ColumnWidths) -> some View {
         let baseBal = absDecimal(latestBalance(account))
         let usedBal: Decimal = {
             if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
@@ -661,11 +698,9 @@ struct DebtSummaryView: View {
         }()
 
         let payoff: Date? = {
-            // If a plan is applied, prefer its payoff date for this account
             if let planDate = currentPlan?.payoffDates[account.id] {
                 return planDate
             }
-            // Fallback: compute per-account payoff using current inputs as of the selected date
             let asOfDate = (appliedPlanMode == .projectedAtDate) ? (appliedPlanDate ?? Date()) : Date()
             return PayoffCalculator.payoffDate(for: account, asOf: asOfDate)
         }()
@@ -681,36 +716,36 @@ struct DebtSummaryView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            .frame(width: compact ? 100 : 150, alignment: .leading)
+            .frame(width: widths.account, alignment: .leading)
 
             Text(formatAPR(apr, scale: account.loanTerms?.aprScale, compact: compact))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 60 : 80, alignment: .trailing)
+                .frame(width: widths.apr, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text(formatAmount(usedBal))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.balance, alignment: .trailing)
                 .foregroundStyle(.red)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text(formatAmount(payment))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.payment, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text(formatAmount(step.interest))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.interest, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
             Text(formatAmount(step.afterPaymentBalance))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 110 : 130, alignment: .trailing)
+                .frame(width: widths.afterPayment, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
@@ -722,45 +757,45 @@ struct DebtSummaryView: View {
                 }
             }
             .font(compact ? .footnote : .body)
-            .frame(width: compact ? 110 : 120, alignment: .trailing)
+            .frame(width: widths.payoff, alignment: .trailing)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
         }
     }
 
-    private func totalRow(compact: Bool) -> some View {
+    private func totalRow(compact: Bool, widths: ColumnWidths) -> some View {
         let totals = totalsForAccounts(accounts)
         return HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
             Text("Total")
                 .font(compact ? .subheadline : .headline)
-                .frame(width: compact ? 100 : 150, alignment: .leading)
+                .frame(width: widths.account, alignment: .leading)
             Text("")
-                .frame(width: compact ? 60 : 80)
+                .frame(width: widths.apr)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(formatAmount(totals.balance))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.balance, alignment: .trailing)
                 .foregroundStyle(.red)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(formatAmount(totals.payment))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.payment, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(formatAmount(totals.interest))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 100 : 110, alignment: .trailing)
+                .frame(width: widths.interest, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(formatAmount(totals.afterPayment))
                 .font(compact ? .footnote : .body)
-                .frame(width: compact ? 110 : 130, alignment: .trailing)
+                .frame(width: widths.afterPayment, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text("")
-                .frame(width: compact ? 110 : 120)
+                .frame(width: widths.payoff)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
@@ -1101,6 +1136,8 @@ extension UIView {
     }
 }
 #endif
+
+
 
 
 
