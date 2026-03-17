@@ -261,10 +261,9 @@ struct IncomeAndBillsView: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .add(let kind):
-                AddCashFlowItemView(initialKind: kind) { newItem in
+                AddCashFlowItemView(initialKind: kind, dismissAfterAdd: true) { newItem in
                     modelContext.insert(newItem)
                     try? modelContext.save()
-                    activeSheet = .edit(item: newItem)
                 }
                 .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
                 .environmentObject(settings)
@@ -550,6 +549,13 @@ private extension EnvironmentValues {
 
 private struct AddCashFlowItemView: View {
     let initialKind: CashFlowItem.Kind
+    var dismissAfterAdd: Bool = true
+
+    init(initialKind: CashFlowItem.Kind, dismissAfterAdd: Bool = true, onAdd: @escaping (CashFlowItem) -> Void) {
+        self.initialKind = initialKind
+        self.dismissAfterAdd = dismissAfterAdd
+        self.onAdd = onAdd
+    }
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: SettingsStore
@@ -561,6 +567,11 @@ private struct AddCashFlowItemView: View {
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
 
+    @State private var showFrequencyPicker = false
+    @State private var showSSAWednesdayPicker = false
+    @State private var showDayOfMonthPicker = false
+    @State private var showFirstPaymentDatePicker = false
+    
     enum Field: Hashable { case name, amount, notes }
     @State private var amountIsFirstResponder: Bool = false
     @State private var nameIsFirstResponder: Bool = false
@@ -611,6 +622,21 @@ private struct AddCashFlowItemView: View {
 
     let onAdd: (CashFlowItem) -> Void
 
+    // New private helper to dismiss keyboard only without saving or dismissing the sheet
+    private func dismissKeyboardOnly() {
+        nameIsFirstResponder = false
+        amountIsFirstResponder = false
+        notesIsFirstResponder = false
+        focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -622,47 +648,77 @@ private struct AddCashFlowItemView: View {
                             .opacity(isValid ? 0 : 1)
                             .accessibilityHidden(isValid)
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            SelectAllTextField(
-                                text: $name,
-                                placeholder: "Name",
-                                isFirstResponder: $nameIsFirstResponder,
-                                returnKeyType: .next,
-                                onPrev: { moveFocus(-1) },
-                                onNext: { moveFocus(1) },
-                                onDone: { commitAndDismissKeyboard() }
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Name")
+                            HStack(spacing: 6) {
+                                SelectAllTextField(
+                                    text: $name,
+                                    placeholder: "Name",
+                                    isFirstResponder: $nameIsFirstResponder,
+                                    returnKeyType: .next,
+                                    onPrev: { moveFocus(-1) },
+                                    onNext: { moveFocus(1) },
+                                    onDone: { dismissKeyboardOnly() }
+                                )
+                                .accessibilityLabel("Name")
 
-                            CurrencyAmountField(
-                                value: $amountValue,
-                                placeholder: "Amount",
-                                currencyCode: settings.currencyCode,
-                                isFirstResponder: $amountIsFirstResponder,
-                                onPrev: { moveFocus(-1) },
-                                onNext: { moveFocus(1) },
-                                onDone: { commitAndDismissKeyboard() }
-                            )
+                                Button(action: { focus(.name) }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            HStack(spacing: 6) {
+                                CurrencyAmountField(
+                                    value: $amountValue,
+                                    placeholder: "Amount",
+                                    currencyCode: settings.currencyCode,
+                                    isFirstResponder: $amountIsFirstResponder,
+                                    onPrev: { moveFocus(-1) },
+                                    onNext: { moveFocus(1) },
+                                    onDone: { dismissKeyboardOnly() }
+                                )
+                                .accessibilityLabel("Amount")
+
+                                Button(action: { focus(.amount) }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                            }
                             .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
                             .accessibilityLabel("Amount")
                         }
-                        Picker("Frequency", selection: $frequency) {
-                            Text("Monthly").tag(PaymentFrequency.monthly)
-                            Text("Twice per month").tag(PaymentFrequency.semimonthly)
-                            Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
-                            Text("Weekly").tag(PaymentFrequency.weekly)
-                            Text("Yearly").tag(PaymentFrequency.yearly)
-                        }
-                        .onChange(of: frequency) { _, newValue in
-                            if initialKind == .income {
-                                switch newValue.normalized {
-                                case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                    if dayOfMonth == nil { dayOfMonth = 1 }
-                                    firstPaymentDate = nil
-                                default:
-                                    break
+                        HStack {
+                            Picker("Frequency", selection: $frequency) {
+                                Text("Monthly").tag(PaymentFrequency.monthly)
+                                Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                                Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                                Text("Weekly").tag(PaymentFrequency.weekly)
+                                Text("Yearly").tag(PaymentFrequency.yearly)
+                            }
+                            .onChange(of: frequency) { _, newValue in
+                                if initialKind == .income {
+                                    switch newValue.normalized {
+                                    case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                        if dayOfMonth == nil { dayOfMonth = 1 }
+                                        firstPaymentDate = nil
+                                    default:
+                                        break
+                                    }
                                 }
                             }
+
+                            Spacer(minLength: 8)
+
+                            Button(action: {
+                                dismissKeyboardOnly()
+                                showFrequencyPicker = true
+                            }) {
+                                Image(systemName: "pencil").imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
                         }
                         if initialKind == .income && frequency == .monthly {
                             Picker("SSA Wednesday", selection: Binding<Int?>(
@@ -681,29 +737,63 @@ private struct AddCashFlowItemView: View {
                         if ssaWednesday == nil {
                             switch frequency.normalized {
                             case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                Picker("Day of Month", selection: Binding<Int?>(
-                                    get: { dayOfMonth },
-                                    set: { dayOfMonth = $0 }
-                                )) {
-                                    Text("None").tag(nil as Int?)
-                                    ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                HStack {
+                                    Picker("Day of Month", selection: Binding<Int?>(
+                                        get: { dayOfMonth },
+                                        set: { dayOfMonth = $0 }
+                                    )) {
+                                        Text("None").tag(nil as Int?)
+                                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                    }
+
+                                    Spacer(minLength: 8)
+
+                                    Button(action: {
+                                        dismissKeyboardOnly()
+                                        showDayOfMonthPicker = true
+                                    }) {
+                                        Image(systemName: "pencil").imageScale(.small)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
                                 }
                             default:
-                                DatePicker("First Payment Date", selection: Binding<Date>(
-                                    get: { firstPaymentDate ?? Date() },
-                                    set: { firstPaymentDate = $0 }
-                                ), displayedComponents: .date)
+                                HStack {
+                                    DatePicker("First Payment Date", selection: Binding<Date>(
+                                        get: { firstPaymentDate ?? Date() },
+                                        set: { firstPaymentDate = $0 }
+                                    ), displayedComponents: .date)
+
+                                    Spacer(minLength: 8)
+
+                                    Button(action: {
+                                        dismissKeyboardOnly()
+                                        showFirstPaymentDatePicker = true
+                                    }) {
+                                        Image(systemName: "pencil").imageScale(.small)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                        SelectAllTextField(
-                            text: $notes,
-                            placeholder: "Notes",
-                            isFirstResponder: $notesIsFirstResponder,
-                            returnKeyType: .done,
-                            onPrev: { moveFocus(-1) },
-                            onNext: { moveFocus(1) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
+                        HStack(spacing: 6) {
+                            SelectAllTextField(
+                                text: $notes,
+                                placeholder: "Notes",
+                                isFirstResponder: $notesIsFirstResponder,
+                                returnKeyType: .done,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { dismissKeyboardOnly() }
+                            )
+
+                            Button(action: { focus(.notes) }) {
+                                Image(systemName: "pencil").imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -742,7 +832,7 @@ private struct AddCashFlowItemView: View {
                                 .first { $0.isKeyWindow }
                             keyWindow?.endEditing(true)
                             #endif
-                            dismiss()
+                            if dismissAfterAdd { dismiss() }
                         }
                     } label: {
                         PlanMenuLabel(title: "Add", titleFont: .callout)
@@ -759,7 +849,7 @@ private struct AddCashFlowItemView: View {
                             canGoNext: canGoNext,
                             onPrevious: { moveFocus(-1) },
                             onNext: { moveFocus(1) },
-                            onDone: { commitAndDismissKeyboard() }
+                            onDone: { dismissKeyboardOnly() }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     } else {
@@ -767,6 +857,65 @@ private struct AddCashFlowItemView: View {
                     }
                 }
                 .animation(.snappy, value: isEditing)
+            }
+        }
+        .sheet(isPresented: $showFrequencyPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Frequency", selection: $frequency) {
+                        Text("Monthly").tag(PaymentFrequency.monthly)
+                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                        Text("Weekly").tag(PaymentFrequency.weekly)
+                        Text("Yearly").tag(PaymentFrequency.yearly)
+                    }
+                }
+                .navigationTitle("Frequency")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFrequencyPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showSSAWednesdayPicker) {
+            NavigationStack {
+                Form {
+                    Picker("SSA Wednesday", selection: Binding<Int?>(
+                        get: { ssaWednesday },
+                        set: { ssaWednesday = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        Text("2nd Wednesday").tag(Optional(2))
+                        Text("3rd Wednesday").tag(Optional(3))
+                        Text("4th Wednesday").tag(Optional(4))
+                    }
+                }
+                .navigationTitle("SSA Wednesday")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSSAWednesdayPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showDayOfMonthPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Day of Month", selection: Binding<Int?>(
+                        get: { dayOfMonth },
+                        set: { dayOfMonth = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                    }
+                }
+                .navigationTitle("Day of Month")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDayOfMonthPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showFirstPaymentDatePicker) {
+            NavigationStack {
+                Form {
+                    DatePicker("First Payment Date", selection: Binding<Date>(
+                        get: { firstPaymentDate ?? Date() },
+                        set: { firstPaymentDate = $0 }
+                    ), displayedComponents: .date)
+                }
+                .navigationTitle("First Payment Date")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFirstPaymentDatePicker = false } } }
             }
         }
         .onAppear {
@@ -835,7 +984,7 @@ private struct AddCashFlowItemView: View {
                 .first { $0.isKeyWindow }
             keyWindow?.endEditing(true)
             #endif
-            dismiss()
+            if dismissAfterAdd { dismiss() }
         } else {
             // If invalid, just dismiss the keyboard
             nameIsFirstResponder = false
@@ -887,6 +1036,12 @@ private struct EditCashFlowItemView: View {
     @State private var amountIsFirstResponder: Bool = false
     @State private var nameIsFirstResponder: Bool = false
     @State private var notesIsFirstResponder: Bool = false
+    
+    @State private var showFrequencyPicker = false
+    @State private var showSSAWednesdayPicker = false
+    @State private var showDayOfMonthPicker = false
+    @State private var showFirstPaymentDatePicker = false
+    
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
     @FocusState private var focusedField: Field?
@@ -939,88 +1094,162 @@ private struct EditCashFlowItemView: View {
                 Form {
                     Section("Details") {
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            SelectAllTextField(
-                                text: $name,
-                                placeholder: "Name",
-                                isFirstResponder: $nameIsFirstResponder,
-                                returnKeyType: .next,
-                                onPrev: { moveFocus(-1) },
-                                onNext: { moveFocus(1) },
-                                onDone: { commitAndDismissKeyboard() }
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel("Name")
+                            HStack(spacing: 6) {
+                                SelectAllTextField(
+                                    text: $name,
+                                    placeholder: "Name",
+                                    isFirstResponder: $nameIsFirstResponder,
+                                    returnKeyType: .next,
+                                    onPrev: { moveFocus(-1) },
+                                    onNext: { moveFocus(1) },
+                                    onDone: { commitAndDismissKeyboard() }
+                                )
+                                .accessibilityLabel("Name")
 
-                            CurrencyAmountField(
-                                value: $amountValue,
-                                placeholder: "Amount",
-                                currencyCode: settings.currencyCode,
-                                isFirstResponder: $amountIsFirstResponder,
-                                onPrev: { moveFocus(-1) },
-                                onNext: { moveFocus(1) },
-                                onDone: { commitAndDismissKeyboard() }
-                            )
+                                Button(action: { focus(.name) }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            HStack(spacing: 6) {
+                                CurrencyAmountField(
+                                    value: $amountValue,
+                                    placeholder: "Amount",
+                                    currencyCode: settings.currencyCode,
+                                    isFirstResponder: $amountIsFirstResponder,
+                                    onPrev: { moveFocus(-1) },
+                                    onNext: { moveFocus(1) },
+                                    onDone: { commitAndDismissKeyboard() }
+                                )
+                                .accessibilityLabel("Amount")
+
+                                Button(action: { focus(.amount) }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                            }
                             .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
                             .accessibilityLabel("Amount")
                         }
-                        Picker("Frequency", selection: $frequency) {
-                            Text("Monthly").tag(PaymentFrequency.monthly)
-                            Text("Twice per month").tag(PaymentFrequency.semimonthly)
-                            Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
-                            Text("Weekly").tag(PaymentFrequency.weekly)
-                            Text("Yearly").tag(PaymentFrequency.yearly)
-                        }
-                        .onChange(of: frequency) { _, newValue in
-                            if isIncome {
-                                switch newValue.normalized {
-                                case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                    if dayOfMonth == nil { dayOfMonth = 1 }
-                                    firstPaymentDate = nil
-                                default:
-                                    break
+                        HStack {
+                            Picker("Frequency", selection: $frequency) {
+                                Text("Monthly").tag(PaymentFrequency.monthly)
+                                Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                                Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                                Text("Weekly").tag(PaymentFrequency.weekly)
+                                Text("Yearly").tag(PaymentFrequency.yearly)
+                            }
+                            .onChange(of: frequency) { _, newValue in
+                                if isIncome {
+                                    switch newValue.normalized {
+                                    case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+                                        if dayOfMonth == nil { dayOfMonth = 1 }
+                                        firstPaymentDate = nil
+                                    default:
+                                        break
+                                    }
                                 }
                             }
+
+                            Spacer(minLength: 8)
+
+                            Button(action: {
+                                dismissKeyboardOnly()
+                                showFrequencyPicker = true
+                            }) {
+                                Image(systemName: "pencil").imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
                         }
                         if isIncome && frequency == .monthly {
-                            Picker("SSA Wednesday", selection: Binding<Int?>(
-                                get: { ssaWednesday },
-                                set: { ssaWednesday = $0 }
-                            )) {
-                                Text("None").tag(nil as Int?)
-                                Text("2nd Wednesday").tag(Optional(2))
-                                Text("3rd Wednesday").tag(Optional(3))
-                                Text("4th Wednesday").tag(Optional(4))
-                            }
-                            Text("For Social Security income paid on a specific Wednesday of the month.")
-                                .font(.footnote)
+                            HStack {
+                                Picker("SSA Wednesday", selection: Binding<Int?>(
+                                    get: { ssaWednesday },
+                                    set: { ssaWednesday = $0 }
+                                )) {
+                                    Text("None").tag(nil as Int?)
+                                    Text("2nd Wednesday").tag(Optional(2))
+                                    Text("3rd Wednesday").tag(Optional(3))
+                                    Text("4th Wednesday").tag(Optional(4))
+                                }
+
+                                Spacer(minLength: 8)
+
+                                Button(action: {
+                                    dismissKeyboardOnly()
+                                    showSSAWednesdayPicker = true
+                                }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
                                 .foregroundStyle(.secondary)
+                            }
                         }
                         if ssaWednesday == nil {
                             switch frequency.normalized {
                             case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
-                                Picker("Day of Month", selection: Binding<Int?>(
-                                    get: { dayOfMonth },
-                                    set: { dayOfMonth = $0 }
-                                )) {
-                                    Text("None").tag(nil as Int?)
-                                    ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                HStack {
+                                    Picker("Day of Month", selection: Binding<Int?>(
+                                        get: { dayOfMonth },
+                                        set: { dayOfMonth = $0 }
+                                    )) {
+                                        Text("None").tag(nil as Int?)
+                                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                                    }
+
+                                    Spacer(minLength: 8)
+
+                                    Button(action: {
+                                        dismissKeyboardOnly()
+                                        showDayOfMonthPicker = true
+                                    }) {
+                                        Image(systemName: "pencil").imageScale(.small)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
                                 }
                             default:
-                                DatePicker("First Payment Date", selection: Binding<Date>(
-                                    get: { firstPaymentDate ?? Date() },
-                                    set: { firstPaymentDate = $0 }
-                                ), displayedComponents: .date)
+                                HStack {
+                                    DatePicker("First Payment Date", selection: Binding<Date>(
+                                        get: { firstPaymentDate ?? Date() },
+                                        set: { firstPaymentDate = $0 }
+                                    ), displayedComponents: .date)
+
+                                    Spacer(minLength: 8)
+
+                                    Button(action: {
+                                        dismissKeyboardOnly()
+                                        showFirstPaymentDatePicker = true
+                                    }) {
+                                        Image(systemName: "pencil").imageScale(.small)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                        SelectAllTextField(
-                            text: $notes,
-                            placeholder: "Notes",
-                            isFirstResponder: $notesIsFirstResponder,
-                            returnKeyType: .done,
-                            onPrev: { moveFocus(-1) },
-                            onNext: { moveFocus(1) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
+                        HStack(spacing: 6) {
+                            SelectAllTextField(
+                                text: $notes,
+                                placeholder: "Notes",
+                                isFirstResponder: $notesIsFirstResponder,
+                                returnKeyType: .done,
+                                onPrev: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+
+                            Button(action: { focus(.notes) }) {
+                                Image(systemName: "pencil").imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -1098,6 +1327,65 @@ private struct EditCashFlowItemView: View {
                 .animation(.snappy, value: isEditing)
             }
         }
+        .sheet(isPresented: $showFrequencyPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Frequency", selection: $frequency) {
+                        Text("Monthly").tag(PaymentFrequency.monthly)
+                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                        Text("Weekly").tag(PaymentFrequency.weekly)
+                        Text("Yearly").tag(PaymentFrequency.yearly)
+                    }
+                }
+                .navigationTitle("Frequency")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFrequencyPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showSSAWednesdayPicker) {
+            NavigationStack {
+                Form {
+                    Picker("SSA Wednesday", selection: Binding<Int?>(
+                        get: { ssaWednesday },
+                        set: { ssaWednesday = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        Text("2nd Wednesday").tag(Optional(2))
+                        Text("3rd Wednesday").tag(Optional(3))
+                        Text("4th Wednesday").tag(Optional(4))
+                    }
+                }
+                .navigationTitle("SSA Wednesday")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSSAWednesdayPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showDayOfMonthPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Day of Month", selection: Binding<Int?>(
+                        get: { dayOfMonth },
+                        set: { dayOfMonth = $0 }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                    }
+                }
+                .navigationTitle("Day of Month")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDayOfMonthPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showFirstPaymentDatePicker) {
+            NavigationStack {
+                Form {
+                    DatePicker("First Payment Date", selection: Binding<Date>(
+                        get: { firstPaymentDate ?? Date() },
+                        set: { firstPaymentDate = $0 }
+                    ), displayedComponents: .date)
+                }
+                .navigationTitle("First Payment Date")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFirstPaymentDatePicker = false } } }
+            }
+        }
         .onAppear {
             // Seed state from the existing item
             name = item.name
@@ -1131,7 +1419,20 @@ private struct EditCashFlowItemView: View {
             if isFirst { focusedField = .notes } else if focusedField == .notes && !nameIsFirstResponder && !amountIsFirstResponder { focusedField = nil }
         }
     }
-
+    private func dismissKeyboardOnly() {
+        nameIsFirstResponder = false
+        amountIsFirstResponder = false
+        notesIsFirstResponder = false
+        focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
+    }
+    
     private func commitAndDismissKeyboard() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty {
@@ -1390,6 +1691,7 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
+
 
 
 
