@@ -238,6 +238,7 @@ enum BackupImporter {
                 existing.dayOfMonth = dto.dayOfMonth
                 existing.firstPaymentDate = dto.firstPaymentDate
                 existing.notes = dto.notes
+                existing.ssaWednesday = dto.ssaWednesday
                 existing.account = dto.accountID.flatMap { accountMap[$0] }
                 existing.createdAt = dto.createdAt
                 summary.cashFlowsUpdated += 1
@@ -251,6 +252,7 @@ enum BackupImporter {
                     dayOfMonth: dto.dayOfMonth,
                     firstPaymentDate: dto.firstPaymentDate,
                     notes: dto.notes,
+                    ssaWednesday: dto.ssaWednesday,
                     account: dto.accountID.flatMap { accountMap[$0] },
                     createdAt: dto.createdAt
                 )

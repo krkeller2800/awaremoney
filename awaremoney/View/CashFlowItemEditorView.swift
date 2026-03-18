@@ -166,7 +166,15 @@ public struct CashFlowItemEditorView: View {
             }
         }
         .navigationTitle("Edit \(item.kind == .income ? "Income" : "Bill")")
-        .onAppear { initializeFromItemIfNeeded() }
+        .onAppear {
+            initializeFromItemIfNeeded()
+            if item.ssaWednesday == nil, let n = extractSSAWednesday(from: item.notes) {
+                item.ssaWednesday = n
+                let cleaned = removeSSAToken(from: (item.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+                item.notes = cleaned.isEmpty ? nil : cleaned
+                try? modelContext.save()
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .destructiveAction) {
                 Button(role: .destructive) {
@@ -188,7 +196,7 @@ public struct CashFlowItemEditorView: View {
         self.dayOfMonth = item.dayOfMonth
         self.firstPaymentDate = item.firstPaymentDate
         self.notes = item.notes ?? ""
-        self.ssaWednesday = extractSSAWednesday(from: item.notes)
+        self.ssaWednesday = item.ssaWednesday ?? extractSSAWednesday(from: item.notes)
         self.initialized = true
     }
 
@@ -202,12 +210,8 @@ public struct CashFlowItemEditorView: View {
         item.dayOfMonth = dayOfMonth
         item.firstPaymentDate = firstPaymentDate
         let cleanedNotes = removeSSAToken(from: notes)
-        if let n = ssaWednesday {
-            let token = "[SSA_WED]=\(n)"
-            item.notes = cleanedNotes.isEmpty ? token : (cleanedNotes + " " + token)
-        } else {
-            item.notes = cleanedNotes.isEmpty ? nil : cleanedNotes
-        }
+        item.notes = cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.ssaWednesday = ssaWednesday
         try? modelContext.save()
     }
 

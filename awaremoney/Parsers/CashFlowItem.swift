@@ -16,6 +16,7 @@ final class CashFlowItem {
     var dayOfMonth: Int?
     var firstPaymentDate: Date?
     var notes: String?
+    var ssaWednesday: Int?
     var createdAt: Date
 
     // Optional: link to an account (e.g., paid from or associated account)
@@ -41,6 +42,7 @@ final class CashFlowItem {
         dayOfMonth: Int? = nil,
         firstPaymentDate: Date? = nil,
         notes: String? = nil,
+        ssaWednesday: Int? = nil,
         account: Account? = nil,
         createdAt: Date = Date()
     ) {
@@ -52,6 +54,7 @@ final class CashFlowItem {
         self.dayOfMonth = dayOfMonth
         self.firstPaymentDate = firstPaymentDate
         self.notes = notes
+        self.ssaWednesday = ssaWednesday
         self.account = account
         self.createdAt = createdAt
     }

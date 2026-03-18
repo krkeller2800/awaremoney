@@ -86,11 +86,11 @@ struct NetWorthChartView: View {
                     SectorMark(
                         angle: .value("Value", s.doubleValue)
                     )
-                    .foregroundStyle(by: .value("Account", s.name))
+                    .foregroundStyle(by: .value("Account", legendLabel(for: s, total: totalDouble)))
                     .annotation(position: .overlay) {
-                        if totalDouble > 0 {
+                        if UIDevice.type == "iPad", totalDouble > 0 {
                             let pct = s.doubleValue / totalDouble
-                            if pct >= 0.06 { // avoid clutter: only label slices >= 6%
+                            if pct >= 0.10 { // avoid clutter: only label slices >= 10%
                                 Text(labelText(for: s, percent: pct))
                                     .font(.caption2)
                                     .bold()
@@ -118,6 +118,13 @@ struct NetWorthChartView: View {
         return "\(slice.name) \(pctStr)"
     }
 
+    private func legendLabel(for slice: AccountSlice, total: Double) -> String {
+        guard total > 0 else { return slice.name }
+        let pct = slice.doubleValue / total
+        let pctStr = String(format: " %.0f%%", pct * 100)
+        return slice.name + pctStr
+    }
+    
     private func titlePrefix(for mode: ChartMode) -> String {
         switch mode {
         case .assets:

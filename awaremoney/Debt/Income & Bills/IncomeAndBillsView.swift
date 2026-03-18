@@ -42,6 +42,13 @@ fileprivate func parseDecimalAmount(from text: String) -> Decimal? {
     return Decimal(string: normalized)
 }
 
+fileprivate func removeSSAToken(from s: String) -> String {
+    if s.isEmpty { return s }
+    var parts = s.split(separator: " ").map(String.init)
+    parts.removeAll { $0.hasPrefix("[SSA_WED]=") }
+    return parts.joined(separator: " ")
+}
+
 struct IncomeAndBillsView: View {
     var showsLocalModePicker: Bool = true
 
@@ -85,14 +92,43 @@ struct IncomeAndBillsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \CashFlowItem.createdAt, order: .reverse) private var items: [CashFlowItem]
 
+    @State private var didRunSSAMigration = false
+
     var body: some View {
         Group {
             if isPad {
                 iPadBody
+                    .onAppear {
+                        migrateSSATokensIfNeeded()
+                    }
             } else {
                 iPhoneBody
+                    .onAppear {
+                        migrateSSATokensIfNeeded()
+                    }
             }
         }
+    }
+
+    private func migrateSSATokensIfNeeded() {
+        guard !didRunSSAMigration else { return }
+        var changed = false
+        for item in items {
+            if item.ssaWednesday == nil, let n = extractSSAWednesday(from: item.notes) {
+                item.ssaWednesday = n
+                let cleaned = removeSSAToken(from: (item.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+                item.notes = cleaned.isEmpty ? nil : cleaned
+                changed = true
+            } else if let notes = item.notes, notes.contains("[SSA_WED]=") {
+                let cleaned = removeSSAToken(from: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+                if cleaned != notes {
+                    item.notes = cleaned.isEmpty ? nil : cleaned
+                    changed = true
+                }
+            }
+        }
+        if changed { try? modelContext.save() }
+        didRunSSAMigration = true
     }
 
     private var isPad: Bool {
@@ -232,6 +268,7 @@ struct IncomeAndBillsView: View {
                                         Image(systemName: "plus")
                                     }
                                     .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
                                 }
                                 .padding(.horizontal)
                                 .padding(.top, rightHeaderTopCompensation)
@@ -807,19 +844,18 @@ private struct AddCashFlowItemView: View {
                     Button {
                         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmedName.isEmpty && amountValue > 0 {
-                            let finalNotes: String? = {
-                                let base = notes
-                                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
-                                let cleaned = removeSSAToken(from: trimmed)
-                                if let n = ssaWednesday {
-                                    let token = "[SSA_WED]=\(n)"
-                                    if cleaned.isEmpty { return token }
-                                    else { return cleaned + " " + token }
-                                } else {
-                                    return cleaned.isEmpty ? nil : cleaned
-                                }
-                            }()
-                            let item = CashFlowItem(kind: initialKind, name: trimmedName, amount: amountValue, frequency: frequency, dayOfMonth: dayOfMonth, firstPaymentDate: firstPaymentDate, notes: finalNotes)
+                            let cleanedNotes: String = removeSSAToken(from: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+                            let finalNotes: String? = cleanedNotes.isEmpty ? nil : cleanedNotes
+                            let item = CashFlowItem(
+                                kind: initialKind,
+                                name: trimmedName,
+                                amount: amountValue,
+                                frequency: frequency,
+                                dayOfMonth: dayOfMonth,
+                                firstPaymentDate: firstPaymentDate,
+                                notes: finalNotes,
+                                ssaWednesday: ssaWednesday
+                            )
                             onAdd(item)
                             nameIsFirstResponder = false
                             amountIsFirstResponder = false
@@ -952,17 +988,8 @@ private struct AddCashFlowItemView: View {
     private func commitAndDismissKeyboard() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty && amountValue > 0 {
-            let finalNotes: String? = {
-                let base = notes
-                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
-                let cleaned = removeSSAToken(from: trimmed)
-                if let n = ssaWednesday {
-                    let token = "[SSA_WED]=\(n)"
-                    if cleaned.isEmpty { return token } else { return cleaned + " " + token }
-                } else {
-                    return cleaned.isEmpty ? nil : cleaned
-                }
-            }()
+            let cleanedNotes: String = removeSSAToken(from: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+            let finalNotes: String? = cleanedNotes.isEmpty ? nil : cleanedNotes
             let item = CashFlowItem(
                 kind: initialKind,
                 name: trimmedName,
@@ -970,7 +997,8 @@ private struct AddCashFlowItemView: View {
                 frequency: frequency,
                 dayOfMonth: dayOfMonth,
                 firstPaymentDate: firstPaymentDate,
-                notes: finalNotes
+                notes: finalNotes,
+                ssaWednesday: ssaWednesday
             )
             onAdd(item)
             nameIsFirstResponder = false
@@ -1265,18 +1293,8 @@ private struct EditCashFlowItemView: View {
                     Button {
                         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmedName.isEmpty {
-                            let finalNotes: String? = {
-                                let base = notes
-                                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
-                                let cleaned = removeSSAToken(from: trimmed)
-                                if let n = ssaWednesday {
-                                    let token = "[SSA_WED]=\(n)"
-                                    if cleaned.isEmpty { return token }
-                                    else { return cleaned + " " + token }
-                                } else {
-                                    return cleaned.isEmpty ? nil : cleaned
-                                }
-                            }()
+                            let cleanedNotes: String = removeSSAToken(from: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+                            let finalNotes: String? = cleanedNotes.isEmpty ? nil : cleanedNotes
                             // Apply edits back to the model
                             item.name = trimmedName
                             item.amount = amountValue
@@ -1284,6 +1302,7 @@ private struct EditCashFlowItemView: View {
                             item.dayOfMonth = dayOfMonth
                             item.firstPaymentDate = firstPaymentDate
                             item.notes = finalNotes
+                            item.ssaWednesday = ssaWednesday
                             onSave()
                             focusedField = nil
                             #if canImport(UIKit)
@@ -1394,7 +1413,7 @@ private struct EditCashFlowItemView: View {
             dayOfMonth = item.dayOfMonth
             firstPaymentDate = item.firstPaymentDate
             notes = item.notes ?? ""
-            ssaWednesday = extractSSAWednesday(from: item.notes)
+            ssaWednesday = item.ssaWednesday ?? extractSSAWednesday(from: item.notes)
             if isIncome {
                 switch frequency.normalized {
                 case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
@@ -1436,23 +1455,15 @@ private struct EditCashFlowItemView: View {
     private func commitAndDismissKeyboard() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedName.isEmpty {
-            let finalNotes: String? = {
-                let base = notes
-                let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
-                let cleaned = removeSSAToken(from: trimmed)
-                if let n = ssaWednesday {
-                    let token = "[SSA_WED]=\(n)"
-                    if cleaned.isEmpty { return token } else { return cleaned + " " + token }
-                } else {
-                    return cleaned.isEmpty ? nil : cleaned
-                }
-            }()
+            let cleanedNotes: String = removeSSAToken(from: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+            let finalNotes: String? = cleanedNotes.isEmpty ? nil : cleanedNotes
             item.name = trimmedName
             item.amount = amountValue
             item.frequency = frequency
             item.dayOfMonth = dayOfMonth
             item.firstPaymentDate = firstPaymentDate
             item.notes = finalNotes
+            item.ssaWednesday = ssaWednesday
             onSave()
             nameIsFirstResponder = false
             amountIsFirstResponder = false
@@ -1691,7 +1702,6 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
-
 
 
 

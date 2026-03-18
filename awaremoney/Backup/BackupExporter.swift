@@ -110,6 +110,7 @@ struct CashFlowItemDTO: Codable {
     let dayOfMonth: Int?
     let firstPaymentDate: Date?
     let notes: String?
+    let ssaWednesday: Int?
     let accountID: UUID?
     let createdAt: Date
 }
@@ -257,6 +258,7 @@ enum BackupExporter {
                 dayOfMonth: c.dayOfMonth,
                 firstPaymentDate: c.firstPaymentDate,
                 notes: c.notes,
+                ssaWednesday: c.ssaWednesday,
                 accountID: c.account?.id,
                 createdAt: c.createdAt
             )
