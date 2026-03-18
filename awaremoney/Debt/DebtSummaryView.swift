@@ -30,6 +30,9 @@ struct DebtSummaryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [Account] = []
     @State private var showPlanSheet = false
+    @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
+    @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @State private var showDebtChart: Bool = false
     @State private var tempPlanDate: Date = {
         Calendar.current.date(byAdding: .month, value: 12, to: Date()) ?? Date()
     }()
@@ -108,10 +111,21 @@ struct DebtSummaryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        PlanToolbarButton("Start Date",fixedWidth: 100) {
-                            showPlanSheet = true
+                        Menu {
+                            Button {
+                                showPlanSheet = true
+                            } label: {
+                                Label("Set Strategy", systemImage: "puzzlepiece")
+                            }
+                            Button {
+                                showDebtChart = true
+                            } label: {
+                                Label("View Debt Chart", systemImage: "chart.line.uptrend.xyaxis")
+                            }
+                            .accessibilityIdentifier("showDebtChartButton")
+                        } label: {
+                            PlanMenuLabel(title: "Plan")
                         }
-
                         .accessibilityIdentifier("planByDateButton")
                     }
                     ToolbarItem(placement: .topBarLeading) {
@@ -124,6 +138,10 @@ struct DebtSummaryView: View {
                 .task { await load() }
                 .sheet(isPresented: $showPlanSheet) {
                     planSheetView()
+                }
+                .sheet(isPresented: $showDebtChart) {
+                    DebtProjectionChartView(items: allCashFlowItems())
+                        .environmentObject(settings)
                 }
 //                .onChange(of: showPlanSheet) { _, newValue in
 //                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
@@ -437,6 +455,31 @@ struct DebtSummaryView: View {
                                 startDate: startDateForPlan
                             )
                             currentPlan = planResult
+                            // Persist selections for DebtProjectionChartView
+                            switch appliedStrategy {
+                            case .minimumsOnly:
+                                settings.defaultPayoffStrategyRaw = "minimumsOnly"
+                                useFixedDebtBudget = false
+                                debtBudgetOverrideAmount = 0
+                            case .snowball:
+                                settings.defaultPayoffStrategyRaw = "snowball"
+                                if let b = appliedBudget, b > 0 {
+                                    useFixedDebtBudget = true
+                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                                } else {
+                                    useFixedDebtBudget = false
+                                    debtBudgetOverrideAmount = 0
+                                }
+                            case .avalanche:
+                                settings.defaultPayoffStrategyRaw = "avalanche"
+                                if let b = appliedBudget, b > 0 {
+                                    useFixedDebtBudget = true
+                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                                } else {
+                                    useFixedDebtBudget = false
+                                    debtBudgetOverrideAmount = 0
+                                }
+                            }
                             showPlanSheet = false
                         } catch DebtPlanError.infeasibleBudget {
                             budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
@@ -1136,6 +1179,7 @@ extension UIView {
     }
 }
 #endif
+
 
 
 

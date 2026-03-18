@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Charts
 
 #if os(iOS)
 import UIKit
@@ -57,6 +58,7 @@ struct IncomeAndBillsView: View {
     @State private var showAddSheet = false
     @State private var addKind: CashFlowItem.Kind = .income
     @State private var activeSheet: ActiveSheet? = nil
+    // Removed: @State private var showDebtChart = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.presentationMode) private var presentationMode
@@ -294,6 +296,7 @@ struct IncomeAndBillsView: View {
                 Text(ipadMode == .incomeBills ? "Income & Bills" : "Monthly Summary")
                     .font(isPad ? .largeTitle : .headline)
             }
+            // Removed ToolbarItem(placement: .primaryAction) with Debt Chart button
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -320,6 +323,7 @@ struct IncomeAndBillsView: View {
                 .environmentObject(settings)
             }
         }
+        // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
     }
 
     // MARK: - iPhone
@@ -452,6 +456,7 @@ struct IncomeAndBillsView: View {
                             addKind = .bill
                             showAddSheet = true
                         }
+                        // Removed Divider() and Button("View Debt Chart")
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -464,6 +469,7 @@ struct IncomeAndBillsView: View {
                 }
                 .environmentObject(settings)
             }
+            // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
         }
     }
 
@@ -1702,6 +1708,4 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
-
-
 

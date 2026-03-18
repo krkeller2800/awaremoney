@@ -5,6 +5,7 @@ struct IncomeBillsSplitHostView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \CashFlowItem.createdAt, order: .reverse) private var items: [CashFlowItem]
+    @EnvironmentObject private var settings: SettingsStore
     
     enum SidebarItem: Hashable {
         case incomeBills
@@ -40,11 +41,9 @@ struct IncomeBillsSplitHostView: View {
             VStack(spacing: 0) {
                 switch selection {
                 case .summary:
-                    List {
-                        IncomeBillsSummarySections(items: items)
-                    }
-                    .listStyle(.insetGrouped)
-                    .navigationTitle("Summary")
+                    DebtSummaryView()
+                        .environmentObject(settings)
+                        .navigationTitle("Summary")
                 default:
                     IncomeAndBillsView()
                 }
