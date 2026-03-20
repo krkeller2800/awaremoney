@@ -1434,7 +1434,7 @@ struct ImportFlowView: View {
                 let parsers = ImportViewModel.defaultParsers()
                 let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
                 if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
-                    await setNewAccountTypeFromHint()
+                    setNewAccountTypeFromHint()
                     var staged = try parser.parse(rows: rows, headers: headers)
                     staged.sourceFileName = url.lastPathComponent
                     staged.suggestedAccountType = vm.newAccountType

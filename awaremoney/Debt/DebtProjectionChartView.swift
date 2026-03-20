@@ -24,6 +24,9 @@ struct DebtProjectionChartView: View {
     @State private var selectedYear: Int
     @State private var selectedStrategy: PayoffStrategy = .minimumsOnly
     @State private var amountSelectionTrigger: Int = 0
+    @State private var requiredMinimumForBudget: Decimal? = nil
+    @State private var isEditingBudgetAmount: Bool = false
+    @FocusState private var amountFieldFocused: Bool
     
     init(items: [CashFlowItem]) {
         self.items = items
@@ -31,14 +34,36 @@ struct DebtProjectionChartView: View {
     }
     
     var body: some View {
+        let monthlyNet = calculateMonthlyNet()
+        
+        // Precompute data outside of the Chart closure to help the type-checker
+        let points = buildMonthlyPoints(net: monthlyNet, year: selectedYear, strategy: selectedStrategy)
+        let actualPoints: [MonthlyPoint] = points.filter { $0.type == .actual }
+        let projectedPoints: [MonthlyPoint] = points.filter { $0.type == .projected }
+        let calendar = Calendar.current
+        let now = Date()
+        let nowYear = calendar.component(.year, from: now)
+        let nowMonth = calendar.component(.month, from: now)
+        let minSelectableYear: Int = {
+            let years = yearsWithLiabilityData()
+            if let minYear = years.min() {
+                return minYear
+            } else {
+                return nowYear
+            }
+        }()
+        
         VStack(alignment: .leading) {
             HStack {
                 Button {
-                    selectedYear -= 1
+                    if let prev = previousAvailableYear(from: selectedYear, minYear: minSelectableYear) {
+                        selectedYear = prev
+                    }
                 } label: {
                     Image(systemName: "chevron.left")
                 }
                 .accessibilityLabel("Previous year")
+                .disabled(previousAvailableYear(from: selectedYear, minYear: minSelectableYear) == nil)
                 
                 Spacer()
                 
@@ -57,8 +82,6 @@ struct DebtProjectionChartView: View {
             }
             .padding(.horizontal)
             .padding(.top)
-            
-            let monthlyNet = calculateMonthlyNet()
             
             Text("Budget: \(formatCurrencyDecimal(effectiveBudget(for: monthlyNet, strategy: selectedStrategy))) • Strategy: \(strategyDisplayName(selectedStrategy))")
                 .font(.subheadline)
@@ -92,6 +115,16 @@ struct DebtProjectionChartView: View {
                         .fixedSize()
                         .accessibilityLabel("Use custom budget amount")
                         .accessibilityHint("When off, the app uses your income minus bills as the budget.")
+                    Spacer()
+                    // Inline validation shown between the toggle and the amount field
+                    if useFixedDebtBudget, let min = requiredMinimumForBudget {
+                        Text("Minimum required: \(formatCurrencyDecimal(min))")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                            .minimumScaleFactor(0.75)
+                    }
 
                     Spacer()
 
@@ -100,20 +133,12 @@ struct DebtProjectionChartView: View {
                         // Editable amount UI (shown when toggle is on)
                         Group {
 #if os(iOS)
-                            HStack(spacing: 6) {
-                                CurrencyTextField(placeholder: "Amount", value: $debtBudgetOverrideAmount, currencyCode: settings.currencyCode, selectionTrigger: $amountSelectionTrigger)
-                                Button {
-                                    amountSelectionTrigger += 1
-                                } label: {
-                                    Image(systemName: "pencil")
-                                }
-                                .buttonStyle(.borderless)
-                                .accessibilityLabel("Edit amount")
-                            }
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(height: 36)
+                            CurrencyTextField(placeholder: "Amount", value: $debtBudgetOverrideAmount, currencyCode: settings.currencyCode, selectionTrigger: $amountSelectionTrigger, isEditing: $isEditingBudgetAmount)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .frame(height: 36)
 #else
                             TextField("Amount", value: $debtBudgetOverrideAmount, format: .currency(code: settings.currencyCode))
+                                .focused($amountFieldFocused)
                                 .fixedSize(horizontal: true, vertical: false)
 #endif
                         }
@@ -134,18 +159,12 @@ struct DebtProjectionChartView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
             }
-            .padding(.horizontal)
-            
+            let yMax = max(((actualPoints + projectedPoints).map(\.value).max() ?? 0.0), 1.0)
             Chart {
                 RuleMark(y: .value("Zero", 0))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .foregroundStyle(Color.gray.opacity(0.5))
-                
-                let points = buildMonthlyPoints(net: monthlyNet, year: selectedYear, strategy: selectedStrategy)
-                let actualPoints = points.filter { $0.type == .actual }
-                let projectedPoints = points.filter { $0.type == .projected }
                 
                 if !actualPoints.isEmpty {
                     ForEach(actualPoints) { point in
@@ -153,8 +172,9 @@ struct DebtProjectionChartView: View {
                             x: .value("Month", point.month),
                             y: .value("Value", point.value)
                         )
-                        .foregroundStyle(Color.accentColor)
                         .interpolationMethod(.catmullRom)
+                        .foregroundStyle(by: .value("Series", "Actual"))
+                        .zIndex(2)
                     }
                 }
                 
@@ -164,13 +184,75 @@ struct DebtProjectionChartView: View {
                             x: .value("Month", point.month),
                             y: .value("Value", point.value)
                         )
-                        .foregroundStyle(Color.secondary)
                         .interpolationMethod(.catmullRom)
-                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                        .foregroundStyle(by: .value("Series", "Projected"))
+                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 4]))
+                        .zIndex(1)
                     }
                 }
+                
+                let endOfYearPoint: MonthlyPoint? = {
+                    guard !projectedPoints.isEmpty else { return nil }
+                    if let p = projectedPoints.first(where: { $0.month == 12 }) { return p }
+                    return projectedPoints.last
+                }()
+                
+                if let eoy = endOfYearPoint {
+                    PointMark(
+                        x: .value("Month", eoy.month),
+                        y: .value("Value", eoy.value)
+                    )
+                    .foregroundStyle(by: .value("Series", "Projected"))
+                    .symbolSize(0)
+                    .zIndex(11)
+                    .annotation(position: .bottomLeading, spacing: 4) {
+                        Text("End of year: \(formatCurrency(eoy.value))")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                Color(.systemBackground).opacity(0.85),
+                                in: Capsule()
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.secondary.opacity(0.25))
+                            )
+                    }
+                    .accessibilityLabel("End of year total")
+                    .accessibilityValue(formatCurrency(eoy.value))
+                }
+                // Current date marker (align to month axis 1...12)
+                // Only show the marker when it falls within the selected year's 1...12 window
+                if nowYear == selectedYear {
+                    RuleMark(x: .value("Month", nowMonth))
+                        .foregroundStyle(Color.accentColor.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                        .zIndex(10)
+                        .annotation(position: .bottomTrailing, spacing: 4) {
+                            Text("Today")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Color(.systemBackground).opacity(0.85),
+                                    in: Capsule()
+                                )
+                                .overlay(
+                                    Capsule().stroke(Color.secondary.opacity(0.25))
+                                )
+                                .offset(y: -24)
+                        }
+                        .accessibilityLabel("Today")
+                }
             }
+            .chartForegroundStyleScale([
+                "Actual": Color.accentColor as Color,
+                "Projected": Color.secondary as Color
+            ])
             .chartXScale(domain: 1...12)
+            .chartYScale(domain: 0.0...(yMax * 1.1))
             .chartXAxis {
                 AxisMarks(values: Array(1...12)) { v in
                     AxisGridLine()
@@ -193,14 +275,48 @@ struct DebtProjectionChartView: View {
                     }
                 }
             }
+            .chartLegend(.hidden)
             .padding(.horizontal)
             .frame(minHeight: 200)
+            if !actualPoints.isEmpty || !projectedPoints.isEmpty {
+                HStack(spacing: 16) {
+                    HStack(spacing: 6) {
+                        Rectangle()
+                            .fill(Color.accentColor)
+                            .frame(width: 28, height: 3)
+                            .cornerRadius(1.5)
+                        Text("Actual")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 6) {
+                        Text("---")
+                            .font(.headline)
+                            .foregroundStyle(Color.secondary)
+                        Text("Projected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+            }
         }
         .onAppear {
             // Initialize from current settings when the view appears
             selectedStrategy = defaultStrategy
+            if selectedYear < minSelectableYear {
+                selectedYear = minSelectableYear
+            }
+            if !hasLiabilityData(in: selectedYear) {
+                if let latest = latestAvailableYear(upTo: nowYear, minYear: minSelectableYear) {
+                    selectedYear = latest
+                } else {
+                    selectedYear = max(minSelectableYear, nowYear)
+                }
+            }
         }
-        .onChange(of: selectedStrategy) { newValue in
+        .onChange(of: selectedStrategy) { _, newValue in
             // Persist selection back to settings so it is remembered
             switch newValue {
             case .minimumsOnly:
@@ -253,8 +369,13 @@ struct DebtProjectionChartView: View {
         return calendar.date(from: comps) ?? firstOfMonth
     }
     
+    // Guardrail: ignore obviously invalid historical dates (e.g., year < 1970)
+    private var minValidDataDate: Date {
+        Calendar.current.date(from: DateComponents(year: 1970, month: 1, day: 1)) ?? Date(timeIntervalSince1970: 0)
+    }
+    
     private func value(for account: Account, on date: Date) -> Decimal {
-        let snaps = account.balanceSnapshots.filter { !$0.isExcluded && $0.asOfDate <= date }
+        let snaps = account.balanceSnapshots.filter { !$0.isExcluded && $0.asOfDate <= date && $0.asOfDate >= minValidDataDate }
         if let last = snaps.max(by: { $0.asOfDate < $1.asOfDate }) {
             let txs = account.transactions.filter {
                 !$0.isExcluded && $0.datePosted > last.asOfDate && $0.datePosted <= date
@@ -264,22 +385,91 @@ struct DebtProjectionChartView: View {
             }
             return last.balance + delta
         } else {
-            let txs = account.transactions.filter { !$0.isExcluded && $0.datePosted <= date }
+            let txs = account.transactions.filter { !$0.isExcluded && $0.datePosted <= date && $0.datePosted >= minValidDataDate }
             return txs.reduce(Decimal(0)) { partialResult, tx in
                 partialResult + tx.amount
             }
         }
     }
     
+    /// Computes the total liability magnitude (sum of negative balances as positive values)
+    /// across all liability accounts at the given date.
     private func liabilityMagnitude(on date: Date) -> Decimal {
-        liabilities.reduce(Decimal(0)) { partialResult, account in
-            let val = value(for: account, on: date)
-            if val < 0 {
-                return partialResult + (-val)
-            } else {
-                return partialResult
+        var total: Decimal = 0
+        for account in liabilities {
+            let v = value(for: account, on: date)
+            if v < 0 {
+                total += -v
             }
         }
+        return total
+    }
+    
+    private func earliestLiabilityDataDate() -> Date? {
+        let now = Date()
+        var earliest: Date? = nil
+        for account in liabilities {
+            for snap in account.balanceSnapshots where !snap.isExcluded && snap.asOfDate >= minValidDataDate && snap.asOfDate <= now {
+                if let e = earliest {
+                    if snap.asOfDate < e { earliest = snap.asOfDate }
+                } else {
+                    earliest = snap.asOfDate
+                }
+            }
+            for tx in account.transactions where !tx.isExcluded && tx.datePosted >= minValidDataDate && tx.datePosted <= now {
+                if let e = earliest {
+                    if tx.datePosted < e { earliest = tx.datePosted }
+                } else {
+                    earliest = tx.datePosted
+                }
+            }
+        }
+        return earliest
+    }
+    
+    private func yearsWithLiabilityData() -> Set<Int> {
+        var years = Set<Int>()
+        let cal = Calendar.current
+        let now = Date()
+        for account in liabilities {
+            for snap in account.balanceSnapshots where !snap.isExcluded && snap.asOfDate <= now && snap.asOfDate >= minValidDataDate {
+                years.insert(cal.component(.year, from: snap.asOfDate))
+            }
+            for tx in account.transactions where !tx.isExcluded && tx.datePosted <= now && tx.datePosted >= minValidDataDate {
+                years.insert(cal.component(.year, from: tx.datePosted))
+            }
+        }
+        return years
+    }
+
+    private func hasLiabilityData(in year: Int) -> Bool {
+        // Consider a year to have data if any month ends with a non-zero liability magnitude
+        for month in 1...12 {
+            let date = endOfMonth(year: year, month: month)
+            if liabilityMagnitude(on: date) > 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func previousAvailableYear(from year: Int, minYear: Int) -> Int? {
+        guard year - 1 >= minYear else { return nil }
+        var y = year - 1
+        while y >= minYear {
+            if hasLiabilityData(in: y) { return y }
+            y -= 1
+        }
+        return nil
+    }
+
+    private func latestAvailableYear(upTo year: Int, minYear: Int) -> Int? {
+        var y = year
+        while y >= minYear {
+            if hasLiabilityData(in: y) { return y }
+            y -= 1
+        }
+        return nil
     }
     
     private var defaultStrategy: PayoffStrategy {
@@ -340,6 +530,13 @@ struct DebtProjectionChartView: View {
         let currentMonth = calendar.component(.month, from: now)
         
         var points: [MonthlyPoint] = []
+        let firstDataDate = earliestLiabilityDataDate()
+        let firstDataMonthStart: Date? = {
+            guard let d = firstDataDate else { return nil }
+            let y = calendar.component(.year, from: d)
+            let m = calendar.component(.month, from: d)
+            return calendar.date(from: DateComponents(year: y, month: m, day: 1))
+        }()
         
         // Actual history points
         for month in 1...12 {
@@ -351,10 +548,15 @@ struct DebtProjectionChartView: View {
             } else if year > currentYear {
                 type = .projected
             } else {
+                // For the current year, include the current month as actual to avoid a gap.
                 type = (month <= currentMonth) ? .actual : .projected
             }
             
             if type == .actual {
+                // Skip months that occur before any liability data exists to avoid fictitious balances
+                if let firstDataMonthStart, date < firstDataMonthStart {
+                    continue
+                }
                 let total = liabilityMagnitude(on: date)
                 points.append(MonthlyPoint(month: month, value: NSDecimalNumber(decimal: total).doubleValue, type: .actual))
             }
@@ -365,10 +567,71 @@ struct DebtProjectionChartView: View {
         if year > currentYear {
             startMonth = 1
         } else if year == currentYear {
+            // Start projections next month; the current month remains solid (actual).
             startMonth = currentMonth + 1
         } else {
             // Past years have no projection
             return points
+        }
+        
+        // If projecting a future year, compute carry-forward balances from the previous year's projection
+        var carryForward: [UUID: Decimal] = [:]
+        if year > currentYear {
+            // Build a plan for the remainder of the current year to get end-of-year balances
+            let cfStartMonth: Int = {
+                if currentYear == calendar.component(.year, from: now) {
+                    return min(12, currentMonth + 1)
+                } else {
+                    return 1
+                }
+            }()
+            if cfStartMonth <= 12 {
+                if let cfStartDate = calendar.date(from: DateComponents(year: currentYear, month: cfStartMonth, day: 1)) {
+                    var cfDebts: [DebtInput] = []
+                    // Seed from actuals as of the end of the month before cfStartMonth
+                    let prevMonthForCF = cfStartMonth - 1
+                    let prevCFDate: Date = (prevMonthForCF >= 1) ? endOfMonth(year: currentYear, month: prevMonthForCF) : endOfMonth(year: currentYear - 1, month: 12)
+                    for account in liabilities {
+                        let v = value(for: account, on: prevCFDate)
+                        let balMag = v < 0 ? -v : Decimal(0)
+                        if balMag > 0 {
+                            let input = DebtInput(
+                                id: account.id,
+                                name: account.name,
+                                apr: account.loanTerms?.apr,
+                                balance: balMag,
+                                minPayment: monthlyPayment(for: account, balance: balMag)
+                            )
+                            cfDebts.append(input)
+                        }
+                    }
+                    if !cfDebts.isEmpty {
+                        let cfBudget = effectiveBudget(for: net, debts: cfDebts, strategy: strategy)
+                        if let cfPlan = try? DebtPayoffEngine.plan(debts: cfDebts, monthlyBudget: cfBudget, strategy: strategy, startDate: cfStartDate) {
+                            // Capture balances for December of the year before the selected year (end-of-year carry forward into the selected year)
+                            let targetYear = year - 1
+                            let decDate = endOfMonth(year: targetYear, month: 12)
+                            if let cfMonth = cfPlan.months.first(where: { calendar.isDate($0.date, equalTo: decDate, toGranularity: .month) }) {
+                                for (debtId, balance) in cfMonth.balances {
+                                    carryForward[debtId] = balance
+                                }
+                            } else if let lastMonth = cfPlan.months.last {
+                                // Fallback: if we didn't reach December, use the last planned month
+                                for (debtId, balance) in lastMonth.balances {
+                                    carryForward[debtId] = balance
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Bridge current month with projected series to avoid a visual gap
+        if year == currentYear {
+            if let currentActual = points.last(where: { $0.type == .actual && $0.month == currentMonth }) {
+                points.append(MonthlyPoint(month: currentMonth, value: currentActual.value, type: .projected))
+            }
         }
         
         guard startMonth <= 12 else {
@@ -376,24 +639,22 @@ struct DebtProjectionChartView: View {
         }
         
         // Prepare debts for DebtPayoffEngine
-        let startDateComps = DateComponents(year: year, month: startMonth, day: 1)
-        guard let startDate = calendar.date(from: startDateComps) else {
-            return points
-        }
-        
         var debts: [DebtInput] = []
         
         for account in liabilities {
-            // Get balance magnitude at end of previous month
+            // Get balance magnitude at end of previous month (or carry-forward for future years)
             let prevMonth = startMonth - 1
-            let prevDate: Date
-            if prevMonth >= 1 {
-                prevDate = endOfMonth(year: year, month: prevMonth)
+            let prevDate: Date = (prevMonth >= 1) ? endOfMonth(year: year, month: prevMonth) : endOfMonth(year: year - 1, month: 12)
+
+            let val: Decimal
+            if year > currentYear, let cfBal = carryForward[account.id] {
+                // Use projected carry-forward balance for future years
+                // cfBal is already a magnitude for liabilities
+                val = -cfBal
             } else {
-                // Previous year December
-                prevDate = endOfMonth(year: year - 1, month: 12)
+                // Use historical snapshot-derived value
+                val = value(for: account, on: prevDate)
             }
-            let val = value(for: account, on: prevDate)
             let bal = val < 0 ? -val : Decimal(0)
             if bal > 0 {
                 let input = DebtInput(
@@ -413,7 +674,36 @@ struct DebtProjectionChartView: View {
         
         let budget = effectiveBudget(for: net, debts: debts, strategy: strategy)
         
-        let plan = try? DebtPayoffEngine.plan(debts: debts, monthlyBudget: budget, strategy: strategy, startDate: startDate)
+        // Determine the planning start date as the first day of the start month
+        let startDate: Date = {
+            let comps = DateComponents(year: year, month: startMonth, day: 1)
+            return calendar.date(from: comps) ?? Date()
+        }()
+        
+        var plan: DebtPlanResult?
+        do {
+            plan = try DebtPayoffEngine.plan(
+                debts: debts,
+                monthlyBudget: budget,
+                strategy: strategy,
+                startDate: startDate
+            )
+        } catch DebtPlanError.infeasibleBudget(let requiredMin) {
+            plan = nil
+            // Record the required minimum; defer alert presentation to when editing ends.
+            DispatchQueue.main.async {
+                self.requiredMinimumForBudget = requiredMin
+            }
+        } catch {
+            plan = nil
+        }
+        if plan != nil {
+            DispatchQueue.main.async {
+                if self.requiredMinimumForBudget != nil {
+                    self.requiredMinimumForBudget = nil
+                }
+            }
+        }
         
         var lastKnownBalances: [UUID: Decimal] = [:]
         if let plan = plan {
@@ -434,9 +724,8 @@ struct DebtProjectionChartView: View {
             }
             var sum: Decimal = Decimal(0)
             if let plan = plan {
-                // Find the plan month matching this chart month by date
-                if let planMonth = plan.months.first(where: { calendar.isDate($0.date, inSameDayAs: monthDate) }) {
-                    // Assuming balances is a [UUID: Decimal] dictionary
+                // Find the plan month matching this chart month by month granularity
+                if let planMonth = plan.months.first(where: { calendar.isDate($0.date, equalTo: monthDate, toGranularity: .month) }) {
                     for (debtId, balance) in planMonth.balances {
                         sum += balance
                         lastKnownBalances[debtId] = balance
@@ -521,6 +810,7 @@ struct CurrencyTextField: UIViewRepresentable {
     @Binding var value: Double
     var currencyCode: String
     @Binding var selectionTrigger: Int
+    @Binding var isEditing: Bool
 
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField(frame: .zero)
@@ -575,7 +865,7 @@ struct CurrencyTextField: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(valueBinding: $value, currencyCode: currencyCode)
+        Coordinator(valueBinding: $value, currencyCode: currencyCode, isEditingBinding: $isEditing)
     }
 
     class Coordinator: NSObject, UITextFieldDelegate {
@@ -583,10 +873,12 @@ struct CurrencyTextField: UIViewRepresentable {
         var currencyCode: String
         var isEditing: Bool = false
         var lastSelectionTrigger: Int = 0
+        var isEditingBinding: Binding<Bool>
 
-        init(valueBinding: Binding<Double>, currencyCode: String) {
+        init(valueBinding: Binding<Double>, currencyCode: String, isEditingBinding: Binding<Bool>) {
             self.valueBinding = valueBinding
             self.currencyCode = currencyCode
+            self.isEditingBinding = isEditingBinding
         }
 
         @objc func editingChanged(_ sender: UITextField) {
@@ -598,6 +890,7 @@ struct CurrencyTextField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
             isEditing = true
+            isEditingBinding.wrappedValue = true
             // Select all text when editing begins
             DispatchQueue.main.async {
                 textField.selectAll(nil)
@@ -606,6 +899,7 @@ struct CurrencyTextField: UIViewRepresentable {
 
         func textFieldDidEndEditing(_ textField: UITextField) {
             isEditing = false
+            isEditingBinding.wrappedValue = false
             // Reformat to currency when editing ends
             textField.text = format(value: valueBinding.wrappedValue, currencyCode: currencyCode)
         }
@@ -659,5 +953,4 @@ struct DebtProjectionChartView_Previews: PreviewProvider {
             .environmentObject({ let store = SettingsStore(); store.currencyCode = "USD"; return store }())
     }
 }
-
 

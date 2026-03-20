@@ -21,6 +21,11 @@ struct PaywallView: View {
         .alert(item: Binding(get: { purchases.errorMessage.map { IdentifiedError(message: $0) } }, set: { _ in purchases.errorMessage = nil })) { item in
             Alert(title: Text("Error"), message: Text(item.message), dismissButton: .default(Text("OK")))
         }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
     }
 
     private var header: some View {
@@ -74,7 +79,21 @@ struct PaywallView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(purchases.isPurchasing || purchases.isPurchased)
             } else {
-                ProgressView("Loading…")
+                VStack(spacing: 8) {
+                    ProgressView("Loading…")
+                    Button("Try Again") {
+                        Task { await purchases.reloadProducts() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(purchases.isPurchasing)
+                    if let diag = purchases.iapDiagnosticSummary {
+                        Text(diag)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("iapDiagnosticSummary")
+                    }
+                }
             }
         }
     }

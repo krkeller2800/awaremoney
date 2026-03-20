@@ -61,11 +61,17 @@ final class PurchaseManager: ObservableObject {
     private let trialLengthDays: Int = 10
     private let trialStartKey = "PremiumTrialStartDate"
 
+    private var productShortCode: String {
+        let parts = productID.split(separator: ".")
+        return parts.last.map(String.init) ?? productID
+    }
+
     // MARK: - Published state
     @Published var product: Product?
     @Published var isPurchased: Bool = false
     @Published var isPurchasing: Bool = false
     @Published var errorMessage: String?
+    @Published var iapDiagnosticSummary: String? = nil
 
     // Derived entitlement: purchased OR within trial window
     var isPremiumUnlocked: Bool { isPurchased || isInTrial }
@@ -172,7 +178,7 @@ final class PurchaseManager: ObservableObject {
 
     func restorePurchases() async {
         do {
-            try await AppStore.sync()
+            try await StoreKit.AppStore.sync()
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -181,7 +187,7 @@ final class PurchaseManager: ObservableObject {
     // MARK: - Setup
     private func configure() async {
         startTrialIfNeeded()
-        await loadProduct()
+        await loadProductWithRetry()
         await updatePurchasedStatus()
         listenForTransactions()
     }
@@ -200,6 +206,65 @@ final class PurchaseManager: ObservableObject {
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+    
+    @available(iOS 13.4, *)
+    private func currentStorefrontID() async -> String {
+        if #available(iOS 18.0, *) {
+            if let sf = await Storefront.current {
+                // Prefer country code for a short diagnostic label; identifier is also available.
+                return sf.countryCode
+            }
+            return "-"
+        } else {
+            // Fallback for older systems (< iOS 18)
+            if let sf = SKPaymentQueue.default().storefront {
+                // Prefer country code for a short diagnostic label; identifier is also available.
+                return sf.countryCode
+            }
+            return "-"
+        }
+    }
+    
+    private func loadProductWithRetry(maxAttempts: Int = 3, delay: TimeInterval = 1.5) async {
+        self.iapDiagnosticSummary = "IAP: fetching • pid=\(productShortCode)"
+        for attempt in 1...maxAttempts {
+            do {
+                let products = try await Product.products(for: [productID])
+                if let first = products.first {
+                    self.product = first
+                    self.errorMessage = nil
+                    let sf: String = await currentStorefrontID()
+                    self.iapDiagnosticSummary = "IAP: ok • pid=\(productShortCode) • sf=\(sf)"
+                    return
+                } else {
+                    let sf: String = await currentStorefrontID()
+                    self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
+                    // No products returned; will retry after a short delay
+                }
+            } catch {
+                self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let msg: String = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.iapDiagnosticSummary = "IAP: error • pid=\(productShortCode) • \(msg)"
+            }
+            if attempt < maxAttempts {
+                let ns: UInt64 = UInt64(delay * 1_000_000_000.0)
+                try? await Task.sleep(nanoseconds: ns)
+            }
+        }
+        if self.product == nil && self.errorMessage == nil {
+            self.errorMessage = "We couldn’t load purchase information. Please try again."
+        }
+        if self.product == nil {
+            let sf: String = await currentStorefrontID()
+            if self.iapDiagnosticSummary == nil || self.iapDiagnosticSummary?.isEmpty == true {
+                self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
+            }
+        }
+    }
+
+    func reloadProducts() async {
+        await loadProductWithRetry()
     }
 
     private func updatePurchasedStatus() async {

@@ -136,6 +136,24 @@ struct DebtSummaryView: View {
                     }
                 }
                 .task { await load() }
+                
+                .task {
+                    // Hydrate persisted plan state so the subtitle/UI reflects saved values
+                    switch settings.defaultPayoffStrategyRaw {
+                    case "snowball": appliedStrategy = .snowball
+                    case "avalanche": appliedStrategy = .avalanche
+                    default: appliedStrategy = .minimumsOnly
+                    }
+                    if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                        appliedBudget = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                    } else {
+                        appliedBudget = nil
+                    }
+                }
+                .sheet(isPresented: $showPlanSheet) {
+                    planSheetView()
+                }
+                
                 .sheet(isPresented: $showPlanSheet) {
                     planSheetView()
                 }
@@ -368,6 +386,11 @@ struct DebtSummaryView: View {
                 let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let d = parseCurrencyInput(trimmed) {
                     tempMonthlyBudget = formatAmount(d)
+                }
+                // Prefer a saved budget override if present
+                if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                    let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                    tempMonthlyBudget = formatAmount(saved)
                 }
             }
             .onChange(of: focusedField) { _, newValue in
