@@ -38,10 +38,12 @@ struct DebtDashboardView: View {
 
     private enum DebtMode: String, CaseIterable { case debt, planning }
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var liabilities: [Account] = []
     @State private var selection: Account.ID? = nil
     @State private var mode: DebtMode = .debt
-    
+    @State private var showDebtChart: Bool = false
+
     @State private var showPlanSheet = false
     private enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
     @State private var planSheetMode: PlanSheetMode = .incomeBills
@@ -155,13 +157,30 @@ struct DebtDashboardView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                PlanToolbarButton("Summary",fixedWidth: 100) {
-                    showDebtSummary = true
+                Menu {
+                    Button {
+                        showDebtSummary = true
+                    } label: {
+                        Label("Debt Summary", systemImage: "list.bullet.rectangle" )
+                    }
+                    Button {
+                        showDebtChart = true
+                    } label: {
+                        Label("View Debt Chart", systemImage: "chart.line.uptrend.xyaxis")
+                    }
+                    .accessibilityIdentifier("showDebtChartButton")
+                } label: {
+                    PlanMenuLabel(title: "Overview")
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 PlanToolbarButton("Bills") { planSheetMode = .incomeBills; showPlanSheet = true }
             }
+        }
+        .sheet(isPresented: $showDebtChart) {
+            DebtProjectionChartView(items: allCashFlowItems())
+                .environmentObject(settings)
+                .presentationSizing(.page)
         }
     }
 
@@ -224,20 +243,38 @@ struct DebtDashboardView: View {
             .navigationTitle(mode == .debt ? "Debt" : "Planning")
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top) {
-                VStack(spacing: 8) {
-                    Picker("Mode", selection: $mode) {
-                        Text("Debt").tag(DebtMode.debt)
-                        Text("Planning").tag(DebtMode.planning)
+                if verticalSizeClass == .compact {
+                    VStack(spacing: 8) {
+                        Picker("Mode", selection: $mode) {
+                            Text("Debt").tag(DebtMode.debt)
+                            Text("Planning").tag(DebtMode.planning)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                } else {
+                    EmptyView()
                 }
-                .padding(.vertical, 8)
-                .background(.bar)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    PlanToolbarButton("Summary",fixedWidth: 100) { showDebtSummary = true }
+                    Menu {
+                        Button {
+                            showDebtSummary = true
+                        } label: {
+                            Label("Debt Summary", systemImage: "list.bullet.rectangle" )
+                        }
+                        Button {
+                            showDebtChart = true
+                        } label: {
+                            Label("View Debt Chart", systemImage: "chart.line.uptrend.xyaxis")
+                        }
+                        .accessibilityIdentifier("showDebtChartButton")
+                    } label: {
+                        PlanMenuLabel(title: "Overview")
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     PlanToolbarButton("Income/Bills",fixedWidth: 120) { planSheetMode = .incomeBills; showPlanSheet = true }
@@ -250,9 +287,17 @@ struct DebtDashboardView: View {
                 .presentationSizing(.page)
         }
         .fullScreenCover(isPresented: $showDebtSummary, onDismiss: { resetPhoneOrientationToDefault() }) {
-            DebtSummaryLandscapeHost()
+            DebtSummaryView()
                 .environment(\.modelContext, modelContext)
                 .environmentObject(settings)
+        }
+        .fullScreenCover(isPresented: $showDebtChart, onDismiss: { resetPhoneOrientationToDefault() }) {
+//            LandscapeOnly {
+                DebtProjectionChartView(items: allCashFlowItems())
+                    .environment(\.modelContext, modelContext)
+                    .environmentObject(settings)
+                    .ignoresSafeArea()
+//            }
         }
     }
     
@@ -324,7 +369,13 @@ struct DebtDashboardView: View {
             }
         }
     }
-
+    private func allCashFlowItems() -> [CashFlowItem] {
+        do {
+            return try modelContext.fetch(FetchDescriptor<CashFlowItem>())
+        } catch {
+            return []
+        }
+    }
     private struct IncomeBillsSummarySheetContent: View {
         @Environment(\.modelContext) private var modelContext
         @Query(sort: \CashFlowItem.createdAt, order: .reverse) private var items: [CashFlowItem]

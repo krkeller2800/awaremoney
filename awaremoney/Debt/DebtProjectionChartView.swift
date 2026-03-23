@@ -15,6 +15,8 @@ struct DebtProjectionChartView: View {
     
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
@@ -27,6 +29,7 @@ struct DebtProjectionChartView: View {
     @State private var requiredMinimumForBudget: Decimal? = nil
     @State private var isEditingBudgetAmount: Bool = false
     @FocusState private var amountFieldFocused: Bool
+    @State private var headerHeight: CGFloat = 0
     
     init(items: [CashFlowItem]) {
         self.items = items
@@ -34,6 +37,13 @@ struct DebtProjectionChartView: View {
     }
     
     var body: some View {
+        NavigationStack {
+#if os(iOS)
+        let topComp: CGFloat = (horizontalSizeClass == .compact ? 0 : 0)
+#else
+        let topComp: CGFloat = 0
+#endif
+        GeometryReader { proxy in
         let monthlyNet = calculateMonthlyNet()
         
         // Precompute data outside of the Chart closure to help the type-checker
@@ -54,113 +64,125 @@ struct DebtProjectionChartView: View {
         }()
         
         VStack(alignment: .leading) {
-            HStack {
-                Button {
-                    if let prev = previousAvailableYear(from: selectedYear, minYear: minSelectableYear) {
-                        selectedYear = prev
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .accessibilityLabel("Previous year")
-                .disabled(previousAvailableYear(from: selectedYear, minYear: minSelectableYear) == nil)
-                
-                Spacer()
-                
-                Text(String(selectedYear))
-                    .font(.headline)
-                    .accessibilityAddTraits(.isHeader)
-                
-                Spacer()
-                
-                Button {
-                    selectedYear += 1
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .accessibilityLabel("Next year")
-            }
-            .padding(.horizontal)
-            .padding(.top)
-            
-            Text("Budget: \(formatCurrencyDecimal(effectiveBudget(for: monthlyNet, strategy: selectedStrategy))) • Strategy: \(strategyDisplayName(selectedStrategy))")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-                .padding(.bottom, 6)
-
-            VStack(spacing: 8) {
-                Picker("Strategy", selection: $selectedStrategy) {
-                    Text("Minimums only").tag(PayoffStrategy.minimumsOnly)
-                    Text("Snowball").tag(PayoffStrategy.snowball)
-                    Text("Avalanche").tag(PayoffStrategy.avalanche)
-                }
-                .pickerStyle(.segmented)
-                .accessibilityLabel("Payoff strategy")
-
-                HStack(spacing: 8) {
-                    // Leading label
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Use custom budget amount")
-                            .lineLimit(1)
-                        Text("Otherwise uses income minus bills")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    // Toggle directly after the label
-                    Toggle("", isOn: $useFixedDebtBudget)
-                        .labelsHidden()
-                        .fixedSize()
-                        .accessibilityLabel("Use custom budget amount")
-                        .accessibilityHint("When off, the app uses your income minus bills as the budget.")
-                    Spacer()
-                    // Inline validation shown between the toggle and the amount field
-                    if useFixedDebtBudget, let min = requiredMinimumForBudget {
-                        Text("Minimum required: \(formatCurrencyDecimal(min))")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .lineLimit(1)
-                            .layoutPriority(1)
-                            .minimumScaleFactor(0.75)
-                    }
-
-                    Spacer()
-
-                    // Trailing amount area that maintains constant width across toggle states
-                    ZStack(alignment: .trailing) {
-                        // Editable amount UI (shown when toggle is on)
-                        Group {
-#if os(iOS)
-                            CurrencyTextField(placeholder: "Amount", value: $debtBudgetOverrideAmount, currencyCode: settings.currencyCode, selectionTrigger: $amountSelectionTrigger, isEditing: $isEditingBudgetAmount)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .frame(height: 36)
-#else
-                            TextField("Amount", value: $debtBudgetOverrideAmount, format: .currency(code: settings.currencyCode))
-                                .focused($amountFieldFocused)
-                                .fixedSize(horizontal: true, vertical: false)
-#endif
+            VStack(alignment: .leading) {
+                HStack {
+                    Button {
+                        if let prev = previousAvailableYear(from: selectedYear, minYear: minSelectableYear) {
+                            selectedYear = prev
                         }
-                        .opacity(useFixedDebtBudget ? 1 : 0)
-                        .allowsHitTesting(useFixedDebtBudget)
-                        .accessibilityHidden(!useFixedDebtBudget)
-
-                        // Automatic budget text (shown when toggle is off)
-                        Text(formatCurrencyDecimal(monthlyNet))
-                            .foregroundStyle(.secondary)
-                            .accessibilityLabel("Automatic budget")
-                            .accessibilityValue(formatCurrencyDecimal(monthlyNet))
-                            .opacity(useFixedDebtBudget ? 0 : 1)
-                            .allowsHitTesting(!useFixedDebtBudget)
-                            .accessibilityHidden(useFixedDebtBudget)
-                            .fixedSize(horizontal: true, vertical: false)
+                    } label: {
+                        Image(systemName: "chevron.left")
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityLabel("Previous year")
+                    .disabled(previousAvailableYear(from: selectedYear, minYear: minSelectableYear) == nil)
+                    
+                    Spacer()
+                    
+                    Text(String(selectedYear))
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    
+                    Spacer()
+                    
+                    Button {
+                        selectedYear += 1
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .accessibilityLabel("Next year")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                
+                Text("Budget: \(formatCurrencyDecimal(effectiveBudget(for: monthlyNet, strategy: selectedStrategy))) • Strategy: \(strategyDisplayName(selectedStrategy))")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+
+                VStack(spacing: 8) {
+                    Picker("Strategy", selection: $selectedStrategy) {
+                        Text("Minimums only").tag(PayoffStrategy.minimumsOnly)
+                        Text("Snowball").tag(PayoffStrategy.snowball)
+                        Text("Avalanche").tag(PayoffStrategy.avalanche)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Payoff strategy")
+
+                    HStack(spacing: 8) {
+                        // Leading label
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Use custom budget amount")
+                                .lineLimit(1)
+                            Text("Otherwise uses income minus bills")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        // Toggle directly after the label
+                        Toggle("", isOn: $useFixedDebtBudget)
+                            .labelsHidden()
+                            .fixedSize()
+                            .accessibilityLabel("Use custom budget amount")
+                            .accessibilityHint("When off, the app uses your income minus bills as the budget.")
+                        Spacer()
+                        // Inline validation shown between the toggle and the amount field
+                        if useFixedDebtBudget, let min = requiredMinimumForBudget {
+                            Text("Minimum required: \(formatCurrencyDecimal(min))")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                                .minimumScaleFactor(0.75)
+                        }
+
+                        Spacer()
+
+                        // Trailing amount area that maintains constant width across toggle states
+                        ZStack(alignment: .trailing) {
+                            // Editable amount UI (shown when toggle is on)
+                            Group {
+    #if os(iOS)
+                                CurrencyTextField(placeholder: "Amount", value: $debtBudgetOverrideAmount, currencyCode: settings.currencyCode, selectionTrigger: $amountSelectionTrigger, isEditing: $isEditingBudgetAmount)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(height: 36)
+    #else
+                                TextField("Amount", value: $debtBudgetOverrideAmount, format: .currency(code: settings.currencyCode))
+                                    .focused($amountFieldFocused)
+                                    .fixedSize(horizontal: true, vertical: false)
+    #endif
+                            }
+                            .opacity(useFixedDebtBudget ? 1 : 0)
+                            .allowsHitTesting(useFixedDebtBudget)
+                            .accessibilityHidden(!useFixedDebtBudget)
+
+                            // Automatic budget text (shown when toggle is off)
+                            Text(formatCurrencyDecimal(monthlyNet))
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Automatic budget")
+                                .accessibilityValue(formatCurrencyDecimal(monthlyNet))
+                                .opacity(useFixedDebtBudget ? 0 : 1)
+                                .allowsHitTesting(!useFixedDebtBudget)
+                                .accessibilityHidden(useFixedDebtBudget)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if !(UIDevice.type == "iPhone") {
+                        DebtStrategyInfoView()
+                            .padding()
+                    }
+                }
             }
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
+                }
+            )
+            .onPreferenceChange(ViewHeightKey.self) { headerHeight = $0 }
             let yMax = max(((actualPoints + projectedPoints).map(\.value).max() ?? 0.0), 1.0)
+            let chartHeight = max(120, proxy.size.height - headerHeight - topComp - 16 - proxy.safeAreaInsets.bottom - 60)
             Chart {
                 RuleMark(y: .value("Zero", 0))
                     .lineStyle(StrokeStyle(lineWidth: 1))
@@ -277,7 +299,7 @@ struct DebtProjectionChartView: View {
             }
             .chartLegend(.hidden)
             .padding(.horizontal)
-            .frame(minHeight: 200)
+            .frame(height: chartHeight)
             if !actualPoints.isEmpty || !projectedPoints.isEmpty {
                 HStack(spacing: 16) {
                     HStack(spacing: 6) {
@@ -301,10 +323,42 @@ struct DebtProjectionChartView: View {
                 .padding(.horizontal)
                 .padding(.top, 4)
             }
+#if os(iOS)
+            // iPhone portrait hint — match DebtSummaryView
+            if UIDevice.current.userInterfaceIdiom == .phone && proxy.size.height > proxy.size.width {
+                HStack(spacing: 6) {
+                    Image(systemName: "rotate.left")
+                    Text("Best viewed in landscape")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .background(.thinMaterial, in: Capsule())
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 8)
+            }
+#endif
+        }
+        .padding(.top, topComp)
         }
         .onAppear {
             // Initialize from current settings when the view appears
             selectedStrategy = defaultStrategy
+
+            // Compute current year and minimum selectable year locally for this scope
+            let now = Date()
+            let calendar = Calendar.current
+            let nowYear = calendar.component(.year, from: now)
+            let minSelectableYear: Int = {
+                let years = yearsWithLiabilityData()
+                if let minYear = years.min() {
+                    return minYear
+                } else {
+                    return nowYear
+                }
+            }()
+
             if selectedYear < minSelectableYear {
                 selectedYear = minSelectableYear
             }
@@ -326,6 +380,38 @@ struct DebtProjectionChartView: View {
             case .avalanche:
                 settings.defaultPayoffStrategyRaw = "avalanche"
             }
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                PlanToolbarButton("Done",fixedWidth: 65) {
+                    dismiss()
+                }
+                .accessibilityLabel("Done")
+                .accessibilityHint("Dismiss")
+            }
+#if !os(iOS)
+            ToolbarItem(placement: .confirmationAction) {
+                if amountFieldFocused {
+                    Button {
+                        // Finalize the edit and remove focus
+                        amountFieldFocused = false
+                    } label: {
+                        Label("Done", systemImage: "checkmark.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .accessibilityLabel("Done")
+                    .accessibilityHint("Finalize the amount and dismiss editing")
+                }
+            }
+#endif
+        }
+        .navigationTitle("Debt Chart")
+#if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+#endif
+#if os(iOS)
+//        .presentationDragIndicator(.visible)
+#endif
         }
     }
     
@@ -792,6 +878,13 @@ struct DebtProjectionChartView: View {
     }
 }
 
+private struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private extension Decimal {
     /// Rounds the decimal to the specified scale using plain rounding mode
     func rounded(scale: Int, mode: NSDecimalNumber.RoundingMode = .plain) -> Decimal {
@@ -826,6 +919,18 @@ struct CurrencyTextField: UIViewRepresentable {
         tf.setContentCompressionResistancePriority(.required, for: .horizontal)
         tf.setContentHuggingPriority(.required, for: .vertical)
         tf.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        // Keep a reference to the text field in the coordinator
+        context.coordinator.textField = tf
+
+        // Add an input accessory toolbar with a trailing checkmark to finalize and dismiss
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(image: UIImage(systemName: "checkmark.circle.fill"), style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
+        done.accessibilityLabel = "Done"
+        toolbar.items = [flex, done]
+        tf.inputAccessoryView = toolbar
 
         return tf
     }
@@ -874,6 +979,7 @@ struct CurrencyTextField: UIViewRepresentable {
         var isEditing: Bool = false
         var lastSelectionTrigger: Int = 0
         var isEditingBinding: Binding<Bool>
+        weak var textField: UITextField?
 
         init(valueBinding: Binding<Double>, currencyCode: String, isEditingBinding: Binding<Bool>) {
             self.valueBinding = valueBinding
@@ -902,6 +1008,20 @@ struct CurrencyTextField: UIViewRepresentable {
             isEditingBinding.wrappedValue = false
             // Reformat to currency when editing ends
             textField.text = format(value: valueBinding.wrappedValue, currencyCode: currencyCode)
+        }
+
+        @objc func doneTapped() {
+            if let tf = textField {
+                if let text = tf.text, let number = parse(text: text, currencyCode: currencyCode) {
+                    valueBinding.wrappedValue = number
+                }
+                isEditing = false
+                isEditingBinding.wrappedValue = false
+                tf.resignFirstResponder()
+                tf.text = format(value: valueBinding.wrappedValue, currencyCode: currencyCode)
+            } else {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
         }
 
         func format(value: Double, currencyCode: String) -> String {

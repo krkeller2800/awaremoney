@@ -72,6 +72,7 @@ final class PurchaseManager: ObservableObject {
     @Published var isPurchasing: Bool = false
     @Published var errorMessage: String?
     @Published var iapDiagnosticSummary: String? = nil
+    @Published var userMessage: String? = nil
 
     // Derived entitlement: purchased OR within trial window
     var isPremiumUnlocked: Bool { isPurchased || isInTrial }
@@ -179,6 +180,12 @@ final class PurchaseManager: ObservableObject {
     func restorePurchases() async {
         do {
             try await StoreKit.AppStore.sync()
+            await updatePurchasedStatus()
+            if isPurchased {
+                self.userMessage = "Your Premium purchase is already active on this device."
+            } else {
+                self.userMessage = "No previous purchases were found for your Apple ID."
+            }
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

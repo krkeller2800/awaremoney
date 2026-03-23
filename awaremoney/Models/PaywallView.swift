@@ -5,6 +5,18 @@ struct PaywallView: View {
     @EnvironmentObject var purchases: PurchaseManager
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showLongPurchaseHint = false
+    
+    private var isActivelyLoading: Bool {
+        // Only show the spinner during initial/active load when no product is available
+        // and there is no known error/empty diagnostic yet.
+        if purchases.product != nil { return false }
+        let diag = purchases.iapDiagnosticSummary?.lowercased() ?? ""
+        let hasKnownFailure = diag.contains("error") || diag.contains("empty")
+        let hasError = purchases.errorMessage != nil
+        return !(hasKnownFailure || hasError)
+    }
+
     var body: some View {
         VStack(spacing: 20) {
             header
@@ -15,8 +27,24 @@ struct PaywallView: View {
         }
         .padding()
         .presentationDetents([.medium, .large])
+        .task {
+            if purchases.product == nil {
+                await purchases.reloadProducts()
+            }
+        }
         .onChange(of: purchases.isPremiumUnlocked) { _, newValue in
             if newValue { dismiss() }
+        }
+        .onChange(of: purchases.isPurchasing) { _, purchasing in
+            showLongPurchaseHint = false
+            if purchasing {
+                Task {
+                    try? await Task.sleep(nanoseconds: 12_000_000_000) // ~12 seconds
+                    if purchases.isPurchasing {
+                        showLongPurchaseHint = true
+                    }
+                }
+            }
         }
         .alert(item: Binding(get: { purchases.errorMessage.map { IdentifiedError(message: $0) } }, set: { _ in purchases.errorMessage = nil })) { item in
             Alert(title: Text("Error"), message: Text(item.message), dismissButton: .default(Text("OK")))
@@ -80,12 +108,22 @@ struct PaywallView: View {
                 .disabled(purchases.isPurchasing || purchases.isPurchased)
             } else {
                 VStack(spacing: 8) {
-                    ProgressView("Loading…")
+                    if isActivelyLoading {
+                        ProgressView("Contacting the App Store…")
+                    } else {
+                        Label("We couldn’t load purchase information.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("You can try again or restore purchases if you previously bought Premium.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                     Button("Try Again") {
                         Task { await purchases.reloadProducts() }
                     }
                     .buttonStyle(.bordered)
                     .disabled(purchases.isPurchasing)
+
                     if let diag = purchases.iapDiagnosticSummary {
                         Text(diag)
                             .font(.footnote)
@@ -111,6 +149,12 @@ struct PaywallView: View {
 
     private var footer: some View {
         VStack(spacing: 6) {
+            if showLongPurchaseHint {
+                Label("This is taking longer than expected. If the App Store sheet is spinning, cancel and try again, or tap Restore Purchases if you already bought Premium.", systemImage: "hourglass")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             Text("Includes a 10-day free trial. After the trial, a one-time purchase is required to continue using premium features.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)

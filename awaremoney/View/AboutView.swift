@@ -77,6 +77,7 @@ struct AboutView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(purchases.isPurchased)
                     }
                     .padding(.top, 10)
 

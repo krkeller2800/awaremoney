@@ -32,7 +32,6 @@ struct DebtSummaryView: View {
     @State private var showPlanSheet = false
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
-    @State private var showDebtChart: Bool = false
     @State private var tempPlanDate: Date = {
         Calendar.current.date(byAdding: .month, value: 12, to: Date()) ?? Date()
     }()
@@ -75,6 +74,21 @@ struct DebtSummaryView: View {
 //                let toolbarCompact = !((hSizeClass == .regular) && proxy.size.width >= 844)
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
+                        // Portrait hint for iPhone
+                        if isPhone && isPortrait {
+                            HStack(spacing: 6) {
+                                Image(systemName: "rotate.left")
+                                Text("Best viewed in landscape")
+                            }
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 10)
+                            .background(.thinMaterial, in: Capsule())
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.bottom, compact ? 6 : 8)
+                        }
+                        
                         if isPortrait && proxy.size.width < 844 {
                             let paddingH: CGFloat = compact ? 6 : 12
                             let contentWidth: CGFloat = 844 - 2 * paddingH
@@ -111,22 +125,9 @@ struct DebtSummaryView: View {
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Menu {
-                            Button {
-                                showPlanSheet = true
-                            } label: {
-                                Label("Set Strategy", systemImage: "puzzlepiece")
-                            }
-                            Button {
-                                showDebtChart = true
-                            } label: {
-                                Label("View Debt Chart", systemImage: "chart.line.uptrend.xyaxis")
-                            }
-                            .accessibilityIdentifier("showDebtChartButton")
-                        } label: {
-                            PlanMenuLabel(title: "Plan")
-                        }
-                        .accessibilityIdentifier("planByDateButton")
+                        PlanToolbarButton("Strategy", fixedWidth: 90) {
+                            showPlanSheet = true
+                        } 
                     }
                     ToolbarItem(placement: .topBarLeading) {
                         PlanToolbarButton("Done", fixedWidth: 60) {
@@ -151,24 +152,13 @@ struct DebtSummaryView: View {
                     }
                 }
                 .sheet(isPresented: $showPlanSheet) {
-                    planSheetView()
-                }
-                
-                .sheet(isPresented: $showPlanSheet) {
-                    planSheetView()
-                }
-                .sheet(isPresented: $showDebtChart) {
-                    DebtProjectionChartView(items: allCashFlowItems())
-                        .environmentObject(settings)
+                    AnyViewContainer(view: planSheetView())
                 }
 //                .onChange(of: showPlanSheet) { _, newValue in
 //                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
 //                }
             }
         }
-        #if canImport(UIKit)
-        .landscapeOnlyOnPhone()
-        #endif
     }
 
     // Dynamic column widths that scale to fill available width
@@ -232,330 +222,343 @@ struct DebtSummaryView: View {
         }
     }
 
-    private func planSheetView() -> some View {
-        NavigationStack {
-            List {
-                Section {
-                    DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .onChange(of: tempPlanDate) { _, newValue in
-                            let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
-                            tempPlanMode = isToday ? .currentInputs : .projectedAtDate
-                        }
-                } footer: {
-                    Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Section("Mode") {
-                    Picker("Start mode", selection: $tempPlanMode) {
-                        Text("Start now").tag(PlanMode.currentInputs)
-                        Text("Start on date").tag(PlanMode.projectedAtDate)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: tempPlanMode) { _, newValue in
-                        if newValue == .currentInputs {
-                            tempPlanDate = Date()
-                        }
-                    }
-                }
-                Section("Strategy") {
-                    Picker("Strategy", selection: $tempStrategy) {
-                        Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
-                        Text("Snowball").tag(PayoffStrategy.snowball)
-                        Text("Avalanche").tag(PayoffStrategy.avalanche)
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section {
-                    LabeledContent("Monthly budget") {
-                        TextField(
-                            "$0.00",
-                            text: Binding<String>(
-                                get: {
-                                    let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    if trimmed.isEmpty { return "" }
-                                    if let value = parseCurrencyInput(trimmed) {
-                                        return formatAmount(value)
-                                    } else {
-                                        return trimmed
-                                    }
-                                },
-                                set: { newValue in
-                                    // Always store a cleaned numeric string so parsing stays stable
-                                    let filtered = newValue
-                                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                                        .replacingOccurrences(of: "$", with: "")
-                                        .replacingOccurrences(of: ",", with: "")
-                                    tempMonthlyBudget = filtered
-                                }
-                            )
-                        )
-                        .multilineTextAlignment(.trailing)
-                        .keyboardType(.decimalPad)
-                        .focused($focusedField, equals: .monthlyBudget)
-                        .submitLabel(.done)
-                        .onSubmit {
-                            commitAndDismissKeyboard()
-                        }
-                        .highPriorityGesture(
-                            TapGesture().onEnded {
-                                focusedField = .monthlyBudget
-                                selectAllInFirstResponder()
+    private func planSheetView() -> AnyView {
+        AnyView(
+            NavigationStack {
+                List {
+                    Section {
+                        DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                            .onChange(of: tempPlanDate) { _, newValue in
+                                let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
+                                tempPlanMode = isToday ? .currentInputs : .projectedAtDate
                             }
-                        )
-                        .onChange(of: tempMonthlyBudget) { _, newValue in
-                            // Normalize to a valid numeric string or empty
-                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if trimmed.isEmpty { return }
-                            if parseCurrencyInput(trimmed) == nil {
-                                // If not parsable, keep as-is to allow user to correct
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Payoff Plan")
-                } footer: {
-                    Group {
-                        Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
+                    } footer: {
+                        Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        if let error = budgetValidationError {
-                            Text(error)
+                    }
+                    Section("Mode") {
+                        Picker("Start mode", selection: $tempPlanMode) {
+                            Text("Start now").tag(PlanMode.currentInputs)
+                            Text("Start on date").tag(PlanMode.projectedAtDate)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: tempPlanMode) { _, newValue in
+                            if newValue == .currentInputs {
+                                tempPlanDate = Date()
+                            }
+                        }
+                    }
+                    Section("Strategy") {
+                        Picker("Strategy", selection: $tempStrategy) {
+                            Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
+                            Text("Snowball").tag(PayoffStrategy.snowball)
+                            Text("Avalanche").tag(PayoffStrategy.avalanche)
+                        }
+                        .pickerStyle(.segmented)
+
+                        // Shared, toggleable explanation (starts closed by default)
+                        DebtStrategyInfoView()
+                    }
+                    //footer: {
+                      //  AnyView(DebtStrategyInfoView(useDisclosureStyle: false, userCanToggle: false, title: "Debt strategies"))
+                   // }
+                    Section {
+                        LabeledContent("Monthly budget") {
+                            TextField(
+                                "$0.00",
+                                text: Binding<String>(
+                                    get: {
+                                        let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if trimmed.isEmpty { return "" }
+                                        if let value = parseCurrencyInput(trimmed) {
+                                            return formatAmount(value)
+                                        } else {
+                                            return trimmed
+                                        }
+                                    },
+                                    set: { newValue in
+                                        // Always store a cleaned numeric string so parsing stays stable
+                                        let filtered = newValue
+                                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                                            .replacingOccurrences(of: "$", with: "")
+                                            .replacingOccurrences(of: ",", with: "")
+                                        tempMonthlyBudget = filtered
+                                    }
+                                )
+                            )
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .monthlyBudget)
+                            .submitLabel(.done)
+                            .onSubmit {
+                                commitAndDismissKeyboard()
+                            }
+                            .highPriorityGesture(
+                                TapGesture().onEnded {
+                                    focusedField = .monthlyBudget
+                                    selectAllInFirstResponder()
+                                }
+                            )
+                            .onChange(of: tempMonthlyBudget) { _, newValue in
+                                // Normalize to a valid numeric string or empty
+                                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if trimmed.isEmpty { return }
+                                if parseCurrencyInput(trimmed) == nil {
+                                    // If not parsable, keep as-is to allow user to correct
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Payoff Plan")
+                    } footer: {
+                        Group {
+                            Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
                                 .font(.footnote)
-                                .foregroundStyle(.red)
-                        }
-                    }
-                }
-                
-                Section("Income & Bills") {
-                    NavigationLink("Manage Income & Bills") {
-                        IncomeAndBillsView()
-                    }
-                    LabeledContent("Monthly Income") {
-                        Text(formatAmount(computedMonthlyIncome))
-                    }
-                    LabeledContent("Monthly Bills") {
-                        Text(formatAmount(computedMonthlyBills))
-                    }
-                    LabeledContent("Net for Debt") {
-                        Text(formatAmount(computedMonthlyNet))
-                    }
-                    Button("Use Net as Budget") {
-                        if computedMonthlyNet > 0 {
-                            tempMonthlyBudget = formatAmount(computedMonthlyNet)
-                        }
-                    }
-                    .disabled(computedMonthlyNet <= 0)
-                }
-                
-                Section("Current Plan") {
-                    if tempPlanMode == .projectedAtDate {
-                        HStack(spacing: 4) {
-                            Text("Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
-                            Text("• \(tempStrategyDisplay)\(tempBudgetText)")
-                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        HStack(spacing: 4) {
-                            Text("Start now")
-                            Text("• \(tempStrategyDisplay)\(tempBudgetText)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Strategy start")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                // Prefill strategy
-                switch settings.defaultPayoffStrategyRaw {
-                case "snowball": tempStrategy = .snowball
-                case "avalanche": tempStrategy = .avalanche
-                default: tempStrategy = .minimumsOnly
-                }
-                // Prefill budget with Net for Debt if enabled
-                if settings.useNetForDebtBudgetDefault {
-                    let net = computedMonthlyNet
-                    if net > 0 { tempMonthlyBudget = formatAmount(net) }
-                }
-                // Ensure any prefilled numeric budget is formatted to the user's currency
-                let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let d = parseCurrencyInput(trimmed) {
-                    tempMonthlyBudget = formatAmount(d)
-                }
-                // Prefer a saved budget override if present
-                if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
-                    let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
-                    tempMonthlyBudget = formatAmount(saved)
-                }
-            }
-            .onChange(of: focusedField) { _, newValue in
-                if newValue == .monthlyBudget {
-                    selectAllInFirstResponder()
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    PlanToolbarButton("Set Plan") {
-                        budgetValidationError = nil
-                        let parsedBudget: Decimal? = {
-                            if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                return nil
-                            } else {
-                                return parseCurrencyInput(tempMonthlyBudget)
+                            if let error = budgetValidationError {
+                                Text(error)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
                             }
-                        }()
-                        if tempStrategy != .minimumsOnly && parsedBudget == nil {
-                            budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
-                            planErrorMessage = "Please enter a valid budget amount or select the Minimums Only strategy."
-                            showPlanErrorAlert = true
-                            return
                         }
-                        appliedPlanMode = tempPlanMode
-                        appliedPlanDate = (tempPlanMode == .projectedAtDate) ? tempPlanDate : nil
-                        appliedStrategy = tempStrategy
-                        appliedBudget = parsedBudget
-                        
-                        let filteredAccounts = accounts.filter { acct in
-                            let baseBal = absDecimal(latestBalance(acct))
-                            let bal: Decimal = {
-                                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
-                                    return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
-                                } else {
-                                    return baseBal
-                                }
-                            }()
-                            return bal > 0
+                    }
+                    
+                    Section("Income & Bills") {
+                        NavigationLink("Manage Income & Bills") {
+                            IncomeAndBillsView()
                         }
-                        
-                        let debts: [Debt] = filteredAccounts.map { acct in
-                            let baseBal = absDecimal(latestBalance(acct))
-                            let bal: Decimal = {
-                                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
-                                    return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
-                                } else {
-                                    return baseBal
-                                }
-                            }()
-                            let minPayment = monthlyPayment(for: acct, balance: bal)
-                            return Debt(
-                                id: acct.id,
-                                name: acct.name,
-                                balance: bal,
-                                apr: acct.loanTerms?.apr,
-                                minPayment: minPayment
-                            )
+                        LabeledContent("Monthly Income") {
+                            Text(formatAmount(computedMonthlyIncome))
                         }
-
-                        let budgetToUse: Decimal
-                        if appliedStrategy == .minimumsOnly {
-                            budgetToUse = debts.reduce(0) { $0 + $1.minPayment }
+                        LabeledContent("Monthly Bills") {
+                            Text(formatAmount(computedMonthlyBills))
+                        }
+                        LabeledContent("Net for Debt") {
+                            Text(formatAmount(computedMonthlyNet))
+                        }
+                        Button("Use Net as Budget") {
+                            if computedMonthlyNet > 0 {
+                                tempMonthlyBudget = formatAmount(computedMonthlyNet)
+                            }
+                        }
+                        .disabled(computedMonthlyNet <= 0)
+                    }
+                    
+                    Section("Current Plan") {
+                        if tempPlanMode == .projectedAtDate {
+                            HStack(spacing: 4) {
+                                Text("Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
+                                Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
-                            budgetToUse = appliedBudget ?? 0
-                        }
-
-                        let debtInputs: [DebtInput] = debts.map { d in
-                            DebtInput(
-                                id: d.id,
-                                name: d.name,
-                                apr: d.apr,
-                                balance: d.balance,
-                                minPayment: d.minPayment
-                            )
-                        }
-                        let startDateForPlan = normalizeToMonth(
-                            appliedPlanMode == .projectedAtDate ? (appliedPlanDate ?? Date()) : Date()
-                        )
-                        do {
-                            let planResult = try DebtPayoffEngine.plan(
-                                debts: debtInputs,
-                                monthlyBudget: budgetToUse,
-                                strategy: appliedStrategy,
-                                startDate: startDateForPlan
-                            )
-                            currentPlan = planResult
-                            // Persist selections for DebtProjectionChartView
-                            switch appliedStrategy {
-                            case .minimumsOnly:
-                                settings.defaultPayoffStrategyRaw = "minimumsOnly"
-                                useFixedDebtBudget = false
-                                debtBudgetOverrideAmount = 0
-                            case .snowball:
-                                settings.defaultPayoffStrategyRaw = "snowball"
-                                if let b = appliedBudget, b > 0 {
-                                    useFixedDebtBudget = true
-                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
-                                } else {
-                                    useFixedDebtBudget = false
-                                    debtBudgetOverrideAmount = 0
-                                }
-                            case .avalanche:
-                                settings.defaultPayoffStrategyRaw = "avalanche"
-                                if let b = appliedBudget, b > 0 {
-                                    useFixedDebtBudget = true
-                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
-                                } else {
-                                    useFixedDebtBudget = false
-                                    debtBudgetOverrideAmount = 0
-                                }
+                            HStack(spacing: 4) {
+                                Text("Start now")
+                                Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            showPlanSheet = false
-                        } catch DebtPlanError.infeasibleBudget {
-                            budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
-                            planErrorMessage = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
-                            showPlanErrorAlert = true
-                        } catch {
-                            budgetValidationError = "An unexpected error occurred."
-                            planErrorMessage = "An unexpected error occurred."
-                            showPlanErrorAlert = true
                         }
                     }
                 }
-                ToolbarItem(placement: .cancellationAction) {
-                    PlanToolbarButton("Cancel",fixedWidth: 70) {
-                        appliedPlanDate = nil
-                        appliedPlanMode = .currentInputs
-                        appliedStrategy = .minimumsOnly
-                        appliedBudget = nil
-                        tempPlanDate = Date()
-                        tempPlanMode = .currentInputs
-                        tempStrategy = .minimumsOnly
-                        tempMonthlyBudget = ""
-                        budgetValidationError = nil
-                        currentPlan = nil
-                        showPlanSheet = false
-                        showPlanErrorAlert = false
-                        planErrorMessage = nil
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle("Strategy start")
+                .navigationBarTitleDisplayMode(.inline)
+                .onAppear {
+                    // Prefill strategy
+                    switch settings.defaultPayoffStrategyRaw {
+                    case "snowball": tempStrategy = .snowball
+                    case "avalanche": tempStrategy = .avalanche
+                    default: tempStrategy = .minimumsOnly
+                    }
+                    // Prefill budget with Net for Debt if enabled
+                    if settings.useNetForDebtBudgetDefault {
+                        let net = computedMonthlyNet
+                        if net > 0 { tempMonthlyBudget = formatAmount(net) }
+                    }
+                    // Ensure any prefilled numeric budget is formatted to the user's currency
+                    let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let d = parseCurrencyInput(trimmed) {
+                        tempMonthlyBudget = formatAmount(d)
+                    }
+                    // Prefer a saved budget override if present
+                    if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                        let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                        tempMonthlyBudget = formatAmount(saved)
                     }
                 }
-            }
-            .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(planErrorMessage ?? "")
-            }
-            .safeAreaInset(edge: .bottom) {
-                Group {
-                    if isEditing {
-                        EditingAccessoryBar(
-                            canGoPrevious: canGoPrevious,
-                            canGoNext: canGoNext,
-                            onPrevious: { moveFocus(-1) },
-                            onNext: { moveFocus(1) },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else {
-                        EmptyView().frame(height: 0)
+                .onChange(of: focusedField) { _, newValue in
+                    if newValue == .monthlyBudget {
+                        selectAllInFirstResponder()
                     }
                 }
-                .animation(.snappy, value: isEditing)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        PlanToolbarButton("Set Plan") {
+                            budgetValidationError = nil
+                            let parsedBudget: Decimal? = {
+                                if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    return nil
+                                } else {
+                                    return parseCurrencyInput(tempMonthlyBudget)
+                                }
+                            }()
+                            if tempStrategy != .minimumsOnly && parsedBudget == nil {
+                                budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
+                                planErrorMessage = "Please enter a valid budget amount or select the Minimums Only strategy."
+                                showPlanErrorAlert = true
+                                return
+                            }
+                            appliedPlanMode = tempPlanMode
+                            appliedPlanDate = (tempPlanMode == .projectedAtDate) ? tempPlanDate : nil
+                            appliedStrategy = tempStrategy
+                            appliedBudget = parsedBudget
+                            
+                            let filteredAccounts = accounts.filter { acct in
+                                let baseBal = absDecimal(latestBalance(acct))
+                                let bal: Decimal = {
+                                    if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                                        return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
+                                    } else {
+                                        return baseBal
+                                    }
+                                }()
+                                return bal > 0
+                            }
+                            
+                            let debts: [Debt] = filteredAccounts.map { acct in
+                                let baseBal = absDecimal(latestBalance(acct))
+                                let bal: Decimal = {
+                                    if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
+                                        return absProjectedOrBase(for: acct, planDate: plan, base: baseBal)
+                                    } else {
+                                        return baseBal
+                                    }
+                                }()
+                                let minPayment = monthlyPayment(for: acct, balance: bal)
+                                return Debt(
+                                    id: acct.id,
+                                    name: acct.name,
+                                    balance: bal,
+                                    apr: acct.loanTerms?.apr,
+                                    minPayment: minPayment
+                                )
+                            }
+
+                            let budgetToUse: Decimal
+                            if appliedStrategy == .minimumsOnly {
+                                budgetToUse = debts.reduce(0) { $0 + $1.minPayment }
+                            } else {
+                                budgetToUse = appliedBudget ?? 0
+                            }
+
+                            let debtInputs: [DebtInput] = debts.map { d in
+                                DebtInput(
+                                    id: d.id,
+                                    name: d.name,
+                                    apr: d.apr,
+                                    balance: d.balance,
+                                    minPayment: d.minPayment
+                                )
+                            }
+                            let startDateForPlan = normalizeToMonth(
+                                appliedPlanMode == .projectedAtDate ? (appliedPlanDate ?? Date()) : Date()
+                            )
+                            do {
+                                let planResult = try DebtPayoffEngine.plan(
+                                    debts: debtInputs,
+                                    monthlyBudget: budgetToUse,
+                                    strategy: appliedStrategy,
+                                    startDate: startDateForPlan
+                                )
+                                currentPlan = planResult
+                                // Persist selections for DebtProjectionChartView
+                                switch appliedStrategy {
+                                case .minimumsOnly:
+                                    settings.defaultPayoffStrategyRaw = "minimumsOnly"
+                                    useFixedDebtBudget = false
+                                    debtBudgetOverrideAmount = 0
+                                case .snowball:
+                                    settings.defaultPayoffStrategyRaw = "snowball"
+                                    if let b = appliedBudget, b > 0 {
+                                        useFixedDebtBudget = true
+                                        debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                                    } else {
+                                        useFixedDebtBudget = false
+                                        debtBudgetOverrideAmount = 0
+                                    }
+                                case .avalanche:
+                                    settings.defaultPayoffStrategyRaw = "avalanche"
+                                    if let b = appliedBudget, b > 0 {
+                                        useFixedDebtBudget = true
+                                        debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                                    } else {
+                                        useFixedDebtBudget = false
+                                        debtBudgetOverrideAmount = 0
+                                    }
+                                }
+                                showPlanSheet = false
+                            } catch DebtPlanError.infeasibleBudget {
+                                budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
+                                planErrorMessage = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
+                                showPlanErrorAlert = true
+                            } catch {
+                                budgetValidationError = "An unexpected error occurred."
+                                planErrorMessage = "An unexpected error occurred."
+                                showPlanErrorAlert = true
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        PlanToolbarButton("Cancel",fixedWidth: 70) {
+                            appliedPlanDate = nil
+                            appliedPlanMode = .currentInputs
+                            appliedStrategy = .minimumsOnly
+                            appliedBudget = nil
+                            tempPlanDate = Date()
+                            tempPlanMode = .currentInputs
+                            tempStrategy = .minimumsOnly
+                            tempMonthlyBudget = ""
+                            budgetValidationError = nil
+                            currentPlan = nil
+                            showPlanSheet = false
+                            showPlanErrorAlert = false
+                            planErrorMessage = nil
+                        }
+                    }
+                }
+                .alert("Can't set plan", isPresented: $showPlanErrorAlert) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(planErrorMessage ?? "")
+                }
+                .safeAreaInset(edge: .bottom) {
+                    Group {
+                        if isEditing {
+                            EditingAccessoryBar(
+                                canGoPrevious: canGoPrevious,
+                                canGoNext: canGoNext,
+                                onPrevious: { moveFocus(-1) },
+                                onNext: { moveFocus(1) },
+                                onDone: { commitAndDismissKeyboard() }
+                            )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        } else {
+                            EmptyView().frame(height: 0)
+                        }
+                    }
+                    .animation(.snappy, value: isEditing)
+                }
             }
-        }
+        )
+    }
+
+    private struct AnyViewContainer: View {
+        let view: AnyView
+        var body: some View { view }
     }
 
     // MARK: - Keyboard handling
@@ -923,9 +926,8 @@ struct DebtSummaryView: View {
     private func monthStep(for account: Account, balance: Decimal, payment: Decimal) -> (interest: Decimal, afterPaymentBalance: Decimal) {
         let apr = account.loanTerms?.apr ?? 0
         let effectivePayment = min(payment, balance)
-        let interestBase = balance - effectivePayment
-        let interest = (apr * interestBase / 12).rounded(2)
-        let after = (interestBase + interest).rounded(2)
+        let interest = (apr * effectivePayment / 12).rounded(2)
+        let after = (balance - effectivePayment + interest).rounded(2)
         return (interest, after)
     }
 
@@ -1081,105 +1083,6 @@ struct DebtSummaryView: View {
     }
 }
 
-#if canImport(UIKit)
-import UIKit
-
-// A hosting controller that restricts orientation to landscape on iPhone and logs diagnostics.
-final class LandscapeOnlyHostingController<Content: View>: UIHostingController<Content> {
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            return [.landscapeLeft, .landscapeRight]
-        } else {
-            // Do not restrict iPad
-            return super.supportedInterfaceOrientations
-        }
-    }
-
-    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
-        // Choose a preferred initial orientation
-        return .landscapeRight
-    }
-
-    private func maskDescription(_ mask: UIInterfaceOrientationMask) -> String {
-        var parts: [String] = []
-        if mask.contains(.portrait) { parts.append("portrait") }
-        if mask.contains(.portraitUpsideDown) { parts.append("portraitUpsideDown") }
-        if mask.contains(.landscapeLeft) { parts.append("landscapeLeft") }
-        if mask.contains(.landscapeRight) { parts.append("landscapeRight") }
-        if mask.isEmpty { parts.append("(empty)") }
-        return parts.joined(separator: ", ")
-    }
-
-    private func logOrientationDiagnostics(tag: String) {
-        // Empty implementation after logging removal
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        logOrientationDiagnostics(tag: "willAppear")
-        setNeedsUpdateOfSupportedInterfaceOrientations()
-        // Proactively request a landscape geometry update on iPhone
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            if #available(iOS 16.0, *) {
-                if let scene = view.window?.windowScene {
-                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
-                }
-            }
-        }
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        logOrientationDiagnostics(tag: "didAppear")
-        setNeedsUpdateOfSupportedInterfaceOrientations()
-        // Request landscape again after presentation to nudge rotation if needed
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            if #available(iOS 16.0, *) {
-                if let scene = view.window?.windowScene {
-                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: [.landscapeLeft, .landscapeRight]))
-                }
-            }
-        }
-    }
-}
-
-/// A SwiftUI wrapper that hosts its content in a controller that only supports landscape on iPhone.
-struct LandscapeOnly<Content: View>: UIViewControllerRepresentable {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    func makeUIViewController(context: Context) -> LandscapeOnlyHostingController<Content> {
-        let vc = LandscapeOnlyHostingController(rootView: content)
-        return vc
-    }
-
-    func updateUIViewController(_ vc: LandscapeOnlyHostingController<Content>, context: Context) {
-        vc.rootView = content
-        vc.setNeedsUpdateOfSupportedInterfaceOrientations()
-    }
-}
-
-/// Convenience wrapper for presenting the Debt Summary in landscape-only on iPhone.
-struct DebtSummaryLandscapeHost: View {
-    var body: some View {
-        LandscapeOnly {
-            DebtSummaryView()
-                .ignoresSafeArea() // Use the full screen in landscape
-        }
-    }
-}
-
-/// Convenience modifier so callers can do `DebtSummaryView().landscapeOnlyOnPhone()` if desired.
-extension View {
-    func landscapeOnlyOnPhone() -> some View {
-        LandscapeOnly { self }
-    }
-}
-#endif
-
 private extension Decimal {
     func rounded(_ scale: Int) -> Decimal {
         var value = self
@@ -1202,12 +1105,4 @@ extension UIView {
     }
 }
 #endif
-
-
-
-
-
-
-
-
 

@@ -7,11 +7,13 @@ struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var purchases = PurchaseManager.shared
 
     @State private var showResetAlert = false
     @State private var showResetResultAlert = false
     @State private var resetResultMessage: String? = nil
     @State private var showBackupSheet = false
+    @State private var showPaywall = false
 
     // A small curated list of common currencies; can expand later.
     private let supportedCurrencies: [(code: String, name: String)] = [
@@ -46,21 +48,16 @@ struct SettingsView: View {
                         Text("Avalanche").tag("avalanche")
                     }
                     Toggle("Use Net for Debt as default budget", isOn: $settings.useNetForDebtBudgetDefault)
+                    DebtStrategyInfoView()
                 }
 
                 Section("Purchases") {
-                    Button("Manage Subscription") {
-                        if let scene = UIApplication.shared.connectedScenes
-                            .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
-                            Task {
-                                try? await AppStore.showManageSubscriptions(in: scene)
-                            }
-                        } else if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
-                            UIApplication.shared.open(url)
-                        }
+                    Button("Upgrade to Premium") {
+                        showPaywall = true
                     }
+                    .disabled(purchases.isPurchased)
                     Button("Restore Purchases") {
-                        NotificationCenter.default.post(name: .restorePurchasesRequested, object: nil)
+                        Task { await purchases.restorePurchases() }
                     }
                 }
 
@@ -117,6 +114,19 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showBackupSheet) {
                 BackupRestoreView().environmentObject(settings)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
+                    .environmentObject(PurchaseManager.shared)
+            }
+            .alert(
+                purchases.userMessage ?? "",
+                isPresented: Binding(
+                    get: { purchases.userMessage != nil },
+                    set: { if !$0 { purchases.userMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { purchases.userMessage = nil }
             }
         }
     }
