@@ -739,6 +739,9 @@ private struct AddCashFlowItemView: View {
                                 Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
                                 Text("Weekly").tag(PaymentFrequency.weekly)
                                 Text("Yearly").tag(PaymentFrequency.yearly)
+                                Text("Quarterly").tag(PaymentFrequency.quarterly)
+                                Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                                Text("One-time").tag(PaymentFrequency.oneTime)
                             }
                             .onChange(of: frequency) { _, newValue in
                                 if initialKind == .income {
@@ -910,6 +913,9 @@ private struct AddCashFlowItemView: View {
                         Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
                         Text("Weekly").tag(PaymentFrequency.weekly)
                         Text("Yearly").tag(PaymentFrequency.yearly)
+                        Text("Quarterly").tag(PaymentFrequency.quarterly)
+                        Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                        Text("One-time").tag(PaymentFrequency.oneTime)
                     }
                 }
                 .navigationTitle("Frequency")
@@ -1176,6 +1182,9 @@ private struct EditCashFlowItemView: View {
                                 Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
                                 Text("Weekly").tag(PaymentFrequency.weekly)
                                 Text("Yearly").tag(PaymentFrequency.yearly)
+                                Text("Quarterly").tag(PaymentFrequency.quarterly)
+                                Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                                Text("One-time").tag(PaymentFrequency.oneTime)
                             }
                             .onChange(of: frequency) { _, newValue in
                                 if isIncome {
@@ -1361,6 +1370,9 @@ private struct EditCashFlowItemView: View {
                         Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
                         Text("Weekly").tag(PaymentFrequency.weekly)
                         Text("Yearly").tag(PaymentFrequency.yearly)
+                        Text("Quarterly").tag(PaymentFrequency.quarterly)
+                        Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                        Text("One-time").tag(PaymentFrequency.oneTime)
                     }
                 }
                 .navigationTitle("Frequency")

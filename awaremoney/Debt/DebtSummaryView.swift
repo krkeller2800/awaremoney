@@ -926,7 +926,8 @@ struct DebtSummaryView: View {
     private func monthStep(for account: Account, balance: Decimal, payment: Decimal) -> (interest: Decimal, afterPaymentBalance: Decimal) {
         let apr = account.loanTerms?.apr ?? 0
         let effectivePayment = min(payment, balance)
-        let interest = (apr * effectivePayment / 12).rounded(2)
+        let interestBase = balance - effectivePayment
+        let interest = (apr * interestBase / 12).rounded(2)
         let after = (balance - effectivePayment + interest).rounded(2)
         return (interest, after)
     }
