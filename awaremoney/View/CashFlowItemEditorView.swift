@@ -360,6 +360,21 @@ public struct CashFlowItemEditorView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     }
+                    
+                    if let acct = item.account,
+                       [.checking, .savings, .cash].contains(acct.type) {
+                        let accountBal = transactionalBalance(for: acct)
+                        let (totalReserved, linkedCount) = totalReserves(for: acct)
+                        if accountBal < totalReserved {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("Linked account balance is below total reserves for \(linkedCount) bill\(linkedCount == 1 ? "" : "s"): \(formatCurrencyDecimal(totalReserved)) available \(formatCurrencyDecimal(accountBal)).")
+                            }
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
 
                     Button("Mark this year paid…") { showRebaseConfirm = true }
                 }
@@ -574,6 +589,30 @@ public struct CashFlowItemEditorView: View {
         // Carry over createdAt so date-based logic remains stable
         temp.createdAt = item.createdAt
         return temp
+    }
+
+    @MainActor
+    private func transactionalBalance(for account: Account) -> Decimal {
+        // Use in-memory relationships to avoid predicate compilation issues
+        // Latest recorded balance snapshot (if any)
+        let last = account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first
+        if let last {
+            let delta = account.transactions.filter { $0.datePosted > last.asOfDate }.reduce(Decimal.zero) { $0 + $1.amount }
+            return last.balance + delta
+        } else {
+            // No snapshot: sum all transactions for the account
+            let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
+            return sum
+        }
+    }
+
+    @MainActor
+    private func totalReserves(for account: Account) -> (Decimal, Int) {
+        // Fetch all cash flow items and filter in-memory by linked account id
+        let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+        let linkedBills = items.filter { $0.account?.id == account.id && $0.kind == .bill }
+        let total = linkedBills.reduce(Decimal.zero) { $0 + $1.reserveBalance }
+        return (total, linkedBills.count)
     }
 
     private func formatCurrencyDecimal(_ value: Decimal) -> String {
