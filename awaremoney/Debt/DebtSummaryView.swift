@@ -335,6 +335,11 @@ struct DebtSummaryView: View {
                         LabeledContent("Monthly Bills") {
                             Text(formatAmount(computedMonthlyBills))
                         }
+                        if reserveSeedingThisMonthTotal() > 0 {
+                            LabeledContent("Reserve Seeding (This Month)") {
+                                Text(formatAmount(reserveSeedingThisMonthTotal()))
+                            }
+                        }
                         LabeledContent("Net for Debt") {
                             Text(formatAmount(computedMonthlyNet))
                         }
@@ -1065,6 +1070,17 @@ struct DebtSummaryView: View {
         return amount * frequency.monthlyEquivalentFactor
     }
     
+    private func reserveSeedingThisMonthTotal() -> Decimal {
+        let now = Date()
+        let items = allCashFlowItems().filter { !$0.isIncome }
+        return items.reduce(Decimal(0)) { acc, item in
+            if let plan = BillReservePlanner.planReserve(for: item, asOf: now, currentReserve: item.reserveBalance), plan.seedAmount > 0 {
+                return acc + plan.seedAmount
+            }
+            return acc
+        }
+    }
+    
     private var computedMonthlyIncome: Decimal {
         let items = allCashFlowItems().filter { $0.isIncome }
         return items.reduce(0) { acc, item in
@@ -1079,9 +1095,7 @@ struct DebtSummaryView: View {
         }
     }
     
-    private var computedMonthlyNet: Decimal {
-        computedMonthlyIncome - computedMonthlyBills
-    }
+    private var computedMonthlyNet: Decimal { computedMonthlyIncome - computedMonthlyBills - reserveSeedingThisMonthTotal() }
 }
 
 private extension Decimal {

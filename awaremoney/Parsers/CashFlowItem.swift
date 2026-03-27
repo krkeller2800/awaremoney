@@ -19,6 +19,12 @@ final class CashFlowItem {
     var ssaWednesday: Int?
     var createdAt: Date
 
+    // Reserve tracking (non-monthly bills)
+    var reserveBalance: Decimal = 0
+    var reserveCycleStart: Date? = nil
+    var reserveLastSeededCycleStart: Date? = nil
+    var reserveAutoEnabled: Bool = false
+
     // Optional: link to an account (e.g., paid from or associated account)
     var account: Account?
 
@@ -44,7 +50,11 @@ final class CashFlowItem {
         notes: String? = nil,
         ssaWednesday: Int? = nil,
         account: Account? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        reserveBalance: Decimal = 0,
+        reserveCycleStart: Date? = nil,
+        reserveLastSeededCycleStart: Date? = nil,
+        reserveAutoEnabled: Bool = false
     ) {
         self.id = id
         self.kindRaw = kind.rawValue
@@ -57,9 +67,14 @@ final class CashFlowItem {
         self.ssaWednesday = ssaWednesday
         self.account = account
         self.createdAt = createdAt
+        self.reserveBalance = reserveBalance
+        self.reserveCycleStart = reserveCycleStart
+        self.reserveLastSeededCycleStart = reserveLastSeededCycleStart
+        self.reserveAutoEnabled = reserveAutoEnabled
     }
 
     // Convenience property for legacy code paths
     var isIncome: Bool { kind == .income }
 }
+
 

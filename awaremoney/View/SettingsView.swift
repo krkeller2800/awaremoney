@@ -80,6 +80,13 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Reserves") {
+                    Toggle("Enable reserve processing for bills", isOn: $settings.useReserveProcessingForBills)
+                    Text("When off, the app will not auto-seed, contribute, or settle bill reserves.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 #if DEBUG
                 Section("Developer") {
                     Toggle("Show Debug Tools", isOn: $settings.showDebugTools)
@@ -181,6 +188,8 @@ struct SettingsView: View {
         settings.useNetForDebtBudgetDefault = false
         settings.showHintBars = true
         settings.hapticsEnabled = true
+        settings.useReserveProcessingForBills = true
+        settings.didInitializeReserveAnchors = false
     }
 
     fileprivate func removeStatementPreviewCache() {

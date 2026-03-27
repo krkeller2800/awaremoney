@@ -265,7 +265,19 @@ struct IncomeAndBillsView: View {
                                         .bold()
                                     Spacer()
                                     Button {
-                                        activeSheet = .add(kind: .bill)
+                                        let newItem = CashFlowItem(
+                                            kind: .bill,
+                                            name: "",
+                                            amount: 0,
+                                            frequency: .monthly,
+                                            dayOfMonth: nil,
+                                            firstPaymentDate: nil,
+                                            notes: nil,
+                                            ssaWednesday: nil
+                                        )
+                                        modelContext.insert(newItem)
+                                        try? modelContext.save()
+                                        activeSheet = .edit(item: newItem)
                                     } label: {
                                         Image(systemName: "plus")
                                     }
@@ -304,23 +316,33 @@ struct IncomeAndBillsView: View {
                 AddCashFlowItemView(initialKind: kind, dismissAfterAdd: true) { newItem in
                     modelContext.insert(newItem)
                     try? modelContext.save()
+                    if newItem.kind == .bill {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            activeSheet = .edit(item: newItem)
+                        }
+                    }
                 }
                 .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
                 .environmentObject(settings)
             case .edit(let item):
-                EditCashFlowItemView(
-                    item: item,
-                    onSave: {
-                        try? modelContext.save()
-                        activeSheet = nil
-                    },
-                    onDelete: {
-                        modelContext.delete(item)
-                        try? modelContext.save()
-                        activeSheet = nil
-                    }
-                )
-                .environmentObject(settings)
+                if item.kind == .bill {
+                    BillEditorSheet(item: item)
+                        .environmentObject(settings)
+                } else {
+                    EditCashFlowItemView(
+                        item: item,
+                        onSave: {
+                            try? modelContext.save()
+                            activeSheet = nil
+                        },
+                        onDelete: {
+                            modelContext.delete(item)
+                            try? modelContext.save()
+                            activeSheet = nil
+                        }
+                    )
+                    .environmentObject(settings)
+                }
             }
         }
         // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
@@ -368,16 +390,7 @@ struct IncomeAndBillsView: View {
                             }
                             Section("Bills") {
                                 ForEach(bills) { item in
-                                    NavigationLink(destination: EditCashFlowItemView(
-                                        item: item,
-                                        onSave: {
-                                            try? modelContext.save()
-                                        },
-                                        onDelete: {
-                                            modelContext.delete(item)
-                                            try? modelContext.save()
-                                        }
-                                    )) {
+                                    NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
                                         row(for: item)
                                     }
                                 }
@@ -421,16 +434,7 @@ struct IncomeAndBillsView: View {
                         }
                         Section("Bills") {
                             ForEach(bills) { item in
-                                NavigationLink(destination: EditCashFlowItemView(
-                                    item: item,
-                                    onSave: {
-                                        try? modelContext.save()
-                                    },
-                                    onDelete: {
-                                        modelContext.delete(item)
-                                        try? modelContext.save()
-                                    }
-                                )) {
+                                NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
                                     row(for: item)
                                 }
                             }
@@ -453,10 +457,20 @@ struct IncomeAndBillsView: View {
                             showAddSheet = true
                         }
                         Button("Add Bill") {
-                            addKind = .bill
-                            showAddSheet = true
+                            let newItem = CashFlowItem(
+                                kind: .bill,
+                                name: "",
+                                amount: 0,
+                                frequency: .monthly,
+                                dayOfMonth: nil,
+                                firstPaymentDate: nil,
+                                notes: nil,
+                                ssaWednesday: nil
+                            )
+                            modelContext.insert(newItem)
+                            try? modelContext.save()
+                            activeSheet = .edit(item: newItem)
                         }
-                        // Removed Divider() and Button("View Debt Chart")
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
@@ -466,8 +480,48 @@ struct IncomeAndBillsView: View {
                 AddCashFlowItemView(initialKind: addKind) { newItem in
                     modelContext.insert(newItem)
                     try? modelContext.save()
+                    if newItem.kind == .bill {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            activeSheet = .edit(item: newItem)
+                        }
+                    }
                 }
                 .environmentObject(settings)
+            }
+            .sheet(item: $activeSheet) { sheet in
+                switch sheet {
+                case .add(let kind):
+                    AddCashFlowItemView(initialKind: kind, dismissAfterAdd: true) { newItem in
+                        modelContext.insert(newItem)
+                        try? modelContext.save()
+                        if newItem.kind == .bill {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                activeSheet = .edit(item: newItem)
+                            }
+                        }
+                    }
+                    .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
+                    .environmentObject(settings)
+                case .edit(let item):
+                    if item.kind == .bill {
+                        BillEditorSheet(item: item)
+                            .environmentObject(settings)
+                    } else {
+                        EditCashFlowItemView(
+                            item: item,
+                            onSave: {
+                                try? modelContext.save()
+                                activeSheet = nil
+                            },
+                            onDelete: {
+                                modelContext.delete(item)
+                                try? modelContext.save()
+                                activeSheet = nil
+                            }
+                        )
+                        .environmentObject(settings)
+                    }
+                }
             }
             // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
         }
@@ -622,6 +676,7 @@ private struct AddCashFlowItemView: View {
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
     @FocusState private var focusedField: Field?
+    @State private var isProgrammaticFocusChange: Bool = false
 
     private var isEditing: Bool { nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || (focusedField != nil) }
 
@@ -640,10 +695,22 @@ private struct AddCashFlowItemView: View {
     }
 
     private func focus(_ field: Field) {
-        nameIsFirstResponder = (field == .name)
-        amountIsFirstResponder = (field == .amount)
-        notesIsFirstResponder = (field == .notes)
+        isProgrammaticFocusChange = true
+        switch field {
+        case .name:
+            nameIsFirstResponder = true
+        case .amount:
+            amountIsFirstResponder = true
+        case .notes:
+            notesIsFirstResponder = true
+        }
         focusedField = field
+        DispatchQueue.main.async {
+            self.nameIsFirstResponder = (field == .name)
+            self.amountIsFirstResponder = (field == .amount)
+            self.notesIsFirstResponder = (field == .notes)
+            self.isProgrammaticFocusChange = false
+        }
     }
 
     private func currentField() -> Field? {
@@ -842,7 +909,9 @@ private struct AddCashFlowItemView: View {
                         }
                     }
                 }
-                .scrollDismissesKeyboard(.interactively)
+                #if os(iOS)
+                .scrollDismissesKeyboard(UIDevice.current.userInterfaceIdiom == .pad ? .never : .interactively)
+                #endif
             }
             .navigationTitle(initialKind == .income ? "Add Income" : "Add Bill")
             .toolbar {
@@ -976,18 +1045,22 @@ private struct AddCashFlowItemView: View {
             }
         }
         .onChange(of: focusedField) { _, newValue in
+            guard !isProgrammaticFocusChange else { return }
             nameIsFirstResponder = (newValue == .name)
             amountIsFirstResponder = (newValue == .amount)
             notesIsFirstResponder = (newValue == .notes)
             selectAllInFirstResponder()
         }
         .onChange(of: nameIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .name } else if focusedField == .name && !amountIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
         }
         .onChange(of: amountIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .amount } else if focusedField == .amount && !nameIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
         }
         .onChange(of: notesIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .notes } else if focusedField == .notes && !nameIsFirstResponder && !amountIsFirstResponder { focusedField = nil }
         }
     }
@@ -1085,6 +1158,7 @@ private struct EditCashFlowItemView: View {
     private let fieldOrder: [Field] = [.name, .amount, .notes]
 
     @FocusState private var focusedField: Field?
+    @State private var isProgrammaticFocusChange: Bool = false
 
     private var isEditing: Bool { nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || (focusedField != nil) }
 
@@ -1103,10 +1177,22 @@ private struct EditCashFlowItemView: View {
     }
 
     private func focus(_ field: Field) {
-        nameIsFirstResponder = (field == .name)
-        amountIsFirstResponder = (field == .amount)
-        notesIsFirstResponder = (field == .notes)
+        isProgrammaticFocusChange = true
+        switch field {
+        case .name:
+            nameIsFirstResponder = true
+        case .amount:
+            amountIsFirstResponder = true
+        case .notes:
+            notesIsFirstResponder = true
+        }
         focusedField = field
+        DispatchQueue.main.async {
+            self.nameIsFirstResponder = (field == .name)
+            self.amountIsFirstResponder = (field == .amount)
+            self.notesIsFirstResponder = (field == .notes)
+            self.isProgrammaticFocusChange = false
+        }
     }
 
     private func currentField() -> Field? {
@@ -1295,7 +1381,9 @@ private struct EditCashFlowItemView: View {
                         }
                     }
                 }
-                .scrollDismissesKeyboard(.interactively)
+                #if os(iOS)
+                .scrollDismissesKeyboard(UIDevice.current.userInterfaceIdiom == .pad ? .never : .interactively)
+                #endif
             }
             .navigationTitle(isIncome ? "Edit Income" : "Edit Bill")
             .toolbar {
@@ -1441,18 +1529,22 @@ private struct EditCashFlowItemView: View {
             }
         }
         .onChange(of: focusedField) { _, newValue in
+            guard !isProgrammaticFocusChange else { return }
             nameIsFirstResponder = (newValue == .name)
             amountIsFirstResponder = (newValue == .amount)
             notesIsFirstResponder = (newValue == .notes)
             selectAllInFirstResponder()
         }
         .onChange(of: nameIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .name } else if focusedField == .name && !amountIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
         }
         .onChange(of: amountIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .amount } else if focusedField == .amount && !nameIsFirstResponder && !notesIsFirstResponder { focusedField = nil }
         }
         .onChange(of: notesIsFirstResponder) { _, isFirst in
+            guard !isProgrammaticFocusChange else { return }
             if isFirst { focusedField = .notes } else if focusedField == .notes && !nameIsFirstResponder && !amountIsFirstResponder { focusedField = nil }
         }
     }
@@ -1535,6 +1627,26 @@ private struct EditCashFlowItemView: View {
             UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
         }
         #endif
+    }
+}
+
+private struct BillEditorSheet: View {
+    let item: CashFlowItem
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
+
+    var body: some View {
+        NavigationStack {
+            CashFlowItemEditorView(item: item)
+                .environmentObject(settings)
+                .navigationTitle("Edit Bill")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
     }
 }
 
@@ -1720,4 +1832,5 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
+
 

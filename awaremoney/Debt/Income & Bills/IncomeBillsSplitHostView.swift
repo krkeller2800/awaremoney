@@ -14,6 +14,12 @@ struct IncomeBillsSplitHostView: View {
     
     @State private var selection: SidebarItem? = .incomeBills
     
+    @MainActor
+    private func runReserveUpdate() {
+        let service = ReserveUpdateService(context: modelContext, settings: settings)
+        service.updateReserves()
+    }
+    
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
@@ -49,6 +55,12 @@ struct IncomeBillsSplitHostView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // Trigger reserve update when opening Income & Bills or Summary; guarded internally per month
+                await MainActor.run {
+                    runReserveUpdate()
+                }
+            }
         }
     }
 }

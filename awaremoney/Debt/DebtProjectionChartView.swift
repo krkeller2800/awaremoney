@@ -93,7 +93,10 @@ struct DebtProjectionChartView: View {
                 }
                 .padding(.horizontal)
                 
-                Text("Budget: \(formatCurrencyDecimal(effectiveBudget(for: monthlyNet, strategy: selectedStrategy))) • Strategy: \(strategyDisplayName(selectedStrategy))")
+                let currentMonthReserveSeed = reserveSeedingThisMonthTotal()
+                let displayBudget = max(Decimal(0), effectiveBudget(for: monthlyNet, strategy: selectedStrategy) - currentMonthReserveSeed)
+                
+                Text("Budget: \(formatCurrencyDecimal(displayBudget)) • Strategy: \(strategyDisplayName(selectedStrategy))")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
@@ -412,6 +415,22 @@ struct DebtProjectionChartView: View {
 #if os(iOS)
 //        .presentationDragIndicator(.visible)
 #endif
+        }
+    }
+    
+    private func reserveSeedingThisMonthTotal() -> Decimal {
+        do {
+            let all = try modelContext.fetch(FetchDescriptor<CashFlowItem>())
+            let bills = all.filter { !$0.isIncome }
+            let now = Date()
+            return bills.reduce(Decimal(0)) { acc, item in
+                if let plan = BillReservePlanner.planReserve(for: item, asOf: now, currentReserve: item.reserveBalance), plan.seedAmount > 0 {
+                    return acc + plan.seedAmount
+                }
+                return acc
+            }
+        } catch {
+            return 0
         }
     }
     

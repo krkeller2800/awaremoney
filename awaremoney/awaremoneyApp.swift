@@ -17,6 +17,13 @@ struct awaremoneyApp: App {
     @StateObject private var backupCoordinator = BackupOpenCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
+    @MainActor
+    private func runReserveUpdate(asOf date: Date = Date()) {
+        let context = ModelContext(container)
+        let service = ReserveUpdateService(context: context, settings: settings)
+        service.updateReserves(asOf: date)
+    }
+
     init() {
         let schema = Schema([
             Account.self,
@@ -47,6 +54,7 @@ struct awaremoneyApp: App {
         container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
         AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")
         runInstitutionMigrationIfNeeded()
+        ReserveMigrationService.initializeReserveAnchorsIfNeeded(container: container, settings: settings)
     }
 
     var body: some Scene {
@@ -56,6 +64,12 @@ struct awaremoneyApp: App {
                 .environmentObject(settings)
                 .environmentObject(importRouter)
                 .environmentObject(backupCoordinator)
+                .onAppear {
+                    // Kick off a reserve update at app launch; guarded internally to once per month
+                    Task { @MainActor in
+                        runReserveUpdate()
+                    }
+                }
                 .onOpenURL { url in
                     let ext = url.pathExtension.lowercased()
                     if ext == "ambackup" || ext == "json" {
@@ -68,6 +82,11 @@ struct awaremoneyApp: App {
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     AMLogging.log("Scene phase changed to: \(newPhase)", component: "App")
+                    if newPhase == .active {
+                        Task { @MainActor in
+                            runReserveUpdate()
+                        }
+                    }
                 }
         }
         .modelContainer(container)

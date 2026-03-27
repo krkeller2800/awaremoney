@@ -37,6 +37,28 @@ enum PaymentFrequency: String, Codable, CaseIterable {
     case annual
 }
 
+extension PaymentFrequency {
+    /// Number of months in one full billing cycle for reserve planning.
+    var monthsPerCycle: Int {
+        switch self {
+        case .monthly:
+            return 1
+        case .quarterly:
+            return 3
+        case .semiAnnual:
+            return 6
+        case .yearly, .annual:
+            return 12
+        default:
+            // Treat all other non-monthly granular frequencies as monthly for reserve purposes
+            return 1
+        }
+    }
+
+    /// Whether this frequency should use reserve planning (i.e., non-monthly cycles)
+    var isReserveEligible: Bool { monthsPerCycle > 1 }
+}
+
 enum CreditCardPaymentMode: String, Codable, CaseIterable {
     case payInFull
     case fixedAmount

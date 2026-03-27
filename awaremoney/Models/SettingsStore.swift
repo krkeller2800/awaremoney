@@ -36,9 +36,21 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(hapticsEnabled, forKey: "haptics_enabled") }
     }
 
+    @Published var useReserveProcessingForBills: Bool {
+        didSet { UserDefaults.standard.set(useReserveProcessingForBills, forKey: "use_reserve_processing_for_bills") }
+    }
+
     // Developer
     @Published var showDebugTools: Bool {
         didSet { UserDefaults.standard.set(showDebugTools, forKey: "show_debug_tools") }
+    }
+
+    @Published var didInitializeReserveAnchors: Bool {
+        didSet { UserDefaults.standard.set(didInitializeReserveAnchors, forKey: "didInitializeReserveAnchors") }
+    }
+
+    @Published var lastReserveUpdateMonth: String? {
+        didSet { UserDefaults.standard.set(lastReserveUpdateMonth, forKey: "last_reserve_update_month") }
     }
 
     init() {
@@ -58,11 +70,16 @@ final class SettingsStore: ObservableObject {
         // Appearance & UX
         self.showHintBars = UserDefaults.standard.object(forKey: "show_hint_bars") as? Bool ?? true
         self.hapticsEnabled = UserDefaults.standard.object(forKey: "haptics_enabled") as? Bool ?? true
+        self.useReserveProcessingForBills = UserDefaults.standard.object(forKey: "use_reserve_processing_for_bills") as? Bool ?? true
         
         #if DEBUG
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true
         #else
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? false
         #endif
+
+        self.didInitializeReserveAnchors = UserDefaults.standard.object(forKey: "didInitializeReserveAnchors") as? Bool ?? false
+        self.lastReserveUpdateMonth = UserDefaults.standard.string(forKey: "last_reserve_update_month")
     }
 }
+

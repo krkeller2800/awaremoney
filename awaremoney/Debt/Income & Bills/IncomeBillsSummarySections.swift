@@ -9,6 +9,16 @@ struct IncomeBillsSummarySections: View {
     private var incomes: [CashFlowItem] { items.filter { $0.isIncome } }
     private var bills: [CashFlowItem] { items.filter { !$0.isIncome } }
 
+    private func reserveSeedingThisMonthTotal() -> Decimal {
+        let now = Date()
+        return bills.reduce(Decimal(0)) { acc, item in
+            if let plan = BillReservePlanner.planReserve(for: item, asOf: now, currentReserve: item.reserveBalance), plan.seedAmount > 0 {
+                return acc + plan.seedAmount
+            }
+            return acc
+        }
+    }
+
     private func monthlyEquivalent(_ item: CashFlowItem) -> Decimal {
         item.amount * item.frequency.monthlyEquivalentFactor
     }
@@ -19,7 +29,7 @@ struct IncomeBillsSummarySections: View {
     private var monthlyBillsTotal: Decimal {
         bills.reduce(0) { $0 + monthlyEquivalent($1) }
     }
-    private var monthlyNetForDebt: Decimal { monthlyIncomeTotal - monthlyBillsTotal }
+    private var monthlyNetForDebt: Decimal { monthlyIncomeTotal - monthlyBillsTotal - reserveSeedingThisMonthTotal() }
 
     private var billsToIncomeRatio: Double {
         guard monthlyIncomeTotal > 0 else { return 0 }
@@ -59,6 +69,9 @@ struct IncomeBillsSummarySections: View {
                         metricCard(title: "Net for Debt", value: formatCurrency(monthlyNetForDebt), valueColor: monthlyNetForDebt < 0 ? .red : .primary)
                         metricCard(title: "Income", value: formatCurrency(monthlyIncomeTotal))
                         metricCard(title: "Bills", value: formatCurrency(monthlyBillsTotal))
+                        if reserveSeedingThisMonthTotal() > 0 {
+                            metricCard(title: "Reserve Seeding (This Month)", value: formatCurrency(reserveSeedingThisMonthTotal()))
+                        }
                         utilizationMetricCard()
                         metricCard(title: "Avg Bill", value: formatCurrency(averageBill))
                     }
@@ -93,6 +106,9 @@ struct IncomeBillsSummarySections: View {
                 Section("Monthly Summary") {
                     LabeledContent("Income") { Text(formatCurrency(monthlyIncomeTotal)) }
                     LabeledContent("Bills") { Text(formatCurrency(monthlyBillsTotal)) }
+                    if reserveSeedingThisMonthTotal() > 0 {
+                        LabeledContent("Reserve Seeding (This Month)") { Text(formatCurrency(reserveSeedingThisMonthTotal())) }
+                    }
                     LabeledContent("Net for Debt") { Text(formatCurrency(monthlyNetForDebt)) }
                         .foregroundStyle(monthlyNetForDebt < 0 ? .red : .primary)
 

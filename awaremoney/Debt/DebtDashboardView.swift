@@ -68,6 +68,12 @@ struct DebtDashboardView: View {
         #endif
     }
 
+    @MainActor
+    private func runReserveUpdate() {
+        let service = ReserveUpdateService(context: modelContext, settings: settings)
+        service.updateReserves()
+    }
+
     @ViewBuilder
     private var iPadBody: some View {
         NavigationSplitView {
@@ -78,6 +84,10 @@ struct DebtDashboardView: View {
         //.safeAreaInset(edge: .top) { TrialBanner() }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 340)
         .task { await load() }
+        .task {
+            // Trigger reserve update when dashboard becomes visible; guarded internally per month
+            await MainActor.run { runReserveUpdate() }
+        }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
                 .presentationSizing(.page)
@@ -282,6 +292,9 @@ struct DebtDashboardView: View {
             }
         }
         .task { await load() }
+        .task {
+            await MainActor.run { runReserveUpdate() }
+        }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
                 .presentationSizing(.page)
