@@ -21,6 +21,11 @@ struct DebtProjectionChartView: View {
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     
+    // Added as per instructions
+    @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
+    @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
+    @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
+    
     private let items: [CashFlowItem]
     
     @State private var selectedYear: Int
@@ -34,6 +39,14 @@ struct DebtProjectionChartView: View {
     init(items: [CashFlowItem]) {
         self.items = items
         _selectedYear = State(initialValue: Calendar.current.component(.year, from: Date()))
+    }
+    
+    private var baselineSource: IncomeScheduler.BaselineSource {
+        if baselineBudgetSourceRaw == "fixed", useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+            return .fixedAmount(Decimal(debtBudgetOverrideAmount))
+        } else {
+            return .recurringNet
+        }
     }
     
     var body: some View {
@@ -777,9 +790,24 @@ struct DebtProjectionChartView: View {
             return points
         }
         
-        let budget = effectiveBudget(for: net, debts: debts, strategy: strategy)
+        // IncomeScheduler budget schedule for variable budget path
+        let schedule: [Date: Decimal]
+        do {
+            schedule = IncomeScheduler.budgetByMonth(
+                items: try modelContext.fetch(FetchDescriptor<CashFlowItem>()),
+                start: {
+                    let comps = DateComponents(year: year, month: startMonth, day: 1)
+                    return calendar.date(from: comps) ?? Date()
+                }(),
+                months: 60,
+                includeSpreads: includeNonMonthlyIncomeSpreads,
+                oneTimeDefaultSpreadMonths: [3,6,12].contains(oneTimeIncomeDefaultSpreadMonths) ? oneTimeIncomeDefaultSpreadMonths : 12,
+                baselineSource: baselineSource
+            )
+        } catch {
+            schedule = [:]
+        }
         
-        // Determine the planning start date as the first day of the start month
         let startDate: Date = {
             let comps = DateComponents(year: year, month: startMonth, day: 1)
             return calendar.date(from: comps) ?? Date()
@@ -787,12 +815,22 @@ struct DebtProjectionChartView: View {
         
         var plan: DebtPlanResult?
         do {
-            plan = try DebtPayoffEngine.plan(
-                debts: debts,
-                monthlyBudget: budget,
-                strategy: strategy,
-                startDate: startDate
-            )
+            if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: strategy,
+                    startDate: startDate
+                )
+            } else {
+                let budget = effectiveBudget(for: net, debts: debts, strategy: strategy)
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: budget,
+                    strategy: strategy,
+                    startDate: startDate
+                )
+            }
         } catch DebtPlanError.infeasibleBudget(let requiredMin) {
             plan = nil
             // Record the required minimum; defer alert presentation to when editing ends.

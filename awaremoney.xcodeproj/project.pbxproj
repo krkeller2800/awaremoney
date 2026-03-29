@@ -46,6 +46,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Testing/BillReservePlannerTests.swift,
+				Testing/IncomeSchedulerTests.swift,
 				Testing/ReservePlannerTests.swift,
 				Testing/ReserveUpdaterTests.swift,
 			);

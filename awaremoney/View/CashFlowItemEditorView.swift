@@ -16,6 +16,7 @@ public struct CashFlowItemEditorView: View {
     @State private var firstPaymentDate: Date? = nil
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
+    @State private var oneTimeSpreadMonthsOverride: Int? = nil
 
     @State private var initialized = false
 
@@ -462,6 +463,25 @@ public struct CashFlowItemEditorView: View {
                 IncomeSSASection()
                 SchedulePickersSection()
 
+                if item.kind == .income && [.yearly, .semiAnnual, .quarterly, .oneTime].contains(frequency.normalized) {
+                    Picker("Spread months", selection: Binding<Int?>(
+                        get: { oneTimeSpreadMonthsOverride },
+                        set: { newVal in
+                            // Sanitize to allowed values 3, 6, 12 or nil
+                            if let v = newVal, [3,6,12].contains(v) { oneTimeSpreadMonthsOverride = v } else { oneTimeSpreadMonthsOverride = nil }
+                            applyChanges()
+                        }
+                    )) {
+                        Text("Use default").tag(nil as Int?)
+                        Text("3 months").tag(Optional(3))
+                        Text("6 months").tag(Optional(6))
+                        Text("12 months").tag(Optional(12))
+                    }
+                    Text("Non‑monthly income is spread evenly starting the month after the pay date.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 TextField("Notes", text: $notes)
                     .onChange(of: notes) { applyChanges() }
                     .focused($focusedField, equals: .notes)
@@ -537,6 +557,7 @@ public struct CashFlowItemEditorView: View {
         self.firstPaymentDate = item.firstPaymentDate
         self.notes = item.notes ?? ""
         self.ssaWednesday = item.ssaWednesday ?? extractSSAWednesday(from: item.notes)
+        self.oneTimeSpreadMonthsOverride = item.oneTimeSpreadMonthsOverride
         self.initialized = true
     }
 
@@ -550,6 +571,7 @@ public struct CashFlowItemEditorView: View {
         let cleanedNotes = removeSSAToken(from: notes)
         item.notes = cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         item.ssaWednesday = ssaWednesday
+        item.oneTimeSpreadMonthsOverride = oneTimeSpreadMonthsOverride
         try? modelContext.save()
     }
 

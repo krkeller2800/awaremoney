@@ -664,6 +664,8 @@ private struct AddCashFlowItemView: View {
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
 
+    @State private var oneTimeSpreadMonthsOverride: Int? = nil
+
     @State private var showFrequencyPicker = false
     @State private var showSSAWednesdayPicker = false
     @State private var showDayOfMonthPicker = false
@@ -888,7 +890,26 @@ private struct AddCashFlowItemView: View {
                                     .buttonStyle(.plain)
                                     .foregroundStyle(.secondary)
                                 }
+                                if firstPaymentDate == nil {
+                                    Text("Tip: Set the first payment date so spreads can start the month after the pay date. Using an estimated date for now.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                        }
+                        if initialKind == .income && [.yearly, .semiAnnual, .quarterly, .oneTime].contains(frequency) {
+                            Picker("Spread months", selection: Binding<Int?>(
+                                get: { oneTimeSpreadMonthsOverride },
+                                set: { oneTimeSpreadMonthsOverride = $0 }
+                            )) {
+                                Text("Use default").tag(nil as Int?)
+                                Text("3 months").tag(Optional(3))
+                                Text("6 months").tag(Optional(6))
+                                Text("12 months").tag(Optional(12))
+                            }
+                            Text("Non‑monthly income is spread evenly starting the month after the pay date. Choose a duration.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 6) {
                             SelectAllTextField(
@@ -932,7 +953,8 @@ private struct AddCashFlowItemView: View {
                                 dayOfMonth: dayOfMonth,
                                 firstPaymentDate: firstPaymentDate,
                                 notes: finalNotes,
-                                ssaWednesday: ssaWednesday
+                                ssaWednesday: ssaWednesday,
+                                oneTimeSpreadMonthsOverride: oneTimeSpreadMonthsOverride
                             )
                             onAdd(item)
                             nameIsFirstResponder = false
@@ -1083,7 +1105,8 @@ private struct AddCashFlowItemView: View {
                 dayOfMonth: dayOfMonth,
                 firstPaymentDate: firstPaymentDate,
                 notes: finalNotes,
-                ssaWednesday: ssaWednesday
+                ssaWednesday: ssaWednesday,
+                oneTimeSpreadMonthsOverride: oneTimeSpreadMonthsOverride
             )
             onAdd(item)
             nameIsFirstResponder = false
@@ -1144,6 +1167,8 @@ private struct EditCashFlowItemView: View {
     @State private var firstPaymentDate: Date? = nil
     @State private var notes: String = ""
     @State private var ssaWednesday: Int? = nil
+    
+    @State private var oneTimeSpreadMonthsOverride: Int? = nil
 
     enum Field: Hashable { case name, amount, notes }
     @State private var amountIsFirstResponder: Bool = false
@@ -1360,7 +1385,26 @@ private struct EditCashFlowItemView: View {
                                     .buttonStyle(.plain)
                                     .foregroundStyle(.secondary)
                                 }
+                                if firstPaymentDate == nil {
+                                    Text("Tip: Set the first payment date so spreads can start the month after the pay date. Using an estimated date for now.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                        }
+                        if isIncome && [.yearly, .semiAnnual, .quarterly, .oneTime].contains(frequency) {
+                            Picker("Spread months", selection: Binding<Int?>(
+                                get: { oneTimeSpreadMonthsOverride },
+                                set: { oneTimeSpreadMonthsOverride = $0 }
+                            )) {
+                                Text("Use default").tag(nil as Int?)
+                                Text("3 months").tag(Optional(3))
+                                Text("6 months").tag(Optional(6))
+                                Text("12 months").tag(Optional(12))
+                            }
+                            Text("Non‑monthly income is spread evenly starting the month after the pay date. Choose a duration.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 6) {
                             SelectAllTextField(
@@ -1406,6 +1450,7 @@ private struct EditCashFlowItemView: View {
                             item.firstPaymentDate = firstPaymentDate
                             item.notes = finalNotes
                             item.ssaWednesday = ssaWednesday
+                            item.oneTimeSpreadMonthsOverride = oneTimeSpreadMonthsOverride
                             onSave()
                             focusedField = nil
                             #if canImport(UIKit)
@@ -1520,6 +1565,7 @@ private struct EditCashFlowItemView: View {
             firstPaymentDate = item.firstPaymentDate
             notes = item.notes ?? ""
             ssaWednesday = item.ssaWednesday ?? extractSSAWednesday(from: item.notes)
+            oneTimeSpreadMonthsOverride = item.oneTimeSpreadMonthsOverride
             if isIncome {
                 switch frequency.normalized {
                 case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
@@ -1574,6 +1620,7 @@ private struct EditCashFlowItemView: View {
             item.firstPaymentDate = firstPaymentDate
             item.notes = finalNotes
             item.ssaWednesday = ssaWednesday
+            item.oneTimeSpreadMonthsOverride = oneTimeSpreadMonthsOverride
             onSave()
             nameIsFirstResponder = false
             amountIsFirstResponder = false

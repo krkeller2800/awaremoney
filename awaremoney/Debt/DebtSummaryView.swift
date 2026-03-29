@@ -11,6 +11,7 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+import Charts
 
 // Uses DebtPayoffEngine
 
@@ -65,6 +66,34 @@ struct DebtSummaryView: View {
         #endif
     }
     private var isEditing: Bool { focusedField != nil }
+    
+    // Added @AppStorage properties for IncomeScheduler settings
+    @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
+    @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
+    @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet" // or "fixed"
+    
+    private var baselineSource: IncomeScheduler.BaselineSource {
+        if baselineBudgetSourceRaw == "fixed", useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+            return .fixedAmount(Decimal(debtBudgetOverrideAmount))
+        } else {
+            return .recurringNet
+        }
+    }
+    
+    private func sanitizedDefaultSpread(_ v: Int) -> Int { [3,6,12].contains(v) ? v : 12 }
+    
+    private func budgetSchedule(start: Date, months: Int) -> [Date: Decimal] {
+        let items = allCashFlowItems()
+        let schedule = IncomeScheduler.budgetByMonth(
+            items: items,
+            start: start,
+            months: months,
+            includeSpreads: includeNonMonthlyIncomeSpreads,
+            oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
+            baselineSource: baselineSource
+        )
+        return schedule
+    }
 
     var body: some View {
         NavigationStack {
@@ -223,7 +252,7 @@ struct DebtSummaryView: View {
     }
 
     private func planSheetView() -> AnyView {
-        AnyView(
+        return AnyView(
             NavigationStack {
                 List {
                     Section {
@@ -236,7 +265,7 @@ struct DebtSummaryView: View {
                     } footer: {
                         Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.75))
                     }
                     Section("Mode") {
                         Picker("Start mode", selection: $tempPlanMode) {
@@ -268,25 +297,7 @@ struct DebtSummaryView: View {
                         LabeledContent("Monthly budget") {
                             TextField(
                                 "$0.00",
-                                text: Binding<String>(
-                                    get: {
-                                        let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        if trimmed.isEmpty { return "" }
-                                        if let value = parseCurrencyInput(trimmed) {
-                                            return formatAmount(value)
-                                        } else {
-                                            return trimmed
-                                        }
-                                    },
-                                    set: { newValue in
-                                        // Always store a cleaned numeric string so parsing stays stable
-                                        let filtered = newValue
-                                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                                            .replacingOccurrences(of: "$", with: "")
-                                            .replacingOccurrences(of: ",", with: "")
-                                        tempMonthlyBudget = filtered
-                                    }
-                                )
+                                text: $tempMonthlyBudget
                             )
                             .multilineTextAlignment(.trailing)
                             .keyboardType(.decimalPad)
@@ -302,12 +313,8 @@ struct DebtSummaryView: View {
                                 }
                             )
                             .onChange(of: tempMonthlyBudget) { _, newValue in
-                                // Normalize to a valid numeric string or empty
-                                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if trimmed.isEmpty { return }
-                                if parseCurrencyInput(trimmed) == nil {
-                                    // If not parsable, keep as-is to allow user to correct
-                                }
+                                // Keep permissive during typing; formatting happens on submit
+                                let _ = newValue
                             }
                         }
                     } header: {
@@ -316,13 +323,71 @@ struct DebtSummaryView: View {
                         Group {
                             Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary.opacity(0.75))
                             if let error = budgetValidationError {
                                 Text(error)
                                     .font(.footnote)
                                     .foregroundStyle(.red)
                             }
                         }
+                    }
+                    
+                    // Added new section for Budget Source & Spreads
+                    Section {
+                        Picker("Baseline source", selection: $baselineBudgetSourceRaw) {
+                            Text("Recurring Net").tag("recurringNet")
+                            Text("Fixed amount").tag("fixed")
+                        }
+                        .pickerStyle(.segmented)
+                        Toggle("Include non-monthly income", isOn: $includeNonMonthlyIncomeSpreads)
+                        Picker("Default spread for one-time income", selection: $oneTimeIncomeDefaultSpreadMonths) {
+                            Text("3 months").tag(3)
+                            Text("6 months").tag(6)
+                            Text("12 months").tag(12)
+                        }
+                        .pickerStyle(.segmented)
+                    } header: {
+                        Text("Budget Source & Spreads")
+                    } footer: {
+                        Text("The above spread applies to one-time and recurring non-monthly incomes (e.g., yearly) set to 'Default' when created. If to something other than 'Default', they will not be affected.")
+                            .font(.footnote)
+                            .foregroundStyle(.primary.opacity(0.75))
+                    }
+                    Section("Budget timeline preview") {
+                        let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                        let schedule = budgetSchedule(start: startMonth, months: 12)
+                        BudgetTimelinePreviewView(startMonth: startMonth, schedule: schedule)
+                            .id("sched-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(startMonth.timeIntervalSince1970)")
+                    }
+
+                    Section {
+                        DisclosureGroup("Explain my plan") {
+                            let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                            let items = allCashFlowItems()
+                            let rawExplainContributions = IncomeScheduler.contributionsByMonth(
+                                items: items,
+                                start: startMonth,
+                                months: 12,
+                                oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths)
+                            )
+                            let explainContributions: [Date: [ExplainPlanView.ContributionRow]] = {
+                                var dict: [Date: [ExplainPlanView.ContributionRow]] = [:]
+                                for (date, rows) in rawExplainContributions {
+                                    let mapped: [ExplainPlanView.ContributionRow] = rows.map { r in
+                                        ExplainPlanView.ContributionRow(name: r.name, amount: r.amount)
+                                    }
+                                    dict[date] = mapped
+                                }
+                                return dict
+                            }()
+                            ExplainPlanView(startMonth: startMonth, contributions: explainContributions)
+                        }
+                    } header: {
+                        Text("Explain my plan")
+                    } footer: {
+                        Text("Shows which incomes contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
+                            .font(.footnote)
+                            .foregroundStyle(.primary.opacity(0.75))
                     }
                     
                     Section("Income & Bills") {
@@ -370,6 +435,7 @@ struct DebtSummaryView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // .id("planSheet-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date()).timeIntervalSince1970)")
                 .navigationTitle("Strategy start")
                 .navigationBarTitleDisplayMode(.inline)
                 .onAppear {
@@ -472,13 +538,28 @@ struct DebtSummaryView: View {
                             let startDateForPlan = normalizeToMonth(
                                 appliedPlanMode == .projectedAtDate ? (appliedPlanDate ?? Date()) : Date()
                             )
+                            
+                            // Build schedule for 60 months horizon to be safe
+                            let schedule = budgetSchedule(start: startDateForPlan, months: 60)
+                            
                             do {
-                                let planResult = try DebtPayoffEngine.plan(
-                                    debts: debtInputs,
-                                    monthlyBudget: budgetToUse,
-                                    strategy: appliedStrategy,
-                                    startDate: startDateForPlan
-                                )
+                                let planResult: DebtPlanResult
+                                if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+                                    planResult = try DebtPayoffEngine.plan(
+                                        debts: debtInputs,
+                                        budgetByMonth: schedule,
+                                        strategy: appliedStrategy,
+                                        startDate: startDateForPlan
+                                    )
+                                } else {
+                                    // Fixed amount without spreads — keep existing constant budget behavior
+                                    planResult = try DebtPayoffEngine.plan(
+                                        debts: debtInputs,
+                                        monthlyBudget: budgetToUse,
+                                        strategy: appliedStrategy,
+                                        startDate: startDateForPlan
+                                    )
+                                }
                                 currentPlan = planResult
                                 // Persist selections for DebtProjectionChartView
                                 switch appliedStrategy {
@@ -564,6 +645,236 @@ struct DebtSummaryView: View {
     private struct AnyViewContainer: View {
         let view: AnyView
         var body: some View { view }
+    }
+    
+    private struct BudgetTimelinePreviewView: View {
+        let startMonth: Date
+        let schedule: [Date: Decimal]
+        @EnvironmentObject private var settings: SettingsStore
+
+        @ViewBuilder
+        private func chartView(
+            data: [(date: Date, value: Decimal)],
+            minY: Double,
+            maxY: Double,
+            xStart: Date,
+            xEnd: Date,
+            changeDates: Set<Date>,
+            lastDate: Date?
+        ) -> some View {
+            Chart(data, id: \.date) { point in
+                LineMark(
+                    x: .value("Month", point.date),
+                    y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
+                )
+                .interpolationMethod(.monotone)
+                .foregroundStyle(Color.accentColor)
+
+                AreaMark(
+                    x: .value("Month", point.date),
+                    yStart: .value("Baseline", minY),
+                    yEnd: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
+                )
+                .interpolationMethod(.monotone)
+                .foregroundStyle(Color.accentColor.opacity(0.15))
+
+                PointMark(
+                    x: .value("Month", point.date),
+                    y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
+                )
+                .symbol(Circle().strokeBorder(lineWidth: 1))
+                .symbolSize(20)
+                .foregroundStyle(Color.accentColor)
+
+                if changeDates.contains(point.date), point.date != lastDate {
+                    PointMark(
+                        x: .value("Month", point.date),
+                        y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
+                    )
+                    .opacity(0)
+                    .annotation(position: .top) {
+                        Text(formatAmount(point.value))
+                            .font(.caption2)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.systemBackground).opacity(0.9), in: Capsule())
+                            .overlay(
+                                Capsule().stroke(Color.secondary.opacity(0.25))
+                            )
+                    }
+                }
+
+                if let lastDate, point.date == lastDate {
+                    PointMark(
+                        x: .value("Month", point.date),
+                        y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
+                    )
+                    .opacity(0)
+                    .annotation(position: .top) {
+                        Text(formatAmount(point.value))
+                            .font(.caption2)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.systemBackground).opacity(0.9), in: Capsule())
+                            .overlay(
+                                Capsule().stroke(Color.secondary.opacity(0.25))
+                            )
+                    }
+                    .offset(x: -12)
+                }
+            }
+            .chartXScale(domain: xStart...xEnd)
+            .chartYScale(domain: (minY - max(25, (maxY - minY) * 0.1))...(maxY + max(25, (maxY - minY) * 0.1)))
+            .chartXAxis {
+                AxisMarks(values: data.map { $0.date }) { value in
+                    AxisValueLabel() {
+                        if let d = value.as(Date.self) {
+                            Text(shortMonth(d))
+                        }
+                    }
+                }
+            }
+            .chartPlotStyle { plotArea in
+                plotArea.padding(.bottom, 8)
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { value in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel {
+                        if let y = value.as(Double.self) {
+                            Text(formatAmount(Decimal(y)))
+                        }
+                    }
+                }
+            }
+        }
+
+        private func shortMonth(_ date: Date) -> String {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM"
+            return fmt.string(from: date)
+        }
+        private func formatAmount(_ amount: Decimal?) -> String {
+            let nf = NumberFormatter()
+            nf.numberStyle = .currency
+            nf.currencyCode = settings.currencyCode
+            guard let amount = amount else { return "—" }
+            return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+        }
+        var body: some View {
+            let sortedMonths = Array(schedule.keys).sorted(by: { $0 < $1 })
+            let data: [(date: Date, value: Decimal)] = sortedMonths.map { ($0, schedule[$0] ?? 0) }
+            let doubles = data.map { NSDecimalNumber(decimal: $0.value).doubleValue }
+            let minY = doubles.min() ?? 0
+            let maxY = doubles.max() ?? 0
+            let changeDates: Set<Date> = {
+                var set = Set<Date>()
+                for (idx, elem) in data.enumerated() {
+                    if idx == 0 {
+                        set.insert(elem.date)
+                    } else if elem.value != data[idx - 1].value {
+                        set.insert(elem.date)
+                    }
+                }
+                return set
+            }()
+            let lastDate = data.last?.date
+            let cal = Calendar.current
+            let firstMonth = sortedMonths.first ?? startMonth
+            let lastMonth = sortedMonths.last ?? startMonth
+            let xStart = cal.date(byAdding: .month, value: -1, to: firstMonth) ?? firstMonth
+            let xEnd = cal.date(byAdding: .month, value: 1, to: lastMonth) ?? lastMonth
+            
+            let chart = chartView(
+                data: data,
+                minY: minY,
+                maxY: maxY,
+                xStart: xStart,
+                xEnd: xEnd,
+                changeDates: changeDates,
+                lastDate: lastDate
+            )
+            .frame(height: 160)
+
+            let firstVal = data.first?.value
+            let minValDec = data.map { $0.value }.min()
+            let maxValDec = data.map { $0.value }.max()
+            let firstText: String? = firstVal.map { "First: \(formatAmount($0))" }
+            let rangeText: String? = {
+                if let minValDec, let maxValDec {
+                    return "Range: \(formatAmount(minValDec)) – \(formatAmount(maxValDec))"
+                }
+                return nil
+            }()
+            
+            Group {
+                if !data.isEmpty {
+                    chart
+
+                    HStack(spacing: 12) {
+                        if let firstText {
+                            Text(firstText)
+                        }
+                        if let rangeText {
+                            Text(rangeText)
+                        }
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                } else {
+                    Text("No data available")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    
+    private struct ExplainPlanView: View {
+        struct ContributionRow: Hashable {
+            let name: String
+            let amount: Decimal
+        }
+        let startMonth: Date
+        let contributions: [Date: [ContributionRow]]
+        @EnvironmentObject private var settings: SettingsStore
+        private func monthHeader(_ date: Date) -> String {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "LLLL yyyy"
+            return fmt.string(from: date)
+        }
+        private func formatAmount(_ amount: Decimal?) -> String {
+            let nf = NumberFormatter()
+            nf.numberStyle = .currency
+            nf.currencyCode = settings.currencyCode
+            guard let amount = amount else { return "—" }
+            return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+        }
+        var body: some View {
+            let monthsSorted = Array(contributions.keys).sorted(by: { $0 < $1 })
+            if monthsSorted.isEmpty {
+                Text("No non-monthly income contributes in this period.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(monthsSorted, id: \.self) { m in
+                    Section(header: Text(monthHeader(m))) {
+                        ForEach(contributions[m] ?? [], id: \.self) { row in
+                            HStack {
+                                Text(row.name)
+                                Spacer()
+                                Text(formatAmount(row.amount))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Keyboard handling
@@ -1096,6 +1407,22 @@ struct DebtSummaryView: View {
     }
     
     private var computedMonthlyNet: Decimal { computedMonthlyIncome - computedMonthlyBills - reserveSeedingThisMonthTotal() }
+    
+    // MARK: - New helpers for plan sheet additions
+
+    private func shortMonth(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM"
+        return fmt.string(from: date)
+    }
+
+    private func monthHeader(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "LLLL yyyy"
+        return fmt.string(from: date)
+    }
+
+    // The existing formatAmount(_ amount: Decimal?) exists, so no duplicate for non-optional Decimal added
 }
 
 private extension Decimal {
@@ -1106,7 +1433,6 @@ private extension Decimal {
         return result
     }
 }
-
 #if canImport(UIKit)
 extension UIView {
     func findFirstResponder() -> UIResponder? {
@@ -1120,4 +1446,5 @@ extension UIView {
     }
 }
 #endif
+
 

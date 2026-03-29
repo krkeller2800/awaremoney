@@ -17,6 +17,7 @@ final class CashFlowItem {
     var firstPaymentDate: Date?
     var notes: String?
     var ssaWednesday: Int?
+    var oneTimeSpreadMonthsOverride: Int? = nil
     var createdAt: Date
 
     // Reserve tracking (non-monthly bills)
@@ -49,6 +50,7 @@ final class CashFlowItem {
         firstPaymentDate: Date? = nil,
         notes: String? = nil,
         ssaWednesday: Int? = nil,
+        oneTimeSpreadMonthsOverride: Int? = nil,
         account: Account? = nil,
         createdAt: Date = Date(),
         reserveBalance: Decimal = 0,
@@ -65,6 +67,7 @@ final class CashFlowItem {
         self.firstPaymentDate = firstPaymentDate
         self.notes = notes
         self.ssaWednesday = ssaWednesday
+        self.oneTimeSpreadMonthsOverride = oneTimeSpreadMonthsOverride
         self.account = account
         self.createdAt = createdAt
         self.reserveBalance = reserveBalance
