@@ -398,8 +398,8 @@
             filePath = "awaremoney/View/Import/ReviewImportView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "151"
-            endingLineNumber = "151"
+            startingLineNumber = "159"
+            endingLineNumber = "159"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -465,6 +465,22 @@
             startingLineNumber = "495"
             endingLineNumber = "495"
             landmarkName = "body"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "A80DAF69-B6E0-48B4-A1AA-9B6288DC6930"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "awaremoney/View/Import/ImportFlowView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1337"
+            endingLineNumber = "1337"
+            landmarkName = "ipadBody"
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>

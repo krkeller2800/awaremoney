@@ -90,11 +90,11 @@ struct DebtDashboardView: View {
         }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
-                .presentationSizing(.page)
+                .applySheetSizing()
         }
         .sheet(isPresented: $showDebtSummary) {
             DebtSummaryView()
-                .presentationSizing(.page)
+                .applySheetSizing()
         }
     }
 
@@ -190,7 +190,7 @@ struct DebtDashboardView: View {
         .sheet(isPresented: $showDebtChart) {
             DebtProjectionChartView(items: allCashFlowItems())
                 .environmentObject(settings)
-                .presentationSizing(.page)
+                .applySheetSizing()
         }
     }
 
@@ -297,7 +297,7 @@ struct DebtDashboardView: View {
         }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
-                .presentationSizing(.page)
+                .applySheetSizing()
         }
         .fullScreenCover(isPresented: $showDebtSummary, onDismiss: { resetPhoneOrientationToDefault() }) {
             DebtSummaryView()

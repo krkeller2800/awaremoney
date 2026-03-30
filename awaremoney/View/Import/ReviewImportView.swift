@@ -20,6 +20,7 @@ struct ReviewImportView: View {
     @Query(sort: [SortDescriptor(\Account.createdAt)]) private var accounts: [Account]
     @State private var selectedAccountId: UUID? = nil
     @State private var showPDFSheet = false
+    @State private var showHelpSheet = false
     @State private var typicalPaymentInput: String = ""
     @State private var typicalPaymentParsed: Decimal? = nil
     @State private var aprInput: String = ""
@@ -89,6 +90,15 @@ struct ReviewImportView: View {
             }
             .navigationTitle("Review Import")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showHelpSheet = true
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                    }
+                }
+            }
             .onAppear {
                 let hasStaged = (vm.staged != nil)
                 let balancesCount = vm.staged?.balances.count ?? 0
@@ -134,8 +144,6 @@ struct ReviewImportView: View {
                 vm.userInstitutionName = ""
             }
         }
-        .presentationSizing(.page)
-        .presentationDetents([.large])
         .sheet(isPresented: $showPDFSheet) {
             NavigationStack {
                 if let url = resolvedPDFURL() {
@@ -178,7 +186,11 @@ struct ReviewImportView: View {
                 }
             }
             .presentationDetents([.large])
-            .presentationSizing(.page)
+            .applySheetSizing()
+        }
+        .fullScreenCover(isPresented: $showHelpSheet) {
+            NavigationStack { HelpVideosView() }
+                .ignoresSafeArea()
         }
     }
     
@@ -849,6 +861,13 @@ struct ReviewImportView: View {
         selectedAccountId = newValue
         vm.selectedAccountID = newValue
         AMLogging.log("ReviewImportView: Account selection changed -> \(String(describing: newValue))", component: "ReviewImportView")
+        if newValue != nil {
+            // The Institution field may disappear; clear editing state and dismiss keyboard
+            focusedField = nil
+            #if canImport(UIKit)
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            #endif
+        }
         if let id = newValue {
             vm.newAccountName = ""
             if let acct = accounts.first(where: { $0.id == id }) {

@@ -34,6 +34,9 @@ struct ImportFlowView: View {
     // New state for backup sheet presentation
     @State private var showBackupSheet: Bool = false
 
+    // New state for help sheet presentation
+    @State private var showHelpSheet: Bool = false
+    
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
     
     private enum PickerKind { case csv, pdf }
@@ -923,6 +926,13 @@ struct ImportFlowView: View {
                             PlanMenuLabel(title: "Trans")
                         }
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showHelpSheet = true
+                        } label: {
+                            Image(systemName: "questionmark.circle")
+                        }
+                    }
                 }
                 if settings.showHintBars {
                     hintBar
@@ -1016,6 +1026,10 @@ struct ImportFlowView: View {
                     .navigationTitle("Statement Type")
                     .navigationBarTitleDisplayMode(.inline)
                 }
+            }
+            .fullScreenCover(isPresented: $showHelpSheet) {
+                NavigationStack { HelpVideosView() }
+                    .ignoresSafeArea()
             }
         }
         .navigationDestination(item: $phoneRoute) { (route: BatchRoute) in
@@ -1187,6 +1201,13 @@ struct ImportFlowView: View {
                               PlanMenuLabel(title: "Statements",titleFont: .caption)
                           }
                       }
+                      ToolbarItem(placement: .topBarTrailing) {
+                          Button {
+                              showHelpSheet = true
+                          } label: {
+                              Image(systemName: "questionmark.circle")
+                          }
+                      }
                 }
                 .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
         } detail: {
@@ -1312,6 +1333,10 @@ struct ImportFlowView: View {
         .sheet(isPresented: $showBackupSheet) {
             BackupRestoreView()
                 .environmentObject(settings)
+        }
+        .fullScreenCover(isPresented: $showHelpSheet) {
+            NavigationStack { HelpVideosView() }
+                .ignoresSafeArea()
         }
         .task { await loadBatches() }
     }

@@ -275,3 +275,13 @@ struct GroupedSectionHeader: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+extension View {
+    @ViewBuilder
+    func applySheetSizing() -> some View {
+        if #available(iOS 18, *) {
+            self.presentationSizing(.page)
+        } else {
+            self.presentationDetents([.large])
+        }
+    }
+}
