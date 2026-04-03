@@ -110,6 +110,8 @@ struct HelpVideosView: View {
     @State private var naturalAspect: CGFloat? = nil
     @State private var sizeObservation: NSKeyValueObservation? = nil
     @State private var isFullScreen: Bool = false
+    @State private var isPlaying: Bool = false
+    @State private var playObservation: NSKeyValueObservation? = nil
 
     private var defaultAspect: CGFloat {
         #if os(iOS)
@@ -248,6 +250,19 @@ struct HelpVideosView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
+                        if isPlaying {
+                            player?.pause()
+                        } else {
+                            player?.play()
+                        }
+                    } label: {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    }
+                    .accessibilityLabel(isPlaying ? "Pause" : "Play")
+                    .disabled(selected == nil || player == nil)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
                         if let p = player {
                             p.seek(to: .zero)
                             p.play()
@@ -279,18 +294,26 @@ struct HelpVideosView: View {
                     player?.pause()
                     player = nil
                     sizeObservation = nil
+                    playObservation = nil
+                    isPlaying = false
                 }
             }
             .onDisappear {
                 player?.pause()
                 player = nil
                 sizeObservation = nil
+                playObservation = nil
+                isPlaying = false
             }
         }
     }
 
     private func preparePlayer(for video: HelpVideo) {
         player?.pause()
+        // Reset previous observation and state
+        playObservation = nil
+        isPlaying = false
+
         guard let resolvedURL = video.urlForCurrentDevice else {
             return
         }
@@ -301,6 +324,12 @@ struct HelpVideosView: View {
                 if size.width > 0 && size.height > 0 {
                     DispatchQueue.main.async { naturalAspect = size.width / size.height }
                 }
+            }
+        }
+        // Observe play state to keep toolbar button in sync with native controls
+        playObservation = player?.observe(\AVPlayer.timeControlStatus, options: [.initial, .new]) { observedPlayer, _ in
+            DispatchQueue.main.async {
+                self.isPlaying = (observedPlayer.timeControlStatus == .playing)
             }
         }
         player?.play()

@@ -9,6 +9,7 @@ struct AccountsListView: View {
 #endif
     @State private var isAboutPresented: Bool = false
     @State private var selection: Account.ID? = nil
+    @State private var showHelpSheet = false
 
     var body: some View {
         Group {
@@ -99,6 +100,16 @@ struct AccountsListView: View {
                         selection = accounts.first?.id
                     }
                 }
+                .onChange(of: accounts.map(\.id)) { _, _ in
+                    // If the selected account is no longer present, pick the first one.
+                    if let sel = selection, !accounts.contains(where: { $0.id == sel }) {
+                        selection = accounts.first?.id
+                    }
+                    // If selection is nil but accounts exist, seed it.
+                    if selection == nil {
+                        selection = accounts.first?.id
+                    }
+                }
             } else {
                 NavigationStack {
                     List {
@@ -157,12 +168,21 @@ struct AccountsListView: View {
                             }
                         }
 #endif
+                        ToolbarItem(placement: .topBarTrailing) {
+                            PlanToolbarButton("Help", systemImage: "questionmark.circle") {
+                                showHelpSheet = true
+                            }
+                        }
                     }
                 }
             }
         }
         .sheet(isPresented: $isAboutPresented) {
             AboutView()
+        }
+        .fullScreenCover(isPresented: $showHelpSheet) {
+            NavigationStack { HelpVideosView() }
+                .ignoresSafeArea()
         }
 #if DEBUG
         .sheet(isPresented: $isDebugSettingsPresented) {

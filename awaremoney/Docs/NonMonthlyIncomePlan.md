@@ -25,8 +25,9 @@ Two modes:
 1) Recurring Net (recommended default)
    - recurring income (monthly/semimonthly/biweekly/weekly/socialSecurity) as monthly equivalents
    - minus monthly‑equivalent bills
-   - minus reserve seeding for that month
 2) Fixed Amount (user‑chosen)
+
+Reserve seeding is informational only. It should not reduce the available income/budget. Seeding indicates how much the user may want to transfer into the linked reserve account to catch up, but it is not taken from income in the budget calculations.
 
 The plan uses the baseline for all months, then adds the overlay in months where spreads apply. After spreads end, the budget reverts to baseline automatically.
 
@@ -51,8 +52,8 @@ Data Model and Dependencies:
 
 Algorithm (High‑Level):
 1) Build baseline per month:
-   - For each month in horizon: `baseline[month] = max(0, recurringIncome[month] − recurringBills[month] − reserveSeed[month])`
-   - Recurring income/bills use monthly equivalents; reserve seed is computed per month.
+   - For each month in horizon: `baseline[month] = max(0, recurringIncome[month] − recurringBills[month])`
+   - Recurring income/bills use monthly equivalents; reserve seed is not subtracted.
 
 2) Build spread schedule for non‑monthly income:
    - Determine pay date for each item (prefer `firstPaymentDate`; fallback to `dayOfMonth` anchored to the plan start; else `createdAt`).
@@ -144,4 +145,5 @@ Next Steps Checklist:
 - [ ] Align DebtProjectionChartView to use the same schedule
 - [ ] Add unit and integration tests as specified above
 */
+
 

@@ -33,7 +33,8 @@ struct AccountDetailView: View {
     @State private var linkedLiabilityID: UUID? = nil
     @State private var activeAssetLink: AssetLiabilityLink? = nil
     @State private var suppressLinkOnChange = false
-
+    @State private var showHelpSheet = false
+    
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
@@ -121,7 +122,11 @@ struct AccountDetailView: View {
                             })
                         }
                     }
-
+                    ToolbarItem(placement: (account.type == .property) ? .topBarLeading : .topBarTrailing) {
+                        PlanToolbarButton("Help", systemImage: "questionmark.circle", fixedWidth: 90) {
+                            showHelpSheet = true
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         if account.type == .property {
                             Button(role: .destructive) {
@@ -135,13 +140,18 @@ struct AccountDetailView: View {
                 }
             } else {
                 ContentUnavailableView("Account no longer exists", systemImage: "exclamationmark.triangle")
-                    .task { dismiss() }
             }
+        }
+        .fullScreenCover(isPresented: $showHelpSheet) {
+            NavigationStack { HelpVideosView() }
+                .ignoresSafeArea()
         }
         // If the account disappears (e.g., after batch deletion), dismiss this screen
         .onChange(of: fetchedAccounts.count) { _, newCount in
             AMLogging.log("AccountDetailView fetchedAccounts count changed to \(newCount) for accountID=\(accountID)", component: "AccountDetailView")
-            if newCount == 0 { dismiss() }
+            if newCount == 0 && !isIPad { // only pop on iPhone
+                dismiss()
+            }
         }
         .task(id: account?.id) {
             AMLogging.log("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
@@ -936,7 +946,7 @@ struct AccountDetailView: View {
         }
         NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
         NotificationCenter.default.post(name: .accountsDidChange, object: nil)
-        dismiss()
+//        dismiss()
     }
 }
 

@@ -359,7 +359,6 @@ struct DebtSummaryView: View {
                         BudgetTimelinePreviewView(startMonth: startMonth, schedule: schedule)
                             .id("sched-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(startMonth.timeIntervalSince1970)")
                     }
-
                     Section {
                         DisclosureGroup("Explain my plan") {
                             let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
@@ -370,16 +369,10 @@ struct DebtSummaryView: View {
                                 months: 12,
                                 oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths)
                             )
-                            let explainContributions: [Date: [ExplainPlanView.ContributionRow]] = {
-                                var dict: [Date: [ExplainPlanView.ContributionRow]] = [:]
-                                for (date, rows) in rawExplainContributions {
-                                    let mapped: [ExplainPlanView.ContributionRow] = rows.map { r in
-                                        ExplainPlanView.ContributionRow(name: r.name, amount: r.amount)
-                                    }
-                                    dict[date] = mapped
-                                }
-                                return dict
-                            }()
+                            let explainContributions: [Date: [ExplainPlanView.ContributionRow]] =
+                                Dictionary(uniqueKeysWithValues: rawExplainContributions.map { (date, rows) in
+                                    (date, rows.map { r in ExplainPlanView.ContributionRow(name: r.name, amount: r.amount) })
+                                })
                             ExplainPlanView(startMonth: startMonth, contributions: explainContributions)
                         }
                     } header: {
@@ -406,14 +399,14 @@ struct DebtSummaryView: View {
                             }
                         }
                         LabeledContent("Net for Debt") {
-                            Text(formatAmount(computedMonthlyNet))
+                            Text(formatAmount(computedMonthlyIncome - computedMonthlyBills))
                         }
                         Button("Use Net as Budget") {
-                            if computedMonthlyNet > 0 {
-                                tempMonthlyBudget = formatAmount(computedMonthlyNet)
+                            if (computedMonthlyIncome - computedMonthlyBills) > 0 {
+                                tempMonthlyBudget = formatAmount(computedMonthlyIncome - computedMonthlyBills)
                             }
                         }
-                        .disabled(computedMonthlyNet <= 0)
+                        .disabled((computedMonthlyIncome - computedMonthlyBills) <= 0)
                     }
                     
                     Section("Current Plan") {
@@ -447,7 +440,7 @@ struct DebtSummaryView: View {
                     }
                     // Prefill budget with Net for Debt if enabled
                     if settings.useNetForDebtBudgetDefault {
-                        let net = computedMonthlyNet
+                        let net = computedMonthlyIncome - computedMonthlyBills
                         if net > 0 { tempMonthlyBudget = formatAmount(net) }
                     }
                     // Ensure any prefilled numeric budget is formatted to the user's currency
@@ -659,8 +652,7 @@ struct DebtSummaryView: View {
             maxY: Double,
             xStart: Date,
             xEnd: Date,
-            changeDates: Set<Date>,
-            lastDate: Date?
+            labelDates: Set<Date>
         ) -> some View {
             Chart(data, id: \.date) { point in
                 LineMark(
@@ -686,7 +678,7 @@ struct DebtSummaryView: View {
                 .symbolSize(20)
                 .foregroundStyle(Color.accentColor)
 
-                if changeDates.contains(point.date), point.date != lastDate {
+                if labelDates.contains(point.date) {
                     PointMark(
                         x: .value("Month", point.date),
                         y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
@@ -703,39 +695,19 @@ struct DebtSummaryView: View {
                                 Capsule().stroke(Color.secondary.opacity(0.25))
                             )
                     }
-                }
-
-                if let lastDate, point.date == lastDate {
-                    PointMark(
-                        x: .value("Month", point.date),
-                        y: .value("Budget", NSDecimalNumber(decimal: point.value).doubleValue)
-                    )
-                    .opacity(0)
-                    .annotation(position: .top) {
-                        Text(formatAmount(point.value))
-                            .font(.caption2)
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(.systemBackground).opacity(0.9), in: Capsule())
-                            .overlay(
-                                Capsule().stroke(Color.secondary.opacity(0.25))
-                            )
-                    }
-                    .offset(x: -12)
                 }
             }
             .chartXScale(domain: xStart...xEnd)
             .chartYScale(domain: (minY - max(25, (maxY - minY) * 0.1))...(maxY + max(25, (maxY - minY) * 0.1)))
             .chartXAxis {
-                AxisMarks(values: data.map { $0.date }) { value in
-                    AxisValueLabel() {
-                        if let d = value.as(Date.self) {
-                            Text(shortMonth(d))
-                        }
-                    }
-                }
-            }
+                  AxisMarks(values: .stride(by: .month, count: 2)) { value in
+                      AxisValueLabel() {
+                          if let d = value.as(Date.self) {
+                              Text(shortMonth(d))
+                          }
+                      }
+                  }
+              }
             .chartPlotStyle { plotArea in
                 plotArea.padding(.bottom, 8)
             }
@@ -770,18 +742,9 @@ struct DebtSummaryView: View {
             let doubles = data.map { NSDecimalNumber(decimal: $0.value).doubleValue }
             let minY = doubles.min() ?? 0
             let maxY = doubles.max() ?? 0
-            let changeDates: Set<Date> = {
-                var set = Set<Date>()
-                for (idx, elem) in data.enumerated() {
-                    if idx == 0 {
-                        set.insert(elem.date)
-                    } else if elem.value != data[idx - 1].value {
-                        set.insert(elem.date)
-                    }
-                }
-                return set
-            }()
-            let lastDate = data.last?.date
+            
+            let labelDates: Set<Date> = Set([data.first?.date, data.count > 5 ? data[5].date : nil, data.count > 11 ? data[11].date : nil].compactMap { $0 })
+            
             let cal = Calendar.current
             let firstMonth = sortedMonths.first ?? startMonth
             let lastMonth = sortedMonths.last ?? startMonth
@@ -794,8 +757,7 @@ struct DebtSummaryView: View {
                 maxY: maxY,
                 xStart: xStart,
                 xEnd: xEnd,
-                changeDates: changeDates,
-                lastDate: lastDate
+                labelDates: labelDates
             )
             .frame(height: 160)
 
@@ -1406,7 +1368,7 @@ struct DebtSummaryView: View {
         }
     }
     
-    private var computedMonthlyNet: Decimal { computedMonthlyIncome - computedMonthlyBills - reserveSeedingThisMonthTotal() }
+    private var computedMonthlyNet: Decimal { computedMonthlyIncome - computedMonthlyBills }
     
     // MARK: - New helpers for plan sheet additions
 
@@ -1446,5 +1408,6 @@ extension UIView {
     }
 }
 #endif
+
 
 

@@ -347,14 +347,20 @@ struct DebtDashboardView: View {
     private var planSheetView: some View {
         NavigationStack {
             Group {
-                switch planSheetMode {
-                case .incomeBills:
-                    IncomeAndBillsView(showsLocalModePicker: false)
+                if isPad {
+                    switch planSheetMode {
+                    case .incomeBills:
+                        IncomeAndBillsView()
+                            .environment(\.modelContext, modelContext)
+                    case .summary:
+                        IncomeBillsSummarySheetContent()
+                            .environment(\.modelContext, modelContext)
+                            .environmentObject(settings)
+                    }
+                } else {
+                    // iPhone: Always use the local three-segment picker inside IncomeAndBillsView
+                    IncomeAndBillsView()
                         .environment(\.modelContext, modelContext)
-                case .summary:
-                    IncomeBillsSummarySheetContent()
-                        .environment(\.modelContext, modelContext)
-                        .environmentObject(settings)
                 }
             }
             .toolbar {
@@ -369,16 +375,20 @@ struct DebtDashboardView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top) {
-                VStack(spacing: 8) {
-                    Picker("Plan Mode", selection: $planSheetMode) {
-                        Text("Income & Bills").tag(PlanSheetMode.incomeBills)
-                        Text("Summary").tag(PlanSheetMode.summary)
+                if isPad {
+                    VStack(spacing: 8) {
+                        Picker("Plan Mode", selection: $planSheetMode) {
+                            Text("Income & Bills").tag(PlanSheetMode.incomeBills)
+                            Text("Summary").tag(PlanSheetMode.summary)
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                } else {
+                    EmptyView()
                 }
-                .padding(.vertical, 8)
-                .background(.bar)
             }
         }
     }

@@ -29,7 +29,7 @@ struct IncomeBillsSummarySections: View {
     private var monthlyBillsTotal: Decimal {
         bills.reduce(0) { $0 + monthlyEquivalent($1) }
     }
-    private var monthlyNetForDebt: Decimal { monthlyIncomeTotal - monthlyBillsTotal - reserveSeedingThisMonthTotal() }
+    private var monthlyNetForDebt: Decimal { monthlyIncomeTotal - monthlyBillsTotal }
 
     private var billsToIncomeRatio: Double {
         guard monthlyIncomeTotal > 0 else { return 0 }

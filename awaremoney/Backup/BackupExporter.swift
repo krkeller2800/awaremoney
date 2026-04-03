@@ -132,31 +132,93 @@ struct EmbeddedStatementDTO: Codable {
 
 enum BackupExporter {
 
+    /// Safely reflect a property by name without relying on KVC. Returns nil if the key isn't present.
+    private static func reflectValue<T>(_ object: Any, key: String, as type: T.Type) -> T? {
+        var mirror: Mirror? = Mirror(reflecting: object)
+        while let m = mirror {
+            if let match = m.children.first(where: { $0.label == key }) {
+                return match.value as? T
+            }
+            mirror = m.superclassMirror
+        }
+        return nil
+    }
+
     /// Collect available statement PDFs for all import batches and return as embedded DTOs.
     private static func collectStatementPDFs(context: ModelContext) -> [EmbeddedStatementDTO] {
         let batches: [ImportBatch] = (try? context.fetch(FetchDescriptor<ImportBatch>())) ?? []
         AMLogging.log("BackupExporter: collectStatementPDFs — batches fetched=\(batches.count)", component: "BackupExporter")
+
         let fm = FileManager.default
         let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first
         var results: [EmbeddedStatementDTO] = []
+
+        func perBatchPreviewDirectory(for id: UUID) -> URL? {
+            guard let caches else { return nil }
+            return caches.appendingPathComponent("StatementPreviews", isDirectory: true)
+                .appendingPathComponent(id.uuidString, isDirectory: true)
+        }
+
         for b in batches {
             let fileName = b.sourceFileName
-            if fileName.isEmpty || !fileName.lowercased().hasSuffix(".pdf") { continue }
+            let isPDF = !fileName.isEmpty && fileName.lowercased().hasSuffix(".pdf")
+            guard isPDF else {
+                AMLogging.log("BackupExporter: skip batch id=\(b.id) — non-PDF sourceFileName='\(fileName)'", component: "BackupExporter")
+                continue
+            }
+
             var sourceURL: URL? = nil
+
+            // 1) Preferred: explicit per-batch local path
             if let path = b.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
                 sourceURL = URL(fileURLWithPath: path)
-            } else if let caches, fm.fileExists(atPath: caches.appendingPathComponent(fileName).path) {
-                sourceURL = caches.appendingPathComponent(fileName)
+                AMLogging.log("BackupExporter: using sourceFileLocalPath for batch id=\(b.id) path=\(path)", component: "BackupExporter")
             }
-            guard let src = sourceURL, let data = try? Data(contentsOf: src) else { continue }
-            results.append(EmbeddedStatementDTO(batchID: b.id, fileName: fileName, data: data))
+
+            // 2) Legacy fallback: Caches/<sourceFileName>
+            if sourceURL == nil, let caches {
+                let legacy = caches.appendingPathComponent(fileName)
+                if fm.fileExists(atPath: legacy.path) {
+                    sourceURL = legacy
+                    AMLogging.log("BackupExporter: using legacy Caches path for batch id=\(b.id) path=\(legacy.path)", component: "BackupExporter")
+                }
+            }
+
+            // 3) New fallback: per-batch preview directory by convention
+            if sourceURL == nil, let dir = perBatchPreviewDirectory(for: b.id) {
+                let expected = dir.appendingPathComponent(fileName)
+                if fm.fileExists(atPath: expected.path) {
+                    sourceURL = expected
+                    AMLogging.log("BackupExporter: using per-batch preview path for batch id=\(b.id) path=\(expected.path)", component: "BackupExporter")
+                } else if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil),
+                          let anyPDF = items.first(where: { $0.lastPathComponent.lowercased().hasSuffix(".pdf") }) {
+                    // Heuristic: if the exact name isn't present, pick any PDF in the per-batch folder
+                    sourceURL = anyPDF
+                    AMLogging.log("BackupExporter: using first discovered PDF in per-batch dir for batch id=\(b.id) path=\(anyPDF.path)", component: "BackupExporter")
+                } else {
+                    AMLogging.log("BackupExporter: no PDF found in per-batch dir for batch id=\(b.id) dir=\(dir.path)", component: "BackupExporter")
+                }
+            }
+
+            guard let src = sourceURL else {
+                AMLogging.log("BackupExporter: skipped batch id=\(b.id) — cached PDF not found for '\(fileName)'", component: "BackupExporter")
+                continue
+            }
+
+            guard let data = try? Data(contentsOf: src) else {
+                AMLogging.log("BackupExporter: failed to read PDF data for batch id=\(b.id) at \(src.path)", component: "BackupExporter")
+                continue
+            }
+
+            results.append(EmbeddedStatementDTO(batchID: b.id, fileName: src.lastPathComponent, data: data))
         }
+
         AMLogging.log("BackupExporter: collectStatementPDFs — embedded count=\(results.count)", component: "BackupExporter")
         return results
     }
 
     /// Builds a JSON backup `Data` and a suggested filename.
-    static func makeBackup(context: ModelContext, settings: SettingsStore) throws -> (data: Data, filename: String) {
+    static func makeBackup(context: ModelContext, settings: SettingsStore, includeEmbeddedStatements: Bool = true) throws -> (data: Data, filename: String) {
         // Fetch all model objects
         let accounts: [Account] = (try? context.fetch(FetchDescriptor<Account>())) ?? []
         let transactions: [Transaction] = (try? context.fetch(FetchDescriptor<Transaction>())) ?? []
@@ -191,9 +253,9 @@ enum BackupExporter {
                 amount: tx.amount,
                 payee: tx.payee,
                 memo: tx.memo,
-                kindRaw: (tx as AnyObject).value(forKey: "kindRaw") as? String, // best-effort if available
+                kindRaw: Self.reflectValue(tx, key: "kindRaw", as: String.self), // best-effort if available, safe via reflection
                 isExcluded: tx.isExcluded,
-                isUserEdited: (tx as AnyObject).value(forKey: "isUserEdited") as? Bool,
+                isUserEdited: Self.reflectValue(tx, key: "isUserEdited", as: Bool.self),
                 isUserModified: tx.isUserModified,
                 originalAmount: tx.originalAmount,
                 originalDate: tx.originalDate,
@@ -273,10 +335,10 @@ enum BackupExporter {
             )
         }
 
-        let embeddedStatementDTOs: [EmbeddedStatementDTO] = Self.collectStatementPDFs(context: context)
+        let embeddedStatementDTOs: [EmbeddedStatementDTO]? = includeEmbeddedStatements ? Self.collectStatementPDFs(context: context) : nil
 
         AMLogging.log(
-            "BackupExporter: preparing manifest — accounts=\(accountDTOs.count) tx=\(txDTOs.count) balances=\(balDTOs.count) holdings=\(holdDTOs.count) batches=\(batchDTOs.count) mappings=\(mappingDTOs.count) cashFlows=\(cashDTOs.count) links=\(linkDTOs.count)",
+            "BackupExporter: preparing manifest — accounts=\(accountDTOs.count) tx=\(txDTOs.count) balances=\(balDTOs.count) holdings=\(holdDTOs.count) batches=\(batchDTOs.count) mappings=\(mappingDTOs.count) cashFlows=\(cashDTOs.count) links=\(linkDTOs.count) embedded=\(embeddedStatementDTOs?.count ?? 0)",
             component: "BackupExporter"
         )
 
@@ -326,9 +388,11 @@ enum BackupExporter {
     /// Returns the root FileWrapper and a suggested filename (without extension).
     static func makeBackupPackage(context: ModelContext, settings: SettingsStore) throws -> (wrapper: FileWrapper, filename: String) {
         // Reuse the existing JSON manifest builder
-        let (manifestData, filename) = try makeBackup(context: context, settings: settings)
+        let (manifestData, filename) = try makeBackup(context: context, settings: settings, includeEmbeddedStatements: false)
+        let pkgExt = "ambackup" // enforce the known-good extension
+        let filenameWithExt = filename.hasSuffix(".\(pkgExt)") ? filename : "\(filename).\(pkgExt)"
         AMLogging.log("BackupExporter: package build start — manifest size=\(manifestData.count) bytes filename=\(filename)", component: "BackupExporter")
-        AMLogging.log("BackupExporter: building package backup", component: "BackupExporter")
+        AMLogging.log("BackupExporter: building package backup (embedded PDFs excluded to avoid base64 bloat)", component: "BackupExporter")
 
         var children: [String: FileWrapper] = [:]
         let manifest = FileWrapper(regularFileWithContents: manifestData)
@@ -375,8 +439,9 @@ enum BackupExporter {
         }
 
         let root = FileWrapper(directoryWithFileWrappers: children)
+        root.preferredFilename = filenameWithExt
         AMLogging.log("BackupExporter: package build complete (filename=\(filename))", component: "BackupExporter")
-        return (root, filename)
+        return (root, filenameWithExt)
     }
 
     private static func suggestedFilename() -> String {

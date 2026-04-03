@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import Charts
 
 public struct IncomeScheduler {
     public enum BaselineSource {
@@ -12,29 +14,45 @@ public struct IncomeScheduler {
         months: Int,
         includeSpreads: Bool,
         oneTimeDefaultSpreadMonths: Int,
-        baselineSource: BaselineSource
+        baselineSource: BaselineSource,
+        clampNegativeToZero: Bool = false
     ) -> [Date: Decimal] {
         let baseline = baselineByMonth(items: items, start: start, months: months, baselineSource: baselineSource)
         let firstOfMonth = startOfMonth(start)
         let monthStarts = buildMonthStarts(from: firstOfMonth, count: months)
         
-        let spreads: [Date: Decimal]
+        let incomeSpreads: [Date: Decimal]
+        let billSpreads: [Date: Decimal]
         if includeSpreads {
-            spreads = spreadsByMonth(
+            incomeSpreads = spreadsByMonth(
                 incomes: items,
                 start: start,
                 months: months,
                 oneTimeDefaultSpreadMonths: oneTimeDefaultSpreadMonths
             )
+            let bills = items.filter { $0.kind == .bill }
+            billSpreads = billSpreadsByMonth(
+                bills: bills,
+                start: start,
+                months: months,
+                defaultSpreadMonths: oneTimeDefaultSpreadMonths
+            )
         } else {
-            spreads = [:]
+            incomeSpreads = [:]
+            billSpreads = [:]
         }
         
         var combined: [Date: Decimal] = [:]
         for m in monthStarts {
             let base = baseline[m] ?? 0
-            let spread = spreads[m] ?? 0
-            combined[m] = round2(max(0, base + spread))
+            let inc = incomeSpreads[m] ?? 0
+            let bill = billSpreads[m] ?? 0
+            let sum = base + inc + bill
+            if clampNegativeToZero || !includeSpreads {
+                combined[m] = round2(max(0, sum))
+            } else {
+                combined[m] = round2(sum)
+            }
         }
         return combined
     }
@@ -54,40 +72,26 @@ public struct IncomeScheduler {
             return Dictionary(uniqueKeysWithValues: monthStarts.map { ($0, val) })
             
         case .recurringNet:
-            // Filter recurring income items
+            // Filter recurring income items (monthly/semimonthly/biweekly/weekly/socialSecurity)
             let recurringIncomeItems = items.filter {
                 $0.kind == .income && frequencyIsRecurringIncome($0.frequency)
             }
-            // Sum recurring income monthly equivalent per month (same amount each month)
             let recurringIncomeMonthlyTotal = recurringIncomeItems.reduce(Decimal(0)) {
                 $0 + $1.amount * $1.frequency.monthlyEquivalentFactor
             }
-            // Filter bill items (kind == .bill)
-            let billItems = items.filter { $0.kind == .bill }
-            // For each month compute reserve seeds sum
-            var reserveSeedsByMonth: [Date: Decimal] = [:]
-            for monthStart in monthStarts {
-                var reserveSeedSum = Decimal(0)
-                for item in billItems {
-                    if let plan = BillReservePlanner.planReserve(for: item, asOf: monthStart, currentReserve: item.reserveBalance) {
-                        reserveSeedSum += plan.seedAmount
-                    }
-                }
-                reserveSeedsByMonth[monthStart] = reserveSeedSum
+
+            // Include only truly recurring bills in baseline (exclude non-monthly bills)
+            let recurringBillItems = items.filter {
+                $0.kind == .bill && frequencyIsRecurringBill($0.frequency)
             }
-            
-            // Sum bill monthly equivalent total
-            let billsMonthlyTotal = billItems.reduce(Decimal(0)) {
+            let billsMonthlyTotal = recurringBillItems.reduce(Decimal(0)) {
                 $0 + $1.amount * $1.frequency.monthlyEquivalentFactor
             }
-            
-            var result: [Date: Decimal] = [:]
-            for monthStart in monthStarts {
-                let reserveSeed = reserveSeedsByMonth[monthStart] ?? 0
-                let net = recurringIncomeMonthlyTotal - billsMonthlyTotal - reserveSeed
-                result[monthStart] = round2(net)
-            }
-            return result
+
+            // Baseline is constant per month: recurring income minus recurring bills
+            let net = recurringIncomeMonthlyTotal - billsMonthlyTotal
+            let value = round2(net)
+            return Dictionary(uniqueKeysWithValues: monthStarts.map { ($0, value) })
         }
     }
     
@@ -289,6 +293,195 @@ public struct IncomeScheduler {
         return result
     }
     
+    /// Builds a per-month breakdown of non-monthly bill contributions by individual bill item.
+    /// Uses the same sinking-fund allocation as billSpreadsByMonth, but returns signed
+    /// contributions (negative amounts) suitable for drill-down views.
+    /// - Parameters:
+    ///   - items: All cash flow items; bill items will be filtered internally.
+    ///   - start: First month to include (normalized to month start internally).
+    ///   - months: Number of months to include.
+    ///   - defaultSpreadMonths: Default spread months for one-time bills (allowed: 3, 6, 12; others treated as 12).
+    /// - Returns: Dictionary keyed by month start date to an array of negative contributions for that month.
+    static func billContributionsByMonth(
+        items: [CashFlowItem],
+        start: Date,
+        months: Int,
+        defaultSpreadMonths: Int
+    ) -> [Date: [IncomeContribution]] {
+        let firstOfMonth = startOfMonth(start)
+        let monthStarts = buildMonthStarts(from: firstOfMonth, count: months)
+        let monthSet = Set(monthStarts)
+        let lastMonthStart = monthStarts.last ?? firstOfMonth
+
+        // Filter to non-monthly and one-time bills
+        let bills = items.filter { $0.kind == .bill && [.yearly, .semiAnnual, .quarterly, .oneTime].contains($0.frequency) }
+
+        var result: [Date: [IncomeContribution]] = [:]
+
+        for item in bills {
+            // Resolve due date similar to billSpreadsByMonth
+            let dueDate: Date
+            if let fpd = item.firstPaymentDate {
+                dueDate = fpd
+            } else if let dom = item.dayOfMonth {
+                let calendar = Calendar(identifier: .gregorian)
+                var comps = calendar.dateComponents([.year, .month], from: firstOfMonth)
+                let rangeCount = (calendar.range(of: .day, in: .month, for: firstOfMonth)?.count) ?? 28
+                comps.day = min(dom, rangeCount)
+                dueDate = calendar.date(from: comps) ?? firstOfMonth
+            } else {
+                dueDate = item.createdAt
+            }
+            let baseDueMonth = startOfMonth(dueDate)
+
+            // Determine spread window length and recurrence period
+            let N = spreadMonthsForFrequency(item.frequency, oneTimeOverride: item.oneTimeSpreadMonthsOverride, defaultOneTime: defaultSpreadMonths)
+            guard N > 0 else { continue }
+
+            let periodMonths: Int
+            switch item.frequency {
+            case .yearly:      periodMonths = 12
+            case .semiAnnual:  periodMonths = 6
+            case .quarterly:   periodMonths = 3
+            case .oneTime:     periodMonths = 0
+            default:           periodMonths = 0
+            }
+
+            let total = round2(item.amount)
+            let even = round2(total / Decimal(N))
+            let remainder = total - (even * Decimal(N - 1))
+
+            func append(_ month: Date, amount: Decimal) {
+                guard monthSet.contains(month) else { return }
+                let contrib = IncomeContribution(itemId: item.id, name: item.name, amount: round2(amount))
+                result[month, default: []].append(contrib)
+            }
+
+            // Apply sinking-fund allocation for a single occurrence ending in dueMonth
+            func applyOccurrence(endingIn dueMonth: Date) {
+                // Allocate even amounts to the N-1 months before the due month
+                if N > 1 {
+                    for i in 1..<(N) {
+                        let m = addMonths(dueMonth, -i)
+                        append(m, amount: -even)
+                    }
+                }
+                // Allocate remainder in the due month so totals sum exactly to -total
+                append(dueMonth, amount: -remainder)
+            }
+
+            if periodMonths == 0 {
+                // One-time bill
+                applyOccurrence(endingIn: baseDueMonth)
+            } else {
+                // Recurring non-monthly bills: iterate occurrences across the horizon
+                var firstOccurrence = baseDueMonth
+                while firstOccurrence > firstOfMonth {
+                    firstOccurrence = addMonths(firstOccurrence, -periodMonths)
+                }
+                let startOccurrence = firstOccurrence
+                var occurrence = startOccurrence
+                while occurrence <= lastMonthStart {
+                    applyOccurrence(endingIn: occurrence)
+                    occurrence = addMonths(occurrence, periodMonths)
+                }
+            }
+        }
+
+        return result
+    }
+    
+    static func billSpreadsByMonth(
+        bills: [CashFlowItem],
+        start: Date,
+        months: Int,
+        defaultSpreadMonths: Int
+    ) -> [Date: Decimal] {
+        let firstOfMonth = startOfMonth(start)
+        let monthStarts = buildMonthStarts(from: firstOfMonth, count: months)
+        let monthSet = Set(monthStarts)
+        let lastMonthStart = monthStarts.last ?? firstOfMonth
+
+        // Filter to non-monthly bills
+        let nonMonthlyBills = bills.filter {
+            $0.kind == .bill && [.yearly, .semiAnnual, .quarterly, .oneTime].contains($0.frequency)
+        }
+
+        var result: [Date: Decimal] = [:]
+
+        for item in nonMonthlyBills {
+            // Resolve due date: prefer firstPaymentDate, else clamp dayOfMonth in plan start month, else createdAt
+            let dueDate: Date
+            if let fpd = item.firstPaymentDate {
+                dueDate = fpd
+            } else if let dom = item.dayOfMonth {
+                let calendar = Calendar(identifier: .gregorian)
+                var comps = calendar.dateComponents([.year, .month], from: firstOfMonth)
+                let rangeCount = (calendar.range(of: .day, in: .month, for: firstOfMonth)?.count) ?? 28
+                comps.day = min(dom, rangeCount)
+                dueDate = calendar.date(from: comps) ?? firstOfMonth
+            } else {
+                dueDate = item.createdAt
+            }
+            let baseDueMonth = startOfMonth(dueDate)
+
+            // Determine spread window length and recurrence period
+            let N = spreadMonthsForFrequency(item.frequency, oneTimeOverride: item.oneTimeSpreadMonthsOverride, defaultOneTime: defaultSpreadMonths)
+            guard N > 0 else { continue }
+
+            let periodMonths: Int
+            switch item.frequency {
+            case .yearly:      periodMonths = 12
+            case .semiAnnual:  periodMonths = 6
+            case .quarterly:   periodMonths = 3
+            case .oneTime:     periodMonths = 0
+            default:           periodMonths = 0
+            }
+
+            let total = round2(item.amount)
+            let even = round2(total / Decimal(N))
+            let remainder = total - (even * Decimal(N - 1))
+
+            func allocate(_ month: Date, amount: Decimal) {
+                guard monthSet.contains(month) else { return }
+                result[month, default: 0] += amount
+                result[month] = round2(result[month]!)
+            }
+
+            // Apply sinking-fund allocation for a single occurrence ending in dueMonth
+            func applyOccurrence(endingIn dueMonth: Date) {
+                // Allocate even amounts to the N-1 months before the due month
+                if N > 1 {
+                    for i in 1..<(N) {
+                        let m = addMonths(dueMonth, -i)
+                        allocate(m, amount: -even)
+                    }
+                }
+                // Allocate remainder in the due month so totals sum exactly to -total
+                allocate(dueMonth, amount: -remainder)
+            }
+
+            if periodMonths == 0 {
+                // One-time bill
+                applyOccurrence(endingIn: baseDueMonth)
+            } else {
+                // Recurring non-monthly bills: iterate occurrences across the horizon
+                var firstOccurrence = baseDueMonth
+                while firstOccurrence > firstOfMonth {
+                    firstOccurrence = addMonths(firstOccurrence, -periodMonths)
+                }
+                let startOccurrence = firstOccurrence
+                var occurrence = startOccurrence
+                while occurrence <= lastMonthStart {
+                    applyOccurrence(endingIn: occurrence)
+                    occurrence = addMonths(occurrence, periodMonths)
+                }
+            }
+        }
+
+        return result
+    }
+    
     // MARK: - Private Helpers
     
     private static func startOfMonth(_ date: Date) -> Date {
@@ -325,6 +518,15 @@ public struct IncomeScheduler {
         }
     }
     
+    private static func frequencyIsRecurringBill(_ f: PaymentFrequency) -> Bool {
+        switch f {
+        case .monthly:
+            return true
+        default:
+            return false
+        }
+    }
+    
     private static func spreadMonthsForFrequency(_ f: PaymentFrequency, oneTimeOverride: Int?, defaultOneTime: Int) -> Int {
         // Allow overrides (3/6/12) for all non-monthly income types, not just one-time
         let candidate = oneTimeOverride ?? defaultOneTime
@@ -340,6 +542,118 @@ public struct IncomeScheduler {
             return override ?? 12
         default:
             return 0
+        }
+    }
+}
+
+extension IncomeScheduler {
+    struct BudgetBreakdownPreviewView: View {
+        struct Segment: Identifiable {
+            let id = UUID()
+            let part: String
+            let value: Double
+        }
+        
+        struct MonthNetValue: Identifiable {
+            let id = UUID()
+            let month: Date
+            let baseline: Decimal
+            let spreads: Decimal
+            let net: Decimal
+        }
+        
+        let items: [CashFlowItem]
+        let start: Date
+        let months: Int
+        let oneTimeSpreadMonths: Int
+        
+        func computeMonthNetValues() -> [MonthNetValue] {
+            let baseline = IncomeScheduler.baselineByMonth(
+                items: items,
+                start: start,
+                months: months,
+                baselineSource: .recurringNet
+            )
+            let incomeSpreads = IncomeScheduler.spreadsByMonth(
+                incomes: items,
+                start: start,
+                months: months,
+                oneTimeDefaultSpreadMonths: oneTimeSpreadMonths
+            )
+            let billSpreads = IncomeScheduler.billSpreadsByMonth(
+                bills: items.filter { $0.kind == .bill },
+                start: start,
+                months: months,
+                defaultSpreadMonths: oneTimeSpreadMonths
+            )
+            
+            let monthStarts = IncomeScheduler.buildMonthStarts(from: IncomeScheduler.startOfMonth(start), count: months)
+            
+            return monthStarts.map { month in
+                let base = baseline[month] ?? 0
+                let spreadsSum = (incomeSpreads[month] ?? 0) + (billSpreads[month] ?? 0)
+                let net = base + spreadsSum
+                // Allow spreads to be negative to render below zero/baseline
+                let spreads = net - base
+                return MonthNetValue(month: month, baseline: base, spreads: spreads, net: net)
+            }
+        }
+        
+        func computeSegments(from values: [MonthNetValue]) -> [Segment] {
+            var segments: [Segment] = []
+            for v in values {
+                // Baseline portion
+                segments.append(Segment(part: "Base", value: NSDecimalNumber(decimal: v.baseline).doubleValue))
+                
+                // Positive spreads (income)
+                if v.spreads > 0 {
+                    segments.append(Segment(part: "Income Spreads", value: NSDecimalNumber(decimal: v.spreads).doubleValue))
+                }
+                // Negative spreads (bills) — keep negative so bars render below zero
+                if v.spreads < 0 {
+                    segments.append(Segment(part: "Bill Spreads", value: NSDecimalNumber(decimal: v.spreads).doubleValue))
+                }
+            }
+            return segments
+        }
+        
+        var body: some View {
+            let monthNetValues = computeMonthNetValues()
+            
+            // Dynamic Y-axis domain based on min/max net with padding
+            let netDoubles = monthNetValues.map { NSDecimalNumber(decimal: $0.net).doubleValue }
+            let minNetDouble = netDoubles.min() ?? 0
+            let maxNetDouble = netDoubles.max() ?? 0
+            
+            Chart {
+                ForEach(monthNetValues) { v in
+                    // Baseline segment
+                    BarMark(
+                        x: .value("Month", v.month, unit: .month),
+                        y: .value("Base", NSDecimalNumber(decimal: v.baseline).doubleValue)
+                    )
+                    // Positive spreads stack above
+                    if v.spreads > 0 {
+                        BarMark(
+                            x: .value("Month", v.month, unit: .month),
+                            y: .value("Income Spreads", NSDecimalNumber(decimal: v.spreads).doubleValue)
+                        )
+                    }
+                    // Negative spreads render below zero/baseline
+                    if v.spreads < 0 {
+                        BarMark(
+                            x: .value("Month", v.month, unit: .month),
+                            y: .value("Bill Spreads", NSDecimalNumber(decimal: v.spreads).doubleValue)
+                        )
+                    }
+                }
+            }
+            .chartForegroundStyleScale([
+                "Base": Color.accentColor,
+                "Income Spreads": Color.green,
+                "Bill Spreads": Color.red.opacity(0.6)
+            ])
+            .chartYScale(domain: (minNetDouble - 25)...(maxNetDouble + 25))
         }
     }
 }

@@ -52,13 +52,13 @@ fileprivate func removeSSAToken(from s: String) -> String {
 
 struct IncomeAndBillsView: View {
     var showsLocalModePicker: Bool = true
+    var externalPhoneMode: PhoneMode? = nil
 
     @State private var selectedIncomeID: UUID? = nil
     @State private var selectedBillID: UUID? = nil
     @State private var showAddSheet = false
     @State private var addKind: CashFlowItem.Kind = .income
     @State private var activeSheet: ActiveSheet? = nil
-    // Removed: @State private var showDebtChart = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.presentationMode) private var presentationMode
@@ -67,8 +67,9 @@ struct IncomeAndBillsView: View {
     private enum IPadMode: String, CaseIterable { case incomeBills, summary }
     @State private var ipadMode: IPadMode = .incomeBills
 
-    private enum PhoneMode: String, CaseIterable { case incomeBills = "Income & Bills"; case summary = "Summary" }
-    @State private var phoneMode: PhoneMode = .incomeBills
+    enum PhoneMode: String, CaseIterable { case income = "Income"; case bills = "Bills"; case summary = "Summary" }
+    @State private var phoneMode: PhoneMode = .income
+    private var effectivePhoneMode: PhoneMode { externalPhoneMode ?? phoneMode }
 
     @State private var leftTopBarBottomY: CGFloat = 0
     @State private var rightTopBarBottomY: CGFloat = 0
@@ -308,7 +309,6 @@ struct IncomeAndBillsView: View {
                 Text(ipadMode == .incomeBills ? "Income & Bills" : "Monthly Summary")
                     .font(isPad ? .largeTitle : .headline)
             }
-            // Removed ToolbarItem(placement: .primaryAction) with Debt Chart button
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -345,7 +345,6 @@ struct IncomeAndBillsView: View {
                 }
             }
         }
-        // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
     }
 
     // MARK: - iPhone
@@ -353,62 +352,27 @@ struct IncomeAndBillsView: View {
     private var iPhoneBody: some View {
         NavigationStack {
             List {
-                if showsLocalModePicker {
+                Section {
+                    Text("DEBUG: isPad=\(isPad ? "true" : "false"), showsLocalModePicker=\(showsLocalModePicker ? "true" : "false"), externalPhoneMode=\(externalPhoneMode?.rawValue ?? "nil"), effectivePhoneMode=\(effectivePhoneMode.rawValue)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                
+                if showsLocalModePicker && externalPhoneMode == nil {
                     Section {
                         Picker("View", selection: $phoneMode) {
-                            Text("Income & Bills").tag(PhoneMode.incomeBills)
+                            Text("Income").tag(PhoneMode.income)
+                            Text("Bills").tag(PhoneMode.bills)
                             Text("Summary").tag(PhoneMode.summary)
                         }
                         .pickerStyle(.segmented)
                     }
+                }
 
-                    if phoneMode == .incomeBills {
-                        if incomes.isEmpty && bills.isEmpty {
-                            ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
-                        } else {
-                            Section("Income") {
-                                ForEach(incomes) { item in
-                                    NavigationLink(destination: EditCashFlowItemView(
-                                        item: item,
-                                        onSave: {
-                                            try? modelContext.save()
-                                        },
-                                        onDelete: {
-                                            modelContext.delete(item)
-                                            try? modelContext.save()
-                                        }
-                                    )) {
-                                        row(for: item)
-                                    }
-                                }
-                                .onDelete { indexSet in
-                                    delete(items: indexSet.map { incomes[$0] })
-                                }
-                                if incomes.isEmpty {
-                                    Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
-                                }
-                            }
-                            Section("Bills") {
-                                ForEach(bills) { item in
-                                    NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
-                                        row(for: item)
-                                    }
-                                }
-                                .onDelete { indexSet in
-                                    delete(items: indexSet.map { bills[$0] })
-                                }
-                                if bills.isEmpty {
-                                    Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    } else {
-                        summarySection
-                    }
-                } else {
-                    // No local picker: always show Income & Bills content (outer container controls summary)
-                    if incomes.isEmpty && bills.isEmpty {
-                        ContentUnavailableView("No income or bills yet", systemImage: "list.bullet", description: Text("Add your income and recurring bills to compute your debt budget."))
+                switch effectivePhoneMode {
+                case .income:
+                    if incomes.isEmpty {
+                        ContentUnavailableView("No income yet", systemImage: "list.bullet", description: Text("Add your income to compute your debt budget."))
                     } else {
                         Section("Income") {
                             ForEach(incomes) { item in
@@ -432,6 +396,11 @@ struct IncomeAndBillsView: View {
                                 Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
                             }
                         }
+                    }
+                case .bills:
+                    if bills.isEmpty {
+                        ContentUnavailableView("No bills yet", systemImage: "list.bullet", description: Text("Add your recurring bills to compute your debt budget."))
+                    } else {
                         Section("Bills") {
                             ForEach(bills) { item in
                                 NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
@@ -446,33 +415,36 @@ struct IncomeAndBillsView: View {
                             }
                         }
                     }
+                case .summary:
+                    summarySection
                 }
             }
             .navigationTitle("Income & Bills")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button("Add Income") {
-                            addKind = .income
-                            showAddSheet = true
+                    if effectivePhoneMode != .summary {
+                        Button {
+                            if effectivePhoneMode == .income {
+                                addKind = .income
+                                showAddSheet = true
+                            } else if effectivePhoneMode == .bills {
+                                let newItem = CashFlowItem(
+                                    kind: .bill,
+                                    name: "",
+                                    amount: 0,
+                                    frequency: .monthly,
+                                    dayOfMonth: nil,
+                                    firstPaymentDate: nil,
+                                    notes: nil,
+                                    ssaWednesday: nil
+                                )
+                                modelContext.insert(newItem)
+                                try? modelContext.save()
+                                activeSheet = .edit(item: newItem)
+                            }
+                        } label: {
+                            Label("Add", systemImage: "plus")
                         }
-                        Button("Add Bill") {
-                            let newItem = CashFlowItem(
-                                kind: .bill,
-                                name: "",
-                                amount: 0,
-                                frequency: .monthly,
-                                dayOfMonth: nil,
-                                firstPaymentDate: nil,
-                                notes: nil,
-                                ssaWednesday: nil
-                            )
-                            modelContext.insert(newItem)
-                            try? modelContext.save()
-                            activeSheet = .edit(item: newItem)
-                        }
-                    } label: {
-                        Label("Add", systemImage: "plus")
                     }
                 }
             }
@@ -523,7 +495,11 @@ struct IncomeAndBillsView: View {
                     }
                 }
             }
-            // Removed .sheet(isPresented: $showDebtChart) for DebtProjectionChartView
+            .onAppear {
+                if let ext = externalPhoneMode, ext != phoneMode {
+                    phoneMode = ext
+                }
+            }
         }
     }
 
@@ -824,16 +800,18 @@ private struct AddCashFlowItemView: View {
                                 }
                             }
 
-                            Spacer(minLength: 8)
+                            if initialKind != .income {
+                                Spacer(minLength: 8)
 
-                            Button(action: {
-                                dismissKeyboardOnly()
-                                showFrequencyPicker = true
-                            }) {
-                                Image(systemName: "pencil").imageScale(.small)
+                                Button(action: {
+                                    dismissKeyboardOnly()
+                                    showFrequencyPicker = true
+                                }) {
+                                    Image(systemName: "pencil").imageScale(.small)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
                         }
                         if initialKind == .income && frequency == .monthly {
                             Picker("SSA Wednesday", selection: Binding<Int?>(
@@ -845,9 +823,6 @@ private struct AddCashFlowItemView: View {
                                 Text("3rd Wednesday").tag(Optional(3))
                                 Text("4th Wednesday").tag(Optional(4))
                             }
-                            Text("For Social Security income paid on a specific Wednesday of the month.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
                         }
                         if ssaWednesday == nil {
                             switch frequency.normalized {
@@ -861,16 +836,18 @@ private struct AddCashFlowItemView: View {
                                         ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
                                     }
 
-                                    Spacer(minLength: 8)
+                                    if initialKind != .income {
+                                        Spacer(minLength: 8)
 
-                                    Button(action: {
-                                        dismissKeyboardOnly()
-                                        showDayOfMonthPicker = true
-                                    }) {
-                                        Image(systemName: "pencil").imageScale(.small)
+                                        Button(action: {
+                                            dismissKeyboardOnly()
+                                            showDayOfMonthPicker = true
+                                        }) {
+                                            Image(systemName: "pencil").imageScale(.small)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
                                 }
                             default:
                                 HStack {
@@ -879,16 +856,18 @@ private struct AddCashFlowItemView: View {
                                         set: { firstPaymentDate = $0 }
                                     ), displayedComponents: .date)
 
-                                    Spacer(minLength: 8)
+                                    if initialKind != .income {
+                                        Spacer(minLength: 8)
 
-                                    Button(action: {
-                                        dismissKeyboardOnly()
-                                        showFirstPaymentDatePicker = true
-                                    }) {
-                                        Image(systemName: "pencil").imageScale(.small)
+                                        Button(action: {
+                                            dismissKeyboardOnly()
+                                            showFirstPaymentDatePicker = true
+                                        }) {
+                                            Image(systemName: "pencil").imageScale(.small)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
                                 }
                                 if firstPaymentDate == nil {
                                     Text("Tip: Set the first payment date so spreads can start the month after the pay date. Using an estimated date for now.")
@@ -1011,23 +990,6 @@ private struct AddCashFlowItemView: View {
                 }
                 .navigationTitle("Frequency")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFrequencyPicker = false } } }
-            }
-        }
-        .sheet(isPresented: $showSSAWednesdayPicker) {
-            NavigationStack {
-                Form {
-                    Picker("SSA Wednesday", selection: Binding<Int?>(
-                        get: { ssaWednesday },
-                        set: { ssaWednesday = $0 }
-                    )) {
-                        Text("None").tag(nil as Int?)
-                        Text("2nd Wednesday").tag(Optional(2))
-                        Text("3rd Wednesday").tag(Optional(3))
-                        Text("4th Wednesday").tag(Optional(4))
-                    }
-                }
-                .navigationTitle("SSA Wednesday")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSSAWednesdayPicker = false } } }
             }
         }
         .sheet(isPresented: $showDayOfMonthPicker) {
@@ -1176,7 +1138,6 @@ private struct EditCashFlowItemView: View {
     @State private var notesIsFirstResponder: Bool = false
     
     @State private var showFrequencyPicker = false
-    @State private var showSSAWednesdayPicker = false
     @State private var showDayOfMonthPicker = false
     @State private var showFirstPaymentDatePicker = false
     
@@ -1309,39 +1270,27 @@ private struct EditCashFlowItemView: View {
                                 }
                             }
 
-                            Spacer(minLength: 8)
-
-                            Button(action: {
-                                dismissKeyboardOnly()
-                                showFrequencyPicker = true
-                            }) {
-                                Image(systemName: "pencil").imageScale(.small)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                        }
-                        if isIncome && frequency == .monthly {
-                            HStack {
-                                Picker("SSA Wednesday", selection: Binding<Int?>(
-                                    get: { ssaWednesday },
-                                    set: { ssaWednesday = $0 }
-                                )) {
-                                    Text("None").tag(nil as Int?)
-                                    Text("2nd Wednesday").tag(Optional(2))
-                                    Text("3rd Wednesday").tag(Optional(3))
-                                    Text("4th Wednesday").tag(Optional(4))
-                                }
-
+                            if !isIncome {
                                 Spacer(minLength: 8)
-
                                 Button(action: {
                                     dismissKeyboardOnly()
-                                    showSSAWednesdayPicker = true
+                                    showFrequencyPicker = true
                                 }) {
                                     Image(systemName: "pencil").imageScale(.small)
                                 }
                                 .buttonStyle(.plain)
                                 .foregroundStyle(.secondary)
+                            }
+                        }
+                        if isIncome && frequency == .monthly {
+                            Picker("SSA Wednesday", selection: Binding<Int?>(
+                                get: { ssaWednesday },
+                                set: { ssaWednesday = $0 }
+                            )) {
+                                Text("None").tag(nil as Int?)
+                                Text("2nd Wednesday").tag(Optional(2))
+                                Text("3rd Wednesday").tag(Optional(3))
+                                Text("4th Wednesday").tag(Optional(4))
                             }
                         }
                         if ssaWednesday == nil {
@@ -1356,16 +1305,17 @@ private struct EditCashFlowItemView: View {
                                         ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
                                     }
 
-                                    Spacer(minLength: 8)
-
-                                    Button(action: {
-                                        dismissKeyboardOnly()
-                                        showDayOfMonthPicker = true
-                                    }) {
-                                        Image(systemName: "pencil").imageScale(.small)
+                                    if !isIncome {
+                                        Spacer(minLength: 8)
+                                        Button(action: {
+                                            dismissKeyboardOnly()
+                                            showDayOfMonthPicker = true
+                                        }) {
+                                            Image(systemName: "pencil").imageScale(.small)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
                                 }
                             default:
                                 HStack {
@@ -1374,16 +1324,17 @@ private struct EditCashFlowItemView: View {
                                         set: { firstPaymentDate = $0 }
                                     ), displayedComponents: .date)
 
-                                    Spacer(minLength: 8)
-
-                                    Button(action: {
-                                        dismissKeyboardOnly()
-                                        showFirstPaymentDatePicker = true
-                                    }) {
-                                        Image(systemName: "pencil").imageScale(.small)
+                                    if !isIncome {
+                                        Spacer(minLength: 8)
+                                        Button(action: {
+                                            dismissKeyboardOnly()
+                                            showFirstPaymentDatePicker = true
+                                        }) {
+                                            Image(systemName: "pencil").imageScale(.small)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
                                 }
                                 if firstPaymentDate == nil {
                                     Text("Tip: Set the first payment date so spreads can start the month after the pay date. Using an estimated date for now.")
@@ -1510,23 +1461,6 @@ private struct EditCashFlowItemView: View {
                 }
                 .navigationTitle("Frequency")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFrequencyPicker = false } } }
-            }
-        }
-        .sheet(isPresented: $showSSAWednesdayPicker) {
-            NavigationStack {
-                Form {
-                    Picker("SSA Wednesday", selection: Binding<Int?>(
-                        get: { ssaWednesday },
-                        set: { ssaWednesday = $0 }
-                    )) {
-                        Text("None").tag(nil as Int?)
-                        Text("2nd Wednesday").tag(Optional(2))
-                        Text("3rd Wednesday").tag(Optional(3))
-                        Text("4th Wednesday").tag(Optional(4))
-                    }
-                }
-                .navigationTitle("SSA Wednesday")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSSAWednesdayPicker = false } } }
             }
         }
         .sheet(isPresented: $showDayOfMonthPicker) {
@@ -1879,5 +1813,4 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
-
 

@@ -35,21 +35,31 @@ struct BackupImportSummary: Sendable {
 
 enum BackupImporter {
     static func importBackup(wrapper: FileWrapper, context: ModelContext, settings: SettingsStore) throws -> BackupImportSummary {
-        // Find and read manifest.json
-        guard let files = wrapper.fileWrappers,
-              let manifest = files["manifest.json"],
-              let manifestData = manifest.regularFileContents else {
+        // Resolve manifest data from a package or a single-file fallback
+        let files = wrapper.fileWrappers
+        let manifestData: Data
+        if let files,
+           let manifest = files["manifest.json"],
+           let data = manifest.regularFileContents {
+            manifestData = data
+            AMLogging.log("BackupImporter: manifest.json read from package — size=\(data.count) bytes", component: "BackupImporter")
+        } else if !wrapper.isDirectory, let data = wrapper.regularFileContents {
+            // Fallback: wrapper is a single file containing the manifest JSON
+            manifestData = data
+            AMLogging.log("BackupImporter: single-file manifest read — size=\(data.count) bytes", component: "BackupImporter")
+        } else {
             throw NSError(domain: "BackupImporter", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing manifest.json in backup."])
         }
-        AMLogging.log("BackupImporter: manifest.json read — size=\(manifestData.count) bytes", component: "BackupImporter")
+
         let summary = try importBackup(data: manifestData, context: context, settings: settings)
         AMLogging.log(
             "BackupImporter: core data import complete — settingsUpdated=\(summary.settingsUpdated) accounts(i=\(summary.accountsInserted), u=\(summary.accountsUpdated)) batches(i=\(summary.batchesInserted), u=\(summary.batchesUpdated)) balances(i=\(summary.balanceSnapsInserted), u=\(summary.balanceSnapsUpdated)) mappings(i=\(summary.csvMappingsInserted), u=\(summary.csvMappingsUpdated)) cashFlows(i=\(summary.cashFlowsInserted), u=\(summary.cashFlowsUpdated)) links(i=\(summary.linksInserted), u=\(summary.linksUpdated)) skipped(tx=\(summary.transactionsSkipped), holdings=\(summary.holdingsSkipped))",
             component: "BackupImporter"
         )
 
-        // Locate statements directory
-        if let statements = files["statements"], statements.isDirectory, let children = statements.fileWrappers {
+        // Locate statements directory if present in package
+        if let files,
+           let statements = files["statements"], statements.isDirectory, let children = statements.fileWrappers {
             AMLogging.log("BackupImporter: statements directory found — batchFolderCount=\(children.count)", component: "BackupImporter")
             // For each batch folder, expect <batchID>/<sourceFileName>
             for (batchIDString, batchFolder) in children where batchFolder.isDirectory {
@@ -330,5 +340,10 @@ enum BackupImporter {
 
         return summary
     }
-}
 
+    static func importBackup(at url: URL, context: ModelContext, settings: SettingsStore) throws -> BackupImportSummary {
+        AMLogging.log("BackupImporter: opening backup at URL — path=\(url.path)", component: "BackupImporter")
+        let wrapper = try FileWrapper(url: url, options: .immediate)
+        return try importBackup(wrapper: wrapper, context: context, settings: settings)
+    }
+}

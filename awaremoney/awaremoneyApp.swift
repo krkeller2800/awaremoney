@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import UniformTypeIdentifiers
 
 @main
 struct awaremoneyApp: App {
@@ -71,13 +72,23 @@ struct awaremoneyApp: App {
                     }
                 }
                 .onOpenURL { url in
-                    let ext = url.pathExtension.lowercased()
-                    if ext == "ambackup" || ext == "json" {
+                    // Prefer UTType match first
+                    if let rv = try? url.resourceValues(forKeys: [.contentTypeKey]),
+                       let type = rv.contentType,
+                       type.conforms(to: .awareMoneyBackup) {
                         Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
-                        AMLogging.always("App opened with backup URL: \(url.lastPathComponent)", component: "App")
+                        AMLogging.always("App opened with backup (UTType): \(url.lastPathComponent)", component: "App")
+                        return
+                    }
+
+                    // Fallback: extension checks (accept legacy too)
+                    let ext = url.pathExtension.lowercased()
+                    if ["ambackup", "awaremoneybackup", "json"].contains(ext) {
+                        Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
+                        AMLogging.always("App opened with backup (ext): \(url.lastPathComponent)", component: "App")
                     } else {
                         importRouter.pendingURL = url
-                        AMLogging.always("App opened with file URL: \(url.lastPathComponent)", component: "App")
+                        AMLogging.always("App opened with non-backup file: \(url.lastPathComponent)", component: "App")
                     }
                 }
                 .onChange(of: scenePhase) { _, newPhase in

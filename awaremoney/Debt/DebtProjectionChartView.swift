@@ -106,8 +106,7 @@ struct DebtProjectionChartView: View {
                 }
                 .padding(.horizontal)
                 
-                let currentMonthReserveSeed = reserveSeedingThisMonthTotal()
-                let displayBudget = max(Decimal(0), effectiveBudget(for: monthlyNet, strategy: selectedStrategy) - currentMonthReserveSeed)
+                let displayBudget = max(Decimal(0), effectiveBudget(for: monthlyNet, strategy: selectedStrategy))
                 
                 Text("Budget: \(formatCurrencyDecimal(displayBudget)) • Strategy: \(strategyDisplayName(selectedStrategy))")
                     .font(.subheadline)

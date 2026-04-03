@@ -47,6 +47,10 @@ struct ImportFlowView: View {
         case checking = "Bank Statement"
         case brokerage = "Brokerage Statement"
         case csv = "CSV/Activity"
+        case ofx = "OFX/QFX/QBO"
+        case qif = "QIF Transactions"
+        case excel = "Excel (XLSX/XLS)"
+        case zip = "ZIP Archive"
         var id: String { rawValue }
     }
 
@@ -67,13 +71,15 @@ struct ImportFlowView: View {
             vm.newAccountType = .brokerage
         case .csv:
             vm.userSelectedDocHint = nil
+        case .ofx, .qif, .excel, .zip:
+            vm.userSelectedDocHint = nil
         }
         let isPDF = url.pathExtension.lowercased() == "pdf"
         DispatchQueue.main.async {
             if isPDF {
                 self.handlePDFSnapshotImport(url: url)
             } else {
-                self.vm.handlePickedURL(url)
+                Task { await self.handleImport(url) }
             }
         }
         AMLogging.always("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
@@ -1005,11 +1011,85 @@ struct ImportFlowView: View {
             .sheet(isPresented: $showDocKindSheet) {
                 NavigationStack {
                     List {
-                        ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
-                            Button(kind.rawValue) {
+                        Section("PDF Statements") {
+                            Button("Credit Card") {
                                 showDocKindSheet = false
                                 if let url = pendingExternalURL {
-                                    applyExternal(kind: kind, url: url)
+                                    applyExternal(kind: .creditCard, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("Loan") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .loan, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("Bank") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .checking, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("Brokerage") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .brokerage, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                        }
+                        Section("Transactions") {
+                            Button("CSV") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .csv, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("OFX/QFX/QBO") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .ofx, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("QIF") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .qif, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("Excel (XLSX/XLS)") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .excel, url: url)
+                                }
+                                importRouter.pendingURL = nil
+                                pendingExternalURL = nil
+                                externalImportActive = false
+                            }
+                            Button("ZIP Archive") {
+                                showDocKindSheet = false
+                                if let url = pendingExternalURL {
+                                    applyExternal(kind: .zip, url: url)
                                 }
                                 importRouter.pendingURL = nil
                                 pendingExternalURL = nil
@@ -1308,11 +1388,85 @@ struct ImportFlowView: View {
         .sheet(isPresented: $showDocKindSheet) {
             NavigationStack {
                 List {
-                    ForEach(ExternalDocKind.allCases) { (kind: ExternalDocKind) in
-                        Button(kind.rawValue) {
+                    Section("PDF Statements") {
+                        Button("Credit Card") {
                             showDocKindSheet = false
                             if let url = pendingExternalURL {
-                                applyExternal(kind: kind, url: url)
+                                applyExternal(kind: .creditCard, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("Loan") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .loan, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("Bank") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .checking, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("Brokerage") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .brokerage, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                    }
+                    Section("Transactions") {
+                        Button("CSV") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .csv, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("OFX/QFX/QBO") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .ofx, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("QIF") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .qif, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("Excel (XLSX/XLS)") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .excel, url: url)
+                            }
+                            importRouter.pendingURL = nil
+                            pendingExternalURL = nil
+                            externalImportActive = false
+                        }
+                        Button("ZIP Archive") {
+                            showDocKindSheet = false
+                            if let url = pendingExternalURL {
+                                applyExternal(kind: .zip, url: url)
                             }
                             importRouter.pendingURL = nil
                             pendingExternalURL = nil

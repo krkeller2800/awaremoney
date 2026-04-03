@@ -18,6 +18,8 @@ struct ManualAssetSheet: View {
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable { case name, institution, value }
 
+    private var isEditing: Bool { focusedField != nil }
+
     private var canGoPrevious: Bool {
         switch focusedField {
         case .institution, .value:
@@ -169,31 +171,6 @@ struct ManualAssetSheet: View {
                     }
                     .disabled(!isValid)
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button(action: { previousField() }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .disabled(!canGoPrevious)
-
-                    Button(action: { nextField() }) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .disabled(!canGoNext)
-
-                    Spacer()
-
-                    Button(action: {
-                        if isValid {
-                            focusedField = nil
-                            save()
-                        } else {
-                            focusedField = nil
-                        }
-                    }) {
-                        Image(systemName: "checkmark.circle.fill")
-                    }
-                    .disabled(!isValid)
-                }
             }
             .onChange(of: focusedField) { _, newValue in
                 if wasValueFocused && newValue != .value {
@@ -203,6 +180,23 @@ struct ManualAssetSheet: View {
             }
             .onChange(of: settings.currencyCode) { 
                 formatValueTextForDisplay()
+            }
+            .safeAreaInset(edge: .bottom) {
+                Group {
+                    if isEditing {
+                        EditingAccessoryBar(
+                            canGoPrevious: canGoPrevious,
+                            canGoNext: canGoNext,
+                            onPrevious: { previousField() },
+                            onNext: { nextField() },
+                            onDone: { dismissKeyboardOnly() }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        EmptyView().frame(height: 0)
+                    }
+                }
+                .animation(.snappy, value: isEditing)
             }
         }
     }
@@ -257,6 +251,18 @@ struct ManualAssetSheet: View {
         if let formatted = currencyFormatter.string(from: number) {
             valueText = formatted
         }
+    }
+
+    private func dismissKeyboardOnly() {
+        // Clearing focus will trigger formatting for valueText via onChange
+        focusedField = nil
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
     }
 
     private func save() {
@@ -349,4 +355,3 @@ private struct TextFieldSelectAllIntrospector: UIViewRepresentable {
         }
     }
 }
-
