@@ -263,9 +263,35 @@ public struct CashFlowItemEditorView: View {
     private func ReserveAutomationSection() -> some View {
         if item.kind == .bill {
             let working = buildWorkingItem()
-            let plan = BillReservePlanner.planReserve(for: working, asOf: Date(), currentReserve: item.reserveBalance)
-            if let plan {
-                let next = BillReservePlanner.nextDue(for: working, asOf: Date())
+            // Only show automation UI for reserve-eligible (non-monthly) bills
+            if working.frequency.normalized.isReserveEligible {
+                let now = Date()
+                let cal = Calendar.current
+
+                // Compute schedule signature and cycle start (prefer persisted start if available)
+                let sig = currentScheduleSignature()
+                let inferredStart = ReserveUpdateService.previousDueDateForSchedule(
+                    anchorMonth: sig.anchorMonth,
+                    day: sig.dueDay,
+                    frequencyMonths: sig.freqMonths,
+                    asOf: now
+                )
+                let cycleStart = item.reserveCycleStart ?? inferredStart
+
+                // Fixed-monthly model: monthly = amount / monthsPerCycle
+                let fixedMonthly = (working.amount / Decimal(sig.freqMonths))
+
+                // Expected by the start of the current month
+                let startOfThisMonth = cal.date(from: cal.dateComponents([.year, .month], from: now)) ?? now
+                let sIndex = cal.component(.year, from: cycleStart) * 12 + cal.component(.month, from: cycleStart)
+                let eIndex = cal.component(.year, from: startOfThisMonth) * 12 + cal.component(.month, from: startOfThisMonth)
+                let monthsElapsed = max(0, eIndex - sIndex)
+                let expectedByStartOfThisMonth = fixedMonthly * Decimal(monthsElapsed)
+                let fixedSeed = max(0, (expectedByStartOfThisMonth - item.reserveBalance))
+
+                // Next due date (keep existing planner's computation for the date itself)
+                let next = BillReservePlanner.nextDue(for: working, asOf: now)
+
                 Section("Reserve") {
                     // Linked Account picker (show name and kind)
                     Picker("Linked Account", selection: Binding<UUID?>(
@@ -341,10 +367,10 @@ public struct CashFlowItemEditorView: View {
                             Text(next.nextDueDate, style: .date)
                         }
                         LabeledContent("Monthly reserve") {
-                            Text(formatCurrencyDecimal(plan.monthlyContribution))
+                            Text(formatCurrencyDecimal(fixedMonthly))
                         }
                         LabeledContent("Seed this cycle") {
-                            Text(formatCurrencyDecimal(plan.seedAmount))
+                            Text(formatCurrencyDecimal(fixedSeed))
                         }
                         Text("Applied once per cycle.")
                             .font(.footnote)
@@ -352,16 +378,16 @@ public struct CashFlowItemEditorView: View {
                     }
 
                     // Informational warning if reserve is behind
-                    if plan.seedAmount > 0 {
+                    if fixedSeed > 0 {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
-                            Text("Reserve is behind by \(formatCurrencyDecimal(plan.seedAmount)) this cycle.")
+                            Text("The calculated reserve is behind by \(formatCurrencyDecimal(fixedSeed)) this cycle. Make sure the actual reserve account has enough funds.")
                         }
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     }
-                    
+
                     if let acct = item.account,
                        [.checking, .savings, .cash].contains(acct.type) {
                         let accountBal = transactionalBalance(for: acct)

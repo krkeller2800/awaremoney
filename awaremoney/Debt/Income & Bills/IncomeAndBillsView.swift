@@ -352,12 +352,6 @@ struct IncomeAndBillsView: View {
     private var iPhoneBody: some View {
         NavigationStack {
             List {
-                Section {
-                    Text("DEBUG: isPad=\(isPad ? "true" : "false"), showsLocalModePicker=\(showsLocalModePicker ? "true" : "false"), externalPhoneMode=\(externalPhoneMode?.rawValue ?? "nil"), effectivePhoneMode=\(effectivePhoneMode.rawValue)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                
                 if showsLocalModePicker && externalPhoneMode == nil {
                     Section {
                         Picker("View", selection: $phoneMode) {

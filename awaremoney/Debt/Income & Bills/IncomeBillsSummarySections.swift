@@ -22,9 +22,33 @@ struct IncomeBillsSummarySections: View {
     private func monthlyEquivalent(_ item: CashFlowItem) -> Decimal {
         item.amount * item.frequency.monthlyEquivalentFactor
     }
-
+    private func isRecurringIncome(_ f: PaymentFrequency) -> Bool {
+        switch f.normalized {
+        case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
+            return true
+        default:
+            return false
+        }
+    }
+    private var currentMonthStart: Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: Date())
+        return cal.date(from: comps) ?? Date()
+    }
     private var monthlyIncomeTotal: Decimal {
-        incomes.reduce(0) { $0 + monthlyEquivalent($1) }
+        let recurring = incomes
+            .filter { isRecurringIncome($0.frequency) }
+            .reduce(0) { $0 + monthlyEquivalent($1) }
+
+        // One-month horizon spread for non-monthly incomes
+        let spread = IncomeScheduler.spreadsByMonth(
+            incomes: items,
+            start: currentMonthStart,
+            months: 1,
+            oneTimeDefaultSpreadMonths: 12 // or an @AppStorage default if you prefer
+        )[currentMonthStart] ?? 0
+
+        return recurring + spread
     }
     private var monthlyBillsTotal: Decimal {
         bills.reduce(0) { $0 + monthlyEquivalent($1) }

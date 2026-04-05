@@ -121,13 +121,11 @@ private struct IncomeScheduler {
             if periodMonths == 0 {
                 applyOccurrence(at: basePayMonth)
             } else {
-                var firstOccurrence = basePayMonth
-                while firstOccurrence > firstOfMonth {
-                    firstOccurrence = addMonths(firstOccurrence, -periodMonths)
-                }
-                var startOccurrence = firstOccurrence
-                if firstOccurrence == firstOfMonth {
-                    startOccurrence = addMonths(firstOccurrence, -periodMonths)
+                // Recurring non-monthly: start from the first occurrence on/after the horizon start.
+                // Do not include any prior occurrence tails and do not backfill before firstPaymentDate.
+                var startOccurrence = basePayMonth
+                while startOccurrence < firstOfMonth {
+                    startOccurrence = addMonths(startOccurrence, periodMonths)
                 }
                 var occurrence = startOccurrence
                 while occurrence <= lastMonthStart {
@@ -205,16 +203,16 @@ struct IncomeSchedulerSpreadingTests {
         #expect(spread[mar] == 500)
     }
 
-    @Test("Mid-spread start only includes remaining months")
+    @Test("Mid-spread start has no prior tail")
     func midSpreadStart() {
         let cal = Calendar(identifier: .gregorian)
         let payDate = cal.date(from: DateComponents(year: 2026, month: 1, day: 15))!
         let item = CashFlowItem(kind: .income, amount: 1200, frequency: .yearly, firstPaymentDate: payDate)
-        // Start in June; only months June.. get included
+        // Start in June; forward-only behavior should not include a tail from January.
         let start = cal.date(from: DateComponents(year: 2026, month: 6, day: 1))!
         let spread = IncomeScheduler.spreadsByMonth(incomes: [item], start: start, months: 6, oneTimeDefaultSpreadMonths: 12)
         let jun = cal.date(from: DateComponents(year: 2026, month: 6, day: 1))!
-        #expect(spread[jun] == 100)
+        #expect(spread[jun] == nil)
     }
 
     @Test("One-time windfall never counted before pay date; starts month after")
@@ -265,6 +263,26 @@ struct IncomeSchedulerSpreadingTests {
         #expect(spread[jul] == (1000/3).rounded(2))
         #expect(spread[aug] == (1000/3).rounded(2))
         #expect(spread[sep] == 333.34)
+    }
+    
+    @Test("No prior tail when horizon starts before first occurrence")
+    func noPriorTailBeforeFirstOccurrence() {
+        let cal = Calendar(identifier: .gregorian)
+        // Yearly $1200 paid in June 2026
+        let payDate = cal.date(from: DateComponents(year: 2026, month: 6, day: 1))!
+        let item = CashFlowItem(kind: .income, amount: 1200, frequency: .yearly, firstPaymentDate: payDate)
+        // Horizon: April 2026..March 2027
+        let start = cal.date(from: DateComponents(year: 2026, month: 4, day: 1))!
+        let spread = IncomeScheduler.spreadsByMonth(incomes: [item], start: start, months: 12, oneTimeDefaultSpreadMonths: 12)
+        let apr = cal.date(from: DateComponents(year: 2026, month: 4, day: 1))!
+        let may = cal.date(from: DateComponents(year: 2026, month: 5, day: 1))!
+        let jun = cal.date(from: DateComponents(year: 2026, month: 6, day: 1))!
+        let jul = cal.date(from: DateComponents(year: 2026, month: 7, day: 1))!
+        // Expect no prior tail in Apr-Jun, then +100 starting in July
+        #expect(spread[apr] == nil)
+        #expect(spread[may] == nil)
+        #expect(spread[jun] == nil)
+        #expect(spread[jul] == 100)
     }
 }
 #endif

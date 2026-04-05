@@ -254,175 +254,220 @@ struct DebtSummaryView: View {
     private func planSheetView() -> AnyView {
         return AnyView(
             NavigationStack {
-                List {
-                    Section {
-                        DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
-                            .datePickerStyle(.compact)
-                            .onChange(of: tempPlanDate) { _, newValue in
-                                let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
-                                tempPlanMode = isToday ? .currentInputs : .projectedAtDate
-                            }
-                    } footer: {
-                        Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
-                            .font(.footnote)
-                            .foregroundStyle(.primary.opacity(0.75))
-                    }
-                    Section("Mode") {
-                        Picker("Start mode", selection: $tempPlanMode) {
-                            Text("Start now").tag(PlanMode.currentInputs)
-                            Text("Start on date").tag(PlanMode.projectedAtDate)
-                        }
-                        .pickerStyle(.segmented)
-                        .onChange(of: tempPlanMode) { _, newValue in
-                            if newValue == .currentInputs {
-                                tempPlanDate = Date()
-                            }
-                        }
-                    }
-                    Section("Strategy") {
-                        Picker("Strategy", selection: $tempStrategy) {
-                            Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
-                            Text("Snowball").tag(PayoffStrategy.snowball)
-                            Text("Avalanche").tag(PayoffStrategy.avalanche)
-                        }
-                        .pickerStyle(.segmented)
-
-                        // Shared, toggleable explanation (starts closed by default)
-                        DebtStrategyInfoView()
-                    }
-                    //footer: {
-                      //  AnyView(DebtStrategyInfoView(useDisclosureStyle: false, userCanToggle: false, title: "Debt strategies"))
-                   // }
-                    Section {
-                        LabeledContent("Monthly budget") {
-                            TextField(
-                                "$0.00",
-                                text: $tempMonthlyBudget
-                            )
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                            .focused($focusedField, equals: .monthlyBudget)
-                            .submitLabel(.done)
-                            .onSubmit {
-                                commitAndDismissKeyboard()
-                            }
-                            .highPriorityGesture(
-                                TapGesture().onEnded {
-                                    focusedField = .monthlyBudget
-                                    selectAllInFirstResponder()
+                GeometryReader { geo in
+                    let showLandscapeHint =
+                        UIDevice.current.userInterfaceIdiom == .phone &&
+                        geo.size.height > geo.size.width
+                    List {
+                        Section {
+                            DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
+                                .datePickerStyle(.compact)
+                                .onChange(of: tempPlanDate) { _, newValue in
+                                    let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
+                                    tempPlanMode = isToday ? .currentInputs : .projectedAtDate
                                 }
-                            )
-                            .onChange(of: tempMonthlyBudget) { _, newValue in
-                                // Keep permissive during typing; formatting happens on submit
-                                let _ = newValue
-                            }
-                        }
-                    } header: {
-                        Text("Payoff Plan")
-                    } footer: {
-                        Group {
-                            Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
+                        } footer: {
+                            Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
                                 .font(.footnote)
                                 .foregroundStyle(.primary.opacity(0.75))
-                            if let error = budgetValidationError {
-                                Text(error)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
+                        }
+                        Section("Mode") {
+                            Picker("Start mode", selection: $tempPlanMode) {
+                                Text("Start now").tag(PlanMode.currentInputs)
+                                Text("Start on date").tag(PlanMode.projectedAtDate)
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: tempPlanMode) { _, newValue in
+                                if newValue == .currentInputs {
+                                    tempPlanDate = Date()
+                                }
                             }
                         }
-                    }
-                    
-                    // Added new section for Budget Source & Spreads
-                    Section {
-                        Picker("Baseline source", selection: $baselineBudgetSourceRaw) {
-                            Text("Recurring Net").tag("recurringNet")
-                            Text("Fixed amount").tag("fixed")
+                        Section("Strategy") {
+                            Picker("Strategy", selection: $tempStrategy) {
+                                Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
+                                Text("Snowball").tag(PayoffStrategy.snowball)
+                                Text("Avalanche").tag(PayoffStrategy.avalanche)
+                            }
+                            .pickerStyle(.segmented)
+                            
+                            // Shared, toggleable explanation (starts closed by default)
+                            DebtStrategyInfoView()
                         }
-                        .pickerStyle(.segmented)
-                        Toggle("Include non-monthly income", isOn: $includeNonMonthlyIncomeSpreads)
-                        Picker("Default spread for one-time income", selection: $oneTimeIncomeDefaultSpreadMonths) {
-                            Text("3 months").tag(3)
-                            Text("6 months").tag(6)
-                            Text("12 months").tag(12)
+                        //footer: {
+                        //  AnyView(DebtStrategyInfoView(useDisclosureStyle: false, userCanToggle: false, title: "Debt strategies"))
+                        // }
+                        Section {
+                            LabeledContent("Monthly budget") {
+                                TextField(
+                                    "$0.00",
+                                    text: $tempMonthlyBudget
+                                )
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .monthlyBudget)
+                                .submitLabel(.done)
+                                .onSubmit {
+                                    commitAndDismissKeyboard()
+                                }
+                                .highPriorityGesture(
+                                    TapGesture().onEnded {
+                                        focusedField = .monthlyBudget
+                                        selectAllInFirstResponder()
+                                    }
+                                )
+                                .onChange(of: tempMonthlyBudget) { _, newValue in
+                                    // Keep permissive during typing; formatting happens on submit
+                                    let _ = newValue
+                                }
+                            }
+                        } header: {
+                            Text("Payoff Plan")
+                        } footer: {
+                            Group {
+                                Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.primary.opacity(0.75))
+                                if let error = budgetValidationError {
+                                    Text(error)
+                                        .font(.footnote)
+                                        .foregroundStyle(.red)
+                                }
+                            }
                         }
-                        .pickerStyle(.segmented)
-                    } header: {
-                        Text("Budget Source & Spreads")
-                    } footer: {
-                        Text("The above spread applies to one-time and recurring non-monthly incomes (e.g., yearly) set to 'Default' when created. If to something other than 'Default', they will not be affected.")
-                            .font(.footnote)
-                            .foregroundStyle(.primary.opacity(0.75))
-                    }
-                    Section("Budget timeline preview") {
-                        let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
-                        let schedule = budgetSchedule(start: startMonth, months: 12)
-                        BudgetTimelinePreviewView(startMonth: startMonth, schedule: schedule)
-                            .id("sched-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(startMonth.timeIntervalSince1970)")
-                    }
-                    Section {
-                        DisclosureGroup("Explain my plan") {
+                        
+                        // Added new section for Budget Source & Spreads
+                        Section {
+                            Picker("Baseline source", selection: $baselineBudgetSourceRaw) {
+                                Text("Recurring Net").tag("recurringNet")
+                                Text("Fixed amount").tag("fixed")
+                            }
+                            .pickerStyle(.segmented)
+                            Toggle("Include non-monthly income", isOn: $includeNonMonthlyIncomeSpreads)
+                            Picker("Default spread for one-time income", selection: $oneTimeIncomeDefaultSpreadMonths) {
+                                Text("3 months").tag(3)
+                                Text("6 months").tag(6)
+                                Text("12 months").tag(12)
+                            }
+                            .pickerStyle(.segmented)
+                        } header: {
+                            Text("Budget Source & Spreads")
+                        } footer: {
+                            Text("The above spread applies to one-time and recurring non-monthly incomes (e.g., yearly) set to 'Default' when created. If to something other than 'Default', they will not be affected.")
+                                .font(.footnote)
+                                .foregroundStyle(.primary.opacity(0.75))
+                        }
+                        
+                        Section("Budget timeline preview") {
                             let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
-                            let items = allCashFlowItems()
-                            let rawExplainContributions = IncomeScheduler.contributionsByMonth(
-                                items: items,
-                                start: startMonth,
-                                months: 12,
-                                oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths)
-                            )
-                            let explainContributions: [Date: [ExplainPlanView.ContributionRow]] =
+                            let schedule = budgetSchedule(start: startMonth, months: 12)
+                            BudgetTimelinePreviewView(startMonth: startMonth, schedule: schedule)
+                                .id("sched-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(startMonth.timeIntervalSince1970)")
+                        }
+                        
+                        Section {
+                            // Compute month + schedule once for label and content
+                            let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                            let schedule = budgetSchedule(start: startMonth, months: 12)
+                            DisclosureGroup {
+                                let items = allCashFlowItems()
+                                
+                                // Income (non-monthly) contributions per month
+                                let rawExplainContributions = IncomeScheduler.contributionsByMonth(
+                                    items: items,
+                                    start: startMonth,
+                                    months: 12,
+                                    oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths)
+                                )
+                                let explainContributions: [Date: [ExplainPlanView.ContributionRow]] =
                                 Dictionary(uniqueKeysWithValues: rawExplainContributions.map { (date, rows) in
                                     (date, rows.map { r in ExplainPlanView.ContributionRow(name: r.name, amount: r.amount) })
                                 })
-                            ExplainPlanView(startMonth: startMonth, contributions: explainContributions)
-                        }
-                    } header: {
-                        Text("Explain my plan")
-                    } footer: {
-                        Text("Shows which incomes contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
-                            .font(.footnote)
-                            .foregroundStyle(.primary.opacity(0.75))
-                    }
-                    
-                    Section("Income & Bills") {
-                        NavigationLink("Manage Income & Bills") {
-                            IncomeAndBillsView()
-                        }
-                        LabeledContent("Monthly Income") {
-                            Text(formatAmount(computedMonthlyIncome))
-                        }
-                        LabeledContent("Monthly Bills") {
-                            Text(formatAmount(computedMonthlyBills))
-                        }
-                        if reserveSeedingThisMonthTotal() > 0 {
-                            LabeledContent("Reserve Seeding (This Month)") {
-                                Text(formatAmount(reserveSeedingThisMonthTotal()))
+                                
+                                // Bill (non-monthly) contributions per month — keep negative values for display
+                                let rawBillContributions = IncomeScheduler.billContributionsByMonth(
+                                    items: items,
+                                    start: startMonth,
+                                    months: 12,
+                                    defaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths)
+                                )
+                                let explainBillContributions: [Date: [ExplainPlanView.ContributionRow]] =
+                                Dictionary(uniqueKeysWithValues: rawBillContributions.map { (date, rows) in
+                                    (date, rows.map { r in ExplainPlanView.ContributionRow(name: r.name, amount: r.amount) })
+                                })
+                                
+                                ExplainPlanView(
+                                    startMonth: startMonth,
+                                    contributions: explainContributions,
+                                    billContributions: explainBillContributions,
+                                    monthlyBudgetByMonth: schedule
+                                )
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Group {
+                                        if showLandscapeHint {
+                                            HStack {
+                                                Text("Plan by Month")
+                                                Label("Rotate for better view", systemImage: "iphone.rotate")
+                                                    .font(.footnote)
+                                                    .foregroundStyle(.secondary)
+                                                    .frame(maxWidth: .infinity, alignment: .center)
+                                            }
+                                        } else {
+                                            Text("Plan by Month")
+                                        }
+                                    }
+                                }
                             }
+                        } header: {
+                            Text("Explain my plan")
+                        } footer: {
+                            Text("Shows which incomes contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
+                                .font(.footnote)
+                                .foregroundStyle(.primary.opacity(0.75))
                         }
-                        LabeledContent("Net for Debt") {
-                            Text(formatAmount(computedMonthlyIncome - computedMonthlyBills))
-                        }
-                        Button("Use Net as Budget") {
-                            if (computedMonthlyIncome - computedMonthlyBills) > 0 {
-                                tempMonthlyBudget = formatAmount(computedMonthlyIncome - computedMonthlyBills)
+                        
+                        Section("Income & Bills") {
+                            NavigationLink("Manage Income & Bills") {
+                                IncomeAndBillsView()
                             }
-                        }
-                        .disabled((computedMonthlyIncome - computedMonthlyBills) <= 0)
-                    }
-                    
-                    Section("Current Plan") {
-                        if tempPlanMode == .projectedAtDate {
-                            HStack(spacing: 4) {
-                                Text("Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
-                                Text("• \(tempStrategyDisplay)\(tempBudgetText)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            LabeledContent("Monthly Income") {
+                                Text(formatAmount(computedMonthlyIncome))
                             }
-                        } else {
-                            HStack(spacing: 4) {
-                                Text("Start now")
-                                Text("• \(tempStrategyDisplay)\(tempBudgetText)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            LabeledContent("Monthly Bills") {
+                                Text(formatAmount(computedMonthlyBills))
+                            }
+                            if reserveSeedingThisMonthTotal() > 0 {
+                                LabeledContent("Reserve Seeding (This Month)") {
+                                    Text(formatAmount(reserveSeedingThisMonthTotal()))
+                                }
+                            }
+                            LabeledContent("Net for Debt") {
+                                Text(formatAmount(computedMonthlyIncome - computedMonthlyBills))
+                            }
+                            Button("Use Net as Budget") {
+                                if (computedMonthlyIncome - computedMonthlyBills) > 0 {
+                                    tempMonthlyBudget = formatAmount(computedMonthlyIncome - computedMonthlyBills)
+                                }
+                            }
+                            .disabled((computedMonthlyIncome - computedMonthlyBills) <= 0)
+                        }
+                        
+                        Section("Current Plan") {
+                            if tempPlanMode == .projectedAtDate {
+                                HStack(spacing: 4) {
+                                    Text("Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted))")
+                                    Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                HStack(spacing: 4) {
+                                    Text("Start now")
+                                    Text("• \(tempStrategyDisplay)\(tempBudgetText)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -802,8 +847,11 @@ struct DebtSummaryView: View {
             let amount: Decimal
         }
         let startMonth: Date
-        let contributions: [Date: [ContributionRow]]
+        let contributions: [Date: [ContributionRow]] // income (non-monthly)
+        let billContributions: [Date: [ContributionRow]] // bills (non-monthly)
+        let monthlyBudgetByMonth: [Date: Decimal]
         @EnvironmentObject private var settings: SettingsStore
+
         private func monthHeader(_ date: Date) -> String {
             let fmt = DateFormatter()
             fmt.dateFormat = "LLLL yyyy"
@@ -814,28 +862,146 @@ struct DebtSummaryView: View {
             nf.numberStyle = .currency
             nf.currencyCode = settings.currencyCode
             guard let amount = amount else { return "—" }
-            return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+
+            // Format absolute value, then wrap negatives in parentheses
+            let absNumber = NSDecimalNumber(decimal: amount < 0 ? -amount : amount)
+            let base = nf.string(from: absNumber) ?? "\(absNumber)"
+
+            if amount < 0 {
+                return "(\(base))"
+            } else {
+                return base
+            }
         }
+
         var body: some View {
-            let monthsSorted = Array(contributions.keys).sorted(by: { $0 < $1 })
+            // Union of all months that have either income or bill contributions
+            let monthSet = Set(contributions.keys).union(billContributions.keys)
+            let monthsSorted = Array(monthSet).sorted(by: { $0 < $1 })
+            let amountWidth: CGFloat = 100
+
             if monthsSorted.isEmpty {
-                Text("No non-monthly income contributes in this period.")
+                Text("No non-monthly income or bills contribute in this period.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(monthsSorted, id: \.self) { m in
-                    Section(header: Text(monthHeader(m))) {
-                        ForEach(contributions[m] ?? [], id: \.self) { row in
-                            HStack {
-                                Text(row.name)
-                                Spacer()
-                                Text(formatAmount(row.amount))
-                                    .foregroundStyle(.secondary)
+                    // Gather rows and counts for this month
+                    let incomeRows = contributions[m] ?? []
+                    let billRows = billContributions[m] ?? []
+                    let rowCount = max(incomeRows.count, billRows.count)
+
+                    Section {
+                        ForEach(0..<rowCount, id: \.self) { idx in
+                            HStack(alignment: .firstTextBaseline, spacing: 24) {
+                                // Left column: Income
+                                HStack(spacing: 2) {
+                                    if idx < incomeRows.count {
+                                        Text(incomeRows[idx].name)
+                                            .frame(idealWidth: 120, maxWidth: .infinity, alignment: .leading)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
+
+                                        Spacer(minLength: 2)
+
+                                        Text(formatAmount(incomeRows[idx].amount))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: amountWidth, alignment: .trailing)
+                                            .layoutPriority(1)
+                                    } else {
+                                        Text("")
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        Spacer(minLength: 2)
+
+                                        Text("")
+                                            .frame(width: amountWidth)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                // Right column: Bills
+                                HStack(spacing: 2) {
+                                    if idx < billRows.count {
+                                        Text(billRows[idx].name)
+                                            .frame(idealWidth: 120, alignment: .leading)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Spacer(minLength: 2)
+                                        Text(self.formatAmount(billRows[idx].amount))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.red)
+                                            .frame(width: amountWidth, alignment: .trailing)
+                                            .layoutPriority(1)
+
+                                    } else {
+                                        Text("")
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        Spacer(minLength: 2)
+                                        
+                                        Text("").frame(width: amountWidth)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
+                    } header: {
+                        HStack {
+                            Text("Variable Income")
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .underline()
+
+                            Text(monthHeader(m))
+                                .frame(maxWidth: .infinity, alignment: .center)
+
+                            Text("Variable Bills")
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .underline()
+                        }
+                    } footer: {
+                        // Full monthly budget from scheduler (baseline + non-monthly income − non-monthly bills)
+                        let variableIncome = (contributions[m] ?? []).reduce(0) { $0 + $1.amount }
+                        let variableBills = (billContributions[m] ?? []).reduce(0) { $0 + $1.amount } // negative
+                        let budgetForMonth = monthlyBudgetByMonth[m] ?? 0
+                        let baselineForMonth = budgetForMonth - variableIncome - variableBills
+                        let incomeColor = Color(red: 0.0, green: 0.5, blue: 0.0)
+                        let billsColor  = Color(red: 0.8, green: 0.0, blue: 0.0)
+                        HStack {
+                            column(title: "Monthly Total", value: budgetForMonth, color: .primary)
+
+                            Image(systemName: "equal")
+                                .foregroundStyle(.secondary)
+
+                            column(title: "Budget", value: baselineForMonth, color: .primary)
+
+                            Image(systemName: "plus")
+                                .foregroundStyle(.secondary)
+
+                            column(title: "Variable Income", value: variableIncome, color: incomeColor)
+
+                            Image(systemName: "minus")
+                                .foregroundStyle(.secondary)
+
+                            column(title: "Variable Bills", value: -abs(variableBills), color: billsColor)
+                        }
+                        .multilineTextAlignment(.center)
                     }
                 }
             }
+        }
+        func column(title: String, value: Decimal, color: Color) -> some View {
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Text(formatAmount(value))
+                    .font(.caption)
+                    .foregroundStyle(color)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -1408,6 +1574,7 @@ extension UIView {
     }
 }
 #endif
+
 
 
 

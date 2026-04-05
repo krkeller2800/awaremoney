@@ -167,15 +167,12 @@ public struct IncomeScheduler {
                 // One-time: single occurrence
                 applyOccurrence(at: basePayMonth)
             } else {
-                // Recurring non-monthly: include multiple occurrences across the horizon
-                // Find the nearest occurrence at or before the horizon start
-                var firstOccurrence = basePayMonth
-                while firstOccurrence > firstOfMonth {
-                    firstOccurrence = addMonths(firstOccurrence, -periodMonths)
+                // Recurring non-monthly: start from the first occurrence on/after the horizon start.
+                // Do not include any prior occurrence tails and do not backfill before firstPaymentDate.
+                var startOccurrence = basePayMonth
+                while startOccurrence < firstOfMonth {
+                    startOccurrence = addMonths(startOccurrence, periodMonths)
                 }
-                // Start from the occurrence at or before the horizon start; do not backfill the previous occurrence
-                let startOccurrence = firstOccurrence
-
                 // Iterate forward through occurrences until beyond the horizon
                 var occurrence = startOccurrence
                 while occurrence <= lastMonthStart {
@@ -276,13 +273,12 @@ public struct IncomeScheduler {
                 // One-time
                 applyOccurrence(at: basePayMonth)
             } else {
-                // Recurring non-monthly
-                var firstOccurrence = basePayMonth
-                while firstOccurrence > firstOfMonth {
-                    firstOccurrence = addMonths(firstOccurrence, -periodMonths)
+                // Recurring non-monthly: start from the first occurrence on/after the horizon start.
+                // Do not include any prior occurrence tails and do not backfill before firstPaymentDate.
+                var startOccurrence = basePayMonth
+                while startOccurrence < firstOfMonth {
+                    startOccurrence = addMonths(startOccurrence, periodMonths)
                 }
-                // Start from the occurrence at or before the horizon start; do not backfill the previous occurrence
-                let startOccurrence = firstOccurrence
                 var occurrence = startOccurrence
                 while occurrence <= lastMonthStart {
                     applyOccurrence(at: occurrence)
@@ -374,13 +370,13 @@ public struct IncomeScheduler {
                 // One-time bill
                 applyOccurrence(endingIn: baseDueMonth)
             } else {
-                // Recurring non-monthly bills: iterate occurrences across the horizon
+                // Recurring non-monthly bills: iterate occurrences whose due month falls within the horizon only.
+                // Do not expand to include pre-due months for the next occurrence beyond the horizon.
                 var firstOccurrence = baseDueMonth
                 while firstOccurrence > firstOfMonth {
                     firstOccurrence = addMonths(firstOccurrence, -periodMonths)
                 }
-                let startOccurrence = firstOccurrence
-                var occurrence = startOccurrence
+                var occurrence = firstOccurrence
                 while occurrence <= lastMonthStart {
                     applyOccurrence(endingIn: occurrence)
                     occurrence = addMonths(occurrence, periodMonths)
@@ -465,13 +461,13 @@ public struct IncomeScheduler {
                 // One-time bill
                 applyOccurrence(endingIn: baseDueMonth)
             } else {
-                // Recurring non-monthly bills: iterate occurrences across the horizon
+                // Recurring non-monthly bills: apply only occurrences whose due month is within the horizon.
+                // Do not pre-allocate for the next cycle beyond the horizon.
                 var firstOccurrence = baseDueMonth
                 while firstOccurrence > firstOfMonth {
                     firstOccurrence = addMonths(firstOccurrence, -periodMonths)
                 }
-                let startOccurrence = firstOccurrence
-                var occurrence = startOccurrence
+                var occurrence = firstOccurrence
                 while occurrence <= lastMonthStart {
                     applyOccurrence(endingIn: occurrence)
                     occurrence = addMonths(occurrence, periodMonths)
