@@ -45,10 +45,28 @@ struct DebtDashboardView: View {
     @State private var showDebtChart: Bool = false
 
     @State private var showPlanSheet = false
+    @State private var showStrategySheet = false
     private enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
     @State private var planSheetMode: PlanSheetMode = .incomeBills
     
     @EnvironmentObject private var settings: SettingsStore
+    
+    // Plan scaffolding state
+    @State private var appliedPlan: DebtPlanResult? = nil
+    @State private var planSubtitle: String = ""
+    @State private var planError: String? = nil
+
+    @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
+    @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
+    @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
+    @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+
+    private func planPayment(for id: UUID) -> Decimal? {
+        appliedPlan?.months.first?.payments[id]
+    }
+    private func planPayoffDate(for id: UUID) -> Date? {
+        appliedPlan?.payoffDates[id]
+    }
 
     var body: some View {
         Group {
@@ -74,6 +92,65 @@ struct DebtDashboardView: View {
         service.updateReserves()
     }
 
+    @MainActor
+    private func recomputeAppliedPlan() {
+        let provider = PayoffPlanProvider(context: modelContext, settings: settings)
+        let startDate: Date = {
+            if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
+                return Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+            } else {
+                return Date()
+            }
+        }()
+        let normalizedStart = normalizeToMonth(startDate)
+
+        do {
+            let plan = try provider.computePlan(startDate: normalizedStart)
+            self.appliedPlan = plan
+            self.planError = nil
+        } catch DebtPlanError.infeasibleBudget {
+            self.appliedPlan = nil
+            self.planError = "Budget is too low to cover minimum payments."
+        } catch {
+            self.appliedPlan = nil
+            self.planError = nil
+        }
+
+        // Build a consistent subtitle reflecting persisted start and settings
+        let strategyDisplay: String = {
+            switch settings.defaultPayoffStrategyRaw {
+            case "snowball": return "Snowball"
+            case "avalanche": return "Avalanche"
+            default: return "Minimums"
+            }
+        }()
+        let budgetText: String = {
+            if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                return " • Budget: \(formatAmount(NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue))"
+            }
+            return ""
+        }()
+        if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
+            let d = Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+            self.planSubtitle = "Start on \(d.formatted(date: .abbreviated, time: .omitted)) • \(strategyDisplay)\(budgetText)"
+        } else {
+            self.planSubtitle = "Start now • \(strategyDisplay)\(budgetText)"
+        }
+    }
+
+    private func normalizeToMonth(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: date)
+        return cal.date(from: comps) ?? date
+    }
+
+    private func formatAmount(_ amount: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
+        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    }
+
     @ViewBuilder
     private var iPadBody: some View {
         NavigationSplitView {
@@ -87,6 +164,7 @@ struct DebtDashboardView: View {
         .task {
             // Trigger reserve update when dashboard becomes visible; guarded internally per month
             await MainActor.run { runReserveUpdate() }
+            await MainActor.run { recomputeAppliedPlan() }
         }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
@@ -96,33 +174,47 @@ struct DebtDashboardView: View {
             DebtSummaryView()
                 .applySheetSizing()
         }
+        .sheet(isPresented: $showStrategySheet) {
+            DebtPlanSheetView()
+                .environment(\.modelContext, modelContext)
+                .environmentObject(settings)
+                .applySheetSizing()
+        }
+        .onChange(of: showPlanSheet) { _, newValue in
+            if newValue == false { Task { await MainActor.run { recomputeAppliedPlan() } } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            Task { await MainActor.run { recomputeAppliedPlan() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+            Task { await MainActor.run { recomputeAppliedPlan() } }
+        }
     }
 
     @ViewBuilder
     private var iPadDetail: some View {
         if let sel = selection, let acct = liabilities.first(where: { $0.id == sel }) {
-            HStack {
-                Spacer(minLength: 0)
-                Group {
-                    if mode == .planning {
-                        DebtPayoffView(viewModel: DebtPayoffViewModel(account: acct, context: modelContext))
-                            .id(acct.id)
-                    } else {
-                        DebtDetailView(account: acct)
+            VStack(spacing: 12) {
+                if !planSubtitle.isEmpty || planError != nil {
+                    PlanBanner(subtitle: planSubtitle, errorText: planError, onEdit: { showStrategySheet = true })
+                        .padding(.horizontal, 16)
+                }
+                HStack {
+                    Spacer(minLength: 0)
+                    DebtDetailView(account: acct)
+                        .frame(maxWidth: 700)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .safeAreaPadding()
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Text(acct.name)
+                            .font(.headline).bold()
                     }
                 }
-                .frame(maxWidth: 700)
-                Spacer(minLength: 0)
+                .navigationBarTitleDisplayMode(.inline)
             }
-            .padding(.horizontal, 16)
-            .safeAreaPadding()
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(acct.name)
-                        .font(.headline).bold()
-                }
-            }
-            .navigationBarTitleDisplayMode(.inline)
         } else if liabilities.isEmpty {
             ContentUnavailableView("No debts yet", systemImage: "creditcard")
         } else {
@@ -134,13 +226,13 @@ struct DebtDashboardView: View {
     private var iPadSidebar: some View {
         List(selection: $selection) {
             // Institutions list (selecting an account clears any static detail)
-            Section(mode == .debt ? "Institutions" : "Accounts") {
+            Section("Accounts") {
                 if liabilities.isEmpty {
                     ContentUnavailableView("No debts yet", systemImage: "creditcard")
                 } else {
                     ForEach(liabilities, id: \.id) { acct in
                         HStack(alignment: .firstTextBaseline) {
-                            debtRowContent(for: acct)
+                            debtRowContent(for: acct, modeOverride: .planning)
                         }
                         .tag(acct.id)
                         .contentShape(Rectangle())
@@ -152,19 +244,7 @@ struct DebtDashboardView: View {
             }
         }
         .refreshable { await load() }
-        .navigationTitle(mode == .debt ? "Debt" : "Planning")
-        .safeAreaInset(edge: .top) {
-            VStack(spacing: 8) {
-                Picker("Mode", selection: $mode) {
-                    Text("Debt").tag(DebtMode.debt)
-                    Text("Planning").tag(DebtMode.planning)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-            }
-            .padding(.vertical, 8)
-            .background(.bar)
-        }
+        .navigationTitle("Planning")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
@@ -195,7 +275,8 @@ struct DebtDashboardView: View {
     }
 
     @ViewBuilder
-    private func debtRowContent(for acct: Account) -> some View {
+    private func debtRowContent(for acct: Account, modeOverride: DebtMode? = nil) -> some View {
+        let effectiveMode = modeOverride ?? mode
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(acct.name)
@@ -210,7 +291,7 @@ struct DebtDashboardView: View {
                     .font(.headline)
                     .foregroundStyle(.red)
                 if let payoff = payoffDate(for: acct) {
-                    if mode == .debt {
+                    if effectiveMode == .debt {
                         if let tp = typicalPayment(for: acct) {
                             Text("Typical Payment: \(tp)")
                                 .font(.caption)
@@ -253,8 +334,8 @@ struct DebtDashboardView: View {
             .navigationTitle(mode == .debt ? "Debt" : "Planning")
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .top) {
-                if verticalSizeClass == .compact {
-                    VStack(spacing: 8) {
+                VStack(spacing: 8) {
+                    if verticalSizeClass == .compact {
                         Picker("Mode", selection: $mode) {
                             Text("Debt").tag(DebtMode.debt)
                             Text("Planning").tag(DebtMode.planning)
@@ -262,11 +343,9 @@ struct DebtDashboardView: View {
                         .pickerStyle(.segmented)
                         .padding(.horizontal)
                     }
-                    .padding(.vertical, 8)
-                    .background(.bar)
-                } else {
-                    EmptyView()
                 }
+                .padding(.vertical, 8)
+                .background(.bar)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -294,6 +373,7 @@ struct DebtDashboardView: View {
         .task { await load() }
         .task {
             await MainActor.run { runReserveUpdate() }
+            await MainActor.run { recomputeAppliedPlan() }
         }
         .sheet(isPresented: $showPlanSheet) {
             planSheetView
@@ -311,6 +391,21 @@ struct DebtDashboardView: View {
                     .environmentObject(settings)
                     .ignoresSafeArea()
 //            }
+        }
+        .sheet(isPresented: $showStrategySheet) {
+            DebtPlanSheetView()
+                .environment(\.modelContext, modelContext)
+                .environmentObject(settings)
+                .applySheetSizing()
+        }
+        .onChange(of: showPlanSheet) { _, newValue in
+            if newValue == false { Task { await MainActor.run { recomputeAppliedPlan() } } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            Task { await MainActor.run { recomputeAppliedPlan() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+            Task { await MainActor.run { recomputeAppliedPlan() } }
         }
     }
     
@@ -483,6 +578,18 @@ struct DebtDetailView: View {
     @State private var showDueDayPickerSheet = false
     @State private var showCCModePickerSheet = false
 
+    // Plan-aware state for this account detail
+    @State private var plannedPayment: Decimal? = nil
+    @State private var plannedPayoffDate: Date? = nil
+    @State private var planComputeError: String? = nil
+    @State private var planSubtitle: String = ""
+    @State private var showStrategySheet: Bool = false
+
+    @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
+    @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
+    @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
+    @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+
     private var isEditing: Bool { focusedField != nil }
     private var isRegularWidth: Bool { horizontalSizeClass == .regular }
 
@@ -536,8 +643,9 @@ struct DebtDetailView: View {
             initializeState()
             focusedField = nil
             showProjection = false
+            recomputePlanForDetail()
         }
-        .onAppear { initializeState() }
+        .onAppear { initializeState(); recomputePlanForDetail() }
         .onChange(of: aprInput) { saveTerms() }
         .onChange(of: paymentInput) { saveTerms() }
         .onChange(of: paymentDay) { saveTerms() }
@@ -555,6 +663,11 @@ struct DebtDetailView: View {
                         }
                     }
             }
+        }
+        .sheet(isPresented: $showStrategySheet) {
+            DebtPlanSheetView()
+                .environment(\.modelContext, modelContext)
+                .environmentObject(settings)
         }
         .sheet(isPresented: $showCCModePickerSheet) {
             NavigationStack {
@@ -613,10 +726,86 @@ struct DebtDetailView: View {
             }
             .animation(.snappy, value: isEditing)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+            Task { @MainActor in recomputePlanForDetail() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            Task { @MainActor in recomputePlanForDetail() }
+        }
+    }
+
+    @MainActor
+    private func recomputePlanForDetail() {
+        let provider = PayoffPlanProvider(context: modelContext, settings: settings)
+        let startDate: Date = {
+            if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
+                return Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+            } else {
+                return Date()
+            }
+        }()
+        let normalizedStart = normalizeToMonth(startDate)
+        do {
+            if let plan = try provider.computePlan(startDate: normalizedStart) {
+                self.plannedPayment = plan.months.first?.payments[account.id]
+                self.plannedPayoffDate = plan.payoffDates[account.id]
+                self.planComputeError = nil
+            } else {
+                self.plannedPayment = nil
+                self.plannedPayoffDate = nil
+                self.planComputeError = nil
+            }
+        } catch DebtPlanError.infeasibleBudget {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = "Budget too low to cover minimums."
+        } catch {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = nil
+        }
+        // Build plan subtitle for the banner
+        let strategyDisplay: String = {
+            switch settings.defaultPayoffStrategyRaw {
+            case "snowball": return "Snowball"
+            case "avalanche": return "Avalanche"
+            default: return "Minimums"
+            }
+        }()
+        let budgetText: String = {
+            if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                return " • Budget: \(formatAmount(NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue))"
+            }
+            return ""
+        }()
+        if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
+            let d = Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+            self.planSubtitle = "Start on \(d.formatted(date: .abbreviated, time: .omitted)) • \(strategyDisplay)\(budgetText)"
+        } else {
+            self.planSubtitle = "Start now • \(strategyDisplay)\(budgetText)"
+        }
+    }
+
+    private func normalizeToMonth(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: date)
+        return cal.date(from: comps) ?? date
+    }
+
+    private func formatAmount(_ amount: Decimal) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .currency
+        nf.currencyCode = settings.currencyCode
+        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
     private var formContent: some View {
         Form {
+            if !isRegularWidth, (!planSubtitle.isEmpty || planComputeError != nil) {
+                Section {
+                    PlanBanner(subtitle: planSubtitle, errorText: planComputeError, onEdit: { showStrategySheet = true })
+                }
+            }
             Section("Overview") {
                 LabeledContent("Institution", value: account.institutionName ?? "")
                 LabeledContent("Type", value: account.type.rawValue.capitalized)
@@ -702,6 +891,20 @@ struct DebtDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            if !isRegularWidth, (plannedPayment != nil || plannedPayoffDate != nil) {
+                Section("Plan") {
+                    if let pp = plannedPayment {
+                        LabeledContent("Payment (plan)") {
+                            Text(formatAmount(pp))
+                        }
+                    }
+                    if let pd = plannedPayoffDate {
+                        LabeledContent("Payoff (plan)") {
+                            Text(pd.formatted(date: .abbreviated, time: .omitted))
+                        }
+                    }
+                }
+            }
             if UIDevice.type == "iPhone" {
                 Section("Projection") {
                     Button("Project Payoff") { showProjection = true }
@@ -770,14 +973,6 @@ struct DebtDetailView: View {
         desc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
         desc.fetchLimit = 1
         return try? modelContext.fetch(desc).first?.asOfDate
-    }
-
-    private func formatAmount(_ amount: Decimal?) -> String {
-        let nf = NumberFormatter()
-        nf.numberStyle = .currency
-        nf.currencyCode = settings.currencyCode
-        guard let amount else { return "—" }
-        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
     private func formatAPR(_ apr: Decimal, scale: Int? = nil) -> String {
@@ -971,6 +1166,14 @@ struct DebtDetailView: View {
             let rel: String = days > 0 ? "in \(days)d" : (days < 0 ? "\(abs(days))d ago" : "today")
             return (df.string(from: next), rel)
         }()
+        
+        let planPayoffText: String? = {
+            guard let pod = plannedPayoffDate else { return nil }
+            let df = DateFormatter()
+            df.dateStyle = .medium
+            df.timeStyle = .none
+            return df.string(from: pod)
+        }()
 
         return VStack(alignment: .center, spacing: 12) {
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
@@ -980,7 +1183,9 @@ struct DebtDetailView: View {
                     if let change = changeSinceRecorded { cell(title: "Δ Since Rec.", value: change.text, sub: nil, valueColor: change.color) }
                     if let apr = aprText { cell(title: "APR", value: apr) }
                     if let pay = paymentText { cell(title: "Payment", value: pay) }
+                    if let pp = plannedPayment { cell(title: "Payment (plan)", value: formatAmount(pp)) }
                     if let due = nextDueParts { cell(title: "Next Due", value: due.date, sub: due.rel) }
+                    if let s = planPayoffText { cell(title: "Payoff (plan)", value: s) }
                 }
             }
             .frame(maxWidth: 700, alignment: .center)
@@ -992,6 +1197,41 @@ struct DebtDetailView: View {
             )
         }
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private struct PlanBanner: View {
+    let subtitle: String
+    let errorText: String?
+    let onEdit: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                if let error = errorText {
+                    Text(error)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                }
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            Button(action: onEdit) {
+                Label("Strategy", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.separator, lineWidth: 1)
+        )
     }
 }
 
