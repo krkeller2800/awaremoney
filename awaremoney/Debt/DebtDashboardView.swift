@@ -60,6 +60,10 @@ struct DebtDashboardView: View {
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    
+    @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
+    @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
+    @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
 
     private func planPayment(for id: UUID) -> Decimal? {
         appliedPlan?.months.first?.payments[id]
@@ -125,8 +129,17 @@ struct DebtDashboardView: View {
             }
         }()
         let budgetText: String = {
-            if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
-                return " • Budget: \(formatAmount(NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue))"
+            let startMonth = normalizedStart
+            if let avail = PlanBudgetDisplay.availableBudget(
+                for: startMonth,
+                modelContext: modelContext,
+                baselineBudgetSourceRaw: baselineBudgetSourceRaw,
+                useFixedDebtBudget: useFixedDebtBudget,
+                debtBudgetOverrideAmount: debtBudgetOverrideAmount,
+                includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
+                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
+            ), avail > 0 {
+                return " • Adj Budget: \(formatAmount(avail))"
             }
             return ""
         }()
@@ -589,6 +602,10 @@ struct DebtDetailView: View {
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    
+    @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
+    @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
+    @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
 
     private var isEditing: Bool { focusedField != nil }
     private var isRegularWidth: Bool { horizontalSizeClass == .regular }
@@ -736,7 +753,7 @@ struct DebtDetailView: View {
 
     @MainActor
     private func recomputePlanForDetail() {
-        let provider = PayoffPlanProvider(context: modelContext, settings: settings)
+        // Determine start date
         let startDate: Date = {
             if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
                 return Date(timeIntervalSince1970: debtPlanStartDateEpoch)
@@ -745,25 +762,82 @@ struct DebtDetailView: View {
             }
         }()
         let normalizedStart = normalizeToMonth(startDate)
-        do {
-            if let plan = try provider.computePlan(startDate: normalizedStart) {
-                self.plannedPayment = plan.months.first?.payments[account.id]
-                self.plannedPayoffDate = plan.payoffDates[account.id]
-                self.planComputeError = nil
-            } else {
-                self.plannedPayment = nil
-                self.plannedPayoffDate = nil
-                self.planComputeError = nil
-            }
-        } catch DebtPlanError.infeasibleBudget {
+
+        // Build debts from all liabilities (loans + credit cards) using base or projected balances for the start month
+        let allAccounts = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+        let liabilities = allAccounts.filter { $0.type == .loan || $0.type == .creditCard }
+
+        let debts: [DebtInput] = liabilities.compactMap { acct in
+            let base = latestBalance(acct)
+            let magBase = base < 0 ? -base : base
+            let bal: Decimal = (debtPlanStartModeRaw == "projectedAtDate")
+                ? absProjectedOrBase(for: acct, planDate: normalizedStart, base: magBase)
+                : magBase
+            guard bal > 0 else { return nil }
+            let minPay = monthlyPayment(for: acct, balance: bal)
+            return DebtInput(id: acct.id, name: acct.name, apr: acct.loanTerms?.apr, balance: bal, minPayment: minPay)
+        }
+
+        guard !debts.isEmpty else {
             self.plannedPayment = nil
             self.plannedPayoffDate = nil
-            self.planComputeError = "Budget too low to cover minimums."
+            self.planComputeError = nil
+            return
+        }
+
+        do {
+            let strategy = currentStrategy()
+            let plan: DebtPlanResult
+
+            // Match Summary/Chart: if recurring net or spreads are enabled, use a per‑month schedule; otherwise use fixed monthly
+            if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+                let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+                let schedule = IncomeScheduler.budgetByMonth(
+                    items: items,
+                    start: normalizedStart,
+                    months: 60,
+                    includeSpreads: includeNonMonthlyIncomeSpreads,
+                    oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
+                    baselineSource: baselineSource
+                )
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: strategy,
+                    startDate: normalizedStart
+                )
+            } else {
+                let fixedBudget: Decimal = {
+                    if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+                        return Decimal(debtBudgetOverrideAmount)
+                    } else {
+                        // Ensure at least minimums when not using Recurring Net
+                        return debts.reduce(0) { $0 + $1.minPayment }
+                    }
+                }()
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: fixedBudget,
+                    strategy: strategy,
+                    startDate: normalizedStart
+                )
+            }
+
+            // Apply this account’s values to the UI
+            self.plannedPayment = plan.months.first?.payments[account.id]
+            self.plannedPayoffDate = plan.payoffDates[account.id]
+            self.planComputeError = nil
+        } catch DebtPlanError.infeasibleBudget(let requiredMin) {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = "Budget too low to cover minimums (\(formatAmount(requiredMin)))."
         } catch {
             self.plannedPayment = nil
             self.plannedPayoffDate = nil
             self.planComputeError = nil
         }
+
+
         // Build plan subtitle for the banner
         let strategyDisplay: String = {
             switch settings.defaultPayoffStrategyRaw {
@@ -773,8 +847,17 @@ struct DebtDetailView: View {
             }
         }()
         let budgetText: String = {
-            if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
-                return " • Budget: \(formatAmount(NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue))"
+            let startMonth = normalizedStart
+            if let avail = PlanBudgetDisplay.availableBudget(
+                for: startMonth,
+                modelContext: modelContext,
+                baselineBudgetSourceRaw: baselineBudgetSourceRaw,
+                useFixedDebtBudget: useFixedDebtBudget,
+                debtBudgetOverrideAmount: debtBudgetOverrideAmount,
+                includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
+                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
+            ), avail > 0 {
+                return " • Adj Budget: \(formatAmount(avail))"
             }
             return ""
         }()
@@ -792,6 +875,56 @@ struct DebtDetailView: View {
         return cal.date(from: comps) ?? date
     }
 
+    // Strategy mapping from settings
+    private func currentStrategy() -> PayoffStrategy {
+        switch settings.defaultPayoffStrategyRaw {
+        case "snowball":  return .snowball
+        case "avalanche": return .avalanche
+        default:          return .minimumsOnly
+        }
+    }
+
+    // Baseline selection for IncomeScheduler
+    private var baselineSource: IncomeScheduler.BaselineSource {
+        if baselineBudgetSourceRaw == "fixed", useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+            return .fixedAmount(Decimal(debtBudgetOverrideAmount))
+        } else {
+            return .recurringNet
+        }
+    }
+
+    // Guardrail for spread picker
+    private func sanitizedDefaultSpread(_ v: Int) -> Int { [3, 6, 12].contains(v) ? v : 12 }
+
+    // Fallback monthly payment when a typical payment isn't set (2% of balance)
+    private func monthlyPayment(for account: Account, balance: Decimal) -> Decimal {
+        if let configured = account.loanTerms?.paymentAmount, configured > 0 { return configured }
+        let twoPercent = Decimal(string: "0.02") ?? 0.02
+        return (balance * twoPercent).rounded(scale: 2)
+    }
+
+    // Projected balance helpers to honor "Start on date"
+    private func projectedBalance(for account: Account, on targetDate: Date) throws -> Decimal? {
+        let targetMonth = normalizeToMonth(targetDate)
+        let result = try PayoffCalculator.project(for: account, asOf: targetMonth)
+        let cal = Calendar.current
+        let sorted = result.points.sorted { $0.date < $1.date }
+        if let exact = sorted.first(where: { cal.isDate($0.date, equalTo: targetMonth, toGranularity: .month) }) {
+            return exact.balance
+        }
+        return sorted.last(where: { $0.date <= targetMonth })?.balance ?? sorted.first?.balance
+    }
+
+    private func absProjectedOrBase(for account: Account, planDate: Date, base: Decimal) -> Decimal {
+        let magBase = base < 0 ? -base : base
+        do {
+            if let p = try projectedBalance(for: account, on: planDate) {
+                return p < 0 ? -p : p
+            }
+        } catch { }
+        return magBase
+    }
+    
     private func formatAmount(_ amount: Decimal) -> String {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
@@ -1218,9 +1351,10 @@ private struct PlanBanner: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .minimumScaleFactor(0.7)
                 }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 2)
             Button(action: onEdit) {
                 Label("Strategy", systemImage: "slider.horizontal.3")
             }

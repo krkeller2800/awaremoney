@@ -9,6 +9,21 @@ struct DebtPayoffView: View {
     @StateObject var viewModel: DebtPayoffViewModel
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.locale) private var locale
+    @Environment(\.modelContext) private var modelContext
+
+    // Plan-driven state for this account
+    @State private var plannedPayment: Decimal? = nil
+    @State private var plannedPayoffDate: Date? = nil
+    @State private var planComputeError: String? = nil
+
+    // Settings that drive the global plan
+    @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
+    @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
+    @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
+    @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
+    @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
+    @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
 
     @State private var aprInput: String = ""
     @State private var typicalPaymentInput: String = ""
@@ -58,84 +73,25 @@ struct DebtPayoffView: View {
                 }
             }
 
-            Section("Assumptions") {
-                if viewModel.account.type == .creditCard {
-                    Picker("Payment mode", selection: Binding(
-                        get: { viewModel.account.creditCardPaymentMode ?? .minimum },
-                        set: { viewModel.setCreditCardMode($0) }
-                    )) {
-                        ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
-                            Text(label(for: mode)).tag(mode)
-                        }
-                    }
-                    .overlay(alignment: .trailing) {
-                        Image(systemName: "pencil")
-                            .foregroundStyle(.secondary)
-                            .imageScale(.small)
-                            .padding(.trailing, 2)
-                            .accessibilityHidden(true)
+            Section("Plan") {
+                if let err = planComputeError {
+                    Text(err)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                }
+                if let pp = plannedPayment {
+                    LabeledContent("Payment (plan)") {
+                        Text(formatCurrency(pp))
                     }
                 }
-
-                HStack {
-                    Text("APR")
-                    TextField("0.00%", text: Binding(
-                        get: { aprInputForUI() },
-                        set: { new in aprInput = new; applyAPRIfParsable() }
-                    ))
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .focused($focusedField, equals: .apr)
-
-                    Button(action: { focusField(.apr) }) {
-                        Image(systemName: "pencil")
-                            .imageScale(.small)
+                if let pd = plannedPayoffDate {
+                    LabeledContent("Payoff (plan)") {
+                        Text(pd, style: .date)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Edit APR")
                 }
-
-                HStack {
-                    Text("Typical payment")
-                    TextField(formatCurrency(0), text: Binding(
-                        get: { typicalPaymentInputForUI() },
-                        set: { new in typicalPaymentInput = new; applyPaymentIfParsable() }
-                    ))
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .focused($focusedField, equals: .typical)
-
-                    Button(action: { focusField(.typical) }) {
-                        Image(systemName: "pencil")
-                            .imageScale(.small)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Edit typical payment")
-                }
-
-                ProgressView(value: viewModel.confidence) {
-                    Text("Projection confidence")
-                } currentValueLabel: {
-                    Text(String(format: "%.0f%%", viewModel.confidence * 100))
-                }
-                .padding(.vertical, 4)
-
-                if let msg = viewModel.varianceMessage {
-                    Text(msg).font(.footnote).foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Summary") {
-                if let payoff = viewModel.payoffDate {
-                    LabeledContent("Estimated payoff") { Text(payoff, style: .date) }
-                } else {
-                    Text("No payoff within horizon under current assumptions.")
+                if plannedPayment == nil && plannedPayoffDate == nil && planComputeError == nil {
+                    Text("No plan results available.")
                         .foregroundStyle(.secondary)
-                }
-                if let last = viewModel.projection.last {
-                    LabeledContent("Projected balance") {
-                        Text(formatCurrency(last.balance))
-                    }
                 }
             }
 
@@ -164,6 +120,14 @@ struct DebtPayoffView: View {
             aprInput = aprInputForUI()
             typicalPaymentInput = typicalPaymentInputForUI()
             viewModel.computeVarianceAgainstLatestStatement()
+            // Compute plan results for this account
+            recomputePlanForPayoffView()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+            recomputePlanForPayoffView()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            recomputePlanForPayoffView()
         }
         .onChange(of: focusedField) { _, newValue in
             guard let newValue = newValue else { return }
@@ -202,6 +166,153 @@ struct DebtPayoffView: View {
         }
     }
 
+    private func recomputePlanForPayoffView() {
+        // Determine start date
+        let startDate: Date = {
+            if debtPlanStartModeRaw == "projectedAtDate", debtPlanStartDateEpoch > 0 {
+                return Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+            } else {
+                return Date()
+            }
+        }()
+        let normalizedStart = normalizeToMonth(startDate)
+
+        // Build debts from all liabilities using base or projected balances for the start month
+        let allAccounts = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+        let liabilities = allAccounts.filter { $0.type == .loan || $0.type == .creditCard }
+
+        let debts: [DebtInput] = liabilities.compactMap { acct in
+            let base = latestBalance(acct)
+            let magBase = base < 0 ? -base : base
+            let bal: Decimal = (debtPlanStartModeRaw == "projectedAtDate")
+                ? absProjectedOrBase(for: acct, planDate: normalizedStart, base: magBase)
+                : magBase
+            guard bal > 0 else { return nil }
+            let minPay = monthlyPayment(for: acct, balance: bal)
+            return DebtInput(id: acct.id, name: acct.name, apr: acct.loanTerms?.apr, balance: bal, minPayment: minPay)
+        }
+
+        guard !debts.isEmpty else {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = nil
+            return
+        }
+
+        do {
+            let strategy = currentStrategy()
+            let plan: DebtPlanResult
+
+            // Use monthly schedule when using recurring net or spreads; otherwise fixed budget
+            if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+                let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+                let schedule = IncomeScheduler.budgetByMonth(
+                    items: items,
+                    start: normalizedStart,
+                    months: 60,
+                    includeSpreads: includeNonMonthlyIncomeSpreads,
+                    oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
+                    baselineSource: baselineSource()
+                )
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: strategy,
+                    startDate: normalizedStart
+                )
+            } else {
+                let fixedBudget: Decimal = {
+                    if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+                        return Decimal(debtBudgetOverrideAmount)
+                    } else {
+                        // Ensure at least minimums when not using Recurring Net
+                        return debts.reduce(0) { $0 + $1.minPayment }
+                    }
+                }()
+                plan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: fixedBudget,
+                    strategy: strategy,
+                    startDate: normalizedStart
+                )
+            }
+
+            // Apply this account’s values to the UI
+            self.plannedPayment = plan.months.first?.payments[viewModel.account.id]
+            self.plannedPayoffDate = plan.payoffDates[viewModel.account.id]
+            self.planComputeError = nil
+        } catch DebtPlanError.infeasibleBudget(let requiredMin) {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = "Budget too low to cover minimums (\(formatCurrency(requiredMin)))."
+        } catch {
+            self.plannedPayment = nil
+            self.plannedPayoffDate = nil
+            self.planComputeError = nil
+        }
+    }
+
+    private func normalizeToMonth(_ date: Date) -> Date {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: date)
+        return cal.date(from: comps) ?? date
+    }
+
+    private func currentStrategy() -> PayoffStrategy {
+        switch settings.defaultPayoffStrategyRaw {
+        case "snowball":  return .snowball
+        case "avalanche": return .avalanche
+        default:          return .minimumsOnly
+        }
+    }
+
+    private func baselineSource() -> IncomeScheduler.BaselineSource {
+        if baselineBudgetSourceRaw == "fixed", useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+            return .fixedAmount(Decimal(debtBudgetOverrideAmount))
+        } else {
+            return .recurringNet
+        }
+    }
+
+    private func sanitizedDefaultSpread(_ v: Int) -> Int { [3, 6, 12].contains(v) ? v : 12 }
+
+    // Fallback monthly payment when a typical payment isn't set (2% of balance)
+    private func monthlyPayment(for account: Account, balance: Decimal) -> Decimal {
+        if let configured = account.loanTerms?.paymentAmount, configured > 0 { return configured }
+        let twoPercent = Decimal(string: "0.02") ?? 0.02
+        return (balance * twoPercent).rounded(scale: 2)
+    }
+
+    private func projectedBalance(for account: Account, on targetDate: Date) throws -> Decimal? {
+        let targetMonth = normalizeToMonth(targetDate)
+        let result = try PayoffCalculator.project(for: account, asOf: targetMonth)
+        let cal = Calendar.current
+        let sorted = result.points.sorted { $0.date < $1.date }
+        if let exact = sorted.first(where: { cal.isDate($0.date, equalTo: targetMonth, toGranularity: .month) }) {
+            return exact.balance
+        }
+        return sorted.last(where: { $0.date <= targetMonth })?.balance ?? sorted.first?.balance
+    }
+
+    private func absProjectedOrBase(for account: Account, planDate: Date, base: Decimal) -> Decimal {
+        let magBase = base < 0 ? -base : base
+        do {
+            if let p = try projectedBalance(for: account, on: planDate) {
+                return p < 0 ? -p : p
+            }
+        } catch { }
+        return magBase
+    }
+
+    private func latestBalance(_ account: Account) -> Decimal {
+        let id = account.id
+        let pred = #Predicate<BalanceSnapshot> { $0.account?.id == id }
+        var desc = FetchDescriptor<BalanceSnapshot>(predicate: pred)
+        desc.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
+        desc.fetchLimit = 1
+        let snap = try? modelContext.fetch(desc).first
+        return snap?.balance ?? 0
+    }
     private func commitAndDismissKeyboard() {
         applyAPRIfParsable()
         applyPaymentIfParsable()

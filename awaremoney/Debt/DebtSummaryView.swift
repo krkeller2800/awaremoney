@@ -95,6 +95,7 @@ struct DebtSummaryView: View {
             appliedPlanMode = .currentInputs
             appliedPlanDate = nil
         }
+        rebuildPlan()
     }
     
     private var baselineSource: IncomeScheduler.BaselineSource {
@@ -234,6 +235,14 @@ struct DebtSummaryView: View {
                     }
                 }
                 .task { recomputeAppliedState() }
+                    .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+                        recomputeAppliedState()
+                    }
+                    .onChange(of: baselineBudgetSourceRaw) { _, _ in recomputeAppliedState() }
+                    .onChange(of: useFixedDebtBudget) { _, _ in recomputeAppliedState() }
+                    .onChange(of: debtBudgetOverrideAmount) { _, _ in recomputeAppliedState() }
+                    .onChange(of: debtPlanStartModeRaw) { _, _ in recomputeAppliedState() }
+                    .onChange(of: debtPlanStartDateEpoch) { _, _ in recomputeAppliedState() }
                 
                 .task { await load() }
                 
@@ -351,8 +360,22 @@ struct DebtSummaryView: View {
         }
     }
     private var appliedBudgetText: String {
-        guard baselineBudgetSourceRaw == "fixed", let b = appliedBudget, appliedStrategy != .minimumsOnly else { return "" }
-        return " • Budget: \(formatAmount(b))"
+        // Keep hiding budget text for Minimums Only to match existing behavior
+        guard appliedStrategy != .minimumsOnly else { return "" }
+
+        let startMonth = appliedStartMonth()
+        if let avail = PlanBudgetDisplay.availableBudget(
+            for: startMonth,
+            modelContext: modelContext,
+            baselineBudgetSourceRaw: baselineBudgetSourceRaw,
+            useFixedDebtBudget: useFixedDebtBudget,
+            debtBudgetOverrideAmount: debtBudgetOverrideAmount,
+            includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
+            oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
+        ), avail > 0 {
+            return " • Adj Budget: \(formatAmount(avail))"
+        }
+        return ""
     }
     
     private var planSubtitleText: String {
@@ -376,7 +399,7 @@ struct DebtSummaryView: View {
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         if let d = parseCurrencyInput(trimmed) {
-            return " • Budget: \(formatAmount(d))"
+            return " • Adj Budget: \(formatAmount(d))"
         } else {
             return " • Budget: —"
         }
@@ -566,14 +589,83 @@ struct DebtSummaryView: View {
             let all = try modelContext.fetch(FetchDescriptor<Account>())
             await MainActor.run {
                 self.accounts = all.filter { $0.type == .loan || $0.type == .creditCard }
+                // Now that accounts are set, build the plan with current applied settings
+                self.rebuildPlan()
             }
         } catch {
-            await MainActor.run { self.accounts = [] }
+            await MainActor.run {
+                self.accounts = []
+                self.currentPlan = nil
+            }
         }
     }
 
     // MARK: - Calculations
 
+    // MARK: - Build/refresh the applied plan shown in this view
+    private func rebuildPlan() {
+        // Determine start month based on applied settings
+        let startMonth = appliedStartMonth()
+
+        // Build debts from current accounts using applied start mode/date
+        let filteredAccounts = accounts.filter { acct in
+            let baseBal = absDecimal(latestBalance(acct))
+            let bal: Decimal = (appliedPlanMode == .projectedAtDate)
+                ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
+                : baseBal
+            return bal > 0
+        }
+
+        let debts: [DebtInput] = filteredAccounts.map { acct in
+            let baseBal = absDecimal(latestBalance(acct))
+            let bal: Decimal = (appliedPlanMode == .projectedAtDate)
+                ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
+                : baseBal
+            let minPay = monthlyPayment(for: acct, balance: bal)
+            return DebtInput(
+                id: acct.id,
+                name: acct.name,
+                apr: acct.loanTerms?.apr,
+                balance: bal,
+                minPayment: minPay
+            )
+        }
+
+        guard !debts.isEmpty else {
+            currentPlan = nil
+            return
+        }
+
+        do {
+            // Match the sheet’s logic: if we're using recurring net or including spreads,
+            // build a per-month schedule; otherwise use a fixed monthly budget.
+            if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+                let schedule = budgetSchedule(
+                    start: startMonth,
+                    months: 120,
+                    baselineOverride: baselineSource
+                )
+                currentPlan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: appliedStrategy,
+                    startDate: startMonth
+                )
+            } else {
+                // Fixed monthly budget without spreads
+                let budgetToUse: Decimal = appliedBudget ?? debts.reduce(0) { $0 + $1.minPayment }
+                currentPlan = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: budgetToUse,
+                    strategy: appliedStrategy,
+                    startDate: startMonth
+                )
+            }
+        } catch {
+            // If anything goes wrong, fall back to minimums-only display
+            currentPlan = nil
+        }
+    }
     private func latestBalance(_ account: Account) -> Decimal {
         let id = account.id
         let pred = #Predicate<BalanceSnapshot> { $0.account?.id == id }
@@ -662,6 +754,12 @@ struct DebtSummaryView: View {
         return cal.date(from: comps) ?? date
     }
 
+    // Helper: the start month currently applied in the summary
+    private func appliedStartMonth() -> Date {
+        let start = (appliedPlanMode == .projectedAtDate) ? (appliedPlanDate ?? Date()) : Date()
+        return normalizeToMonth(start)
+    }
+    
     private func normalizeToMonth(_ date: Date) -> Date {
         let cal = Calendar.current
         let comps = cal.dateComponents([.year, .month], from: date)
@@ -819,6 +917,11 @@ struct DebtPlanSheetView: View {
 
     @State private var tempStrategy: PayoffStrategy = .minimumsOnly
     @State private var tempMonthlyBudget: String = ""
+    
+    // NEW: Buffer plan settings locally; do not persist until Set Plan
+    @State private var tempBaselineBudgetSourceRaw: String = "recurringNet"
+    @State private var tempIncludeNonMonthlyIncomeSpreads: Bool = true
+    @State private var tempOneTimeIncomeDefaultSpreadMonths: Int = 12
 
     @State private var budgetValidationError: String? = nil
     @State private var showPlanErrorAlert = false
@@ -837,7 +940,9 @@ struct DebtPlanSheetView: View {
     private func sanitizedDefaultSpread(_ v: Int) -> Int { [3,6,12].contains(v) ? v : 12 }
 
     private var baselineSource: IncomeScheduler.BaselineSource {
-        if baselineBudgetSourceRaw == "fixed", let d = parseCurrencyInput(tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)), d > 0 {
+        if tempBaselineBudgetSourceRaw == "fixed",
+           let d = parseCurrencyInput(tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)),
+           d > 0 {
             return .fixedAmount(d)
         } else {
             return .recurringNet
@@ -845,7 +950,7 @@ struct DebtPlanSheetView: View {
     }
 
     private func tempBaselineSource() -> IncomeScheduler.BaselineSource {
-        if baselineBudgetSourceRaw == "fixed" {
+        if tempBaselineBudgetSourceRaw == "fixed" {
             let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
             if let d = parseCurrencyInput(trimmed), d > 0 { return .fixedAmount(d) }
         }
@@ -862,8 +967,8 @@ struct DebtPlanSheetView: View {
             items: items,
             start: start,
             months: months,
-            includeSpreads: includeNonMonthlyIncomeSpreads,
-            oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
+            includeSpreads: tempIncludeNonMonthlyIncomeSpreads,
+            oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(tempOneTimeIncomeDefaultSpreadMonths),
             baselineSource: baselineOverride ?? baselineSource
         )
     }
@@ -920,7 +1025,7 @@ struct DebtPlanSheetView: View {
                             DebtStrategyInfoView()
                         }
                         Section {
-                            LabeledContent("Monthly budget") {
+                            LabeledContent("Base Budget") {
                                 TextField("$0.00", text: $tempMonthlyBudget)
                                     .multilineTextAlignment(.trailing)
                                     .keyboardType(.decimalPad)
@@ -943,13 +1048,13 @@ struct DebtPlanSheetView: View {
                         }
 
                         Section {
-                            Picker("Baseline source", selection: $baselineBudgetSourceRaw) {
+                            Picker("Baseline source", selection: $tempBaselineBudgetSourceRaw) {
                                 Text("Recurring Net").tag("recurringNet")
                                 Text("Fixed amount").tag("fixed")
                             }
                             .pickerStyle(.segmented)
-                            Toggle("Include non-monthly income", isOn: $includeNonMonthlyIncomeSpreads)
-                            Picker("Default spread for one-time income", selection: $oneTimeIncomeDefaultSpreadMonths) {
+                            Toggle("Include non-monthly incomes/bills", isOn: $tempIncludeNonMonthlyIncomeSpreads)
+                            Picker("Default spread for one-time income", selection: $tempOneTimeIncomeDefaultSpreadMonths) {
                                 Text("3 months").tag(3)
                                 Text("6 months").tag(6)
                                 Text("12 months").tag(12)
@@ -958,7 +1063,7 @@ struct DebtPlanSheetView: View {
                         } header: {
                             Text("Budget Source & Spreads")
                         } footer: {
-                            Text("The above spread applies to one-time and recurring non-monthly incomes (e.g., yearly) set to 'Default' when created. If to something other than 'Default', they will not be affected.")
+                            Text("The above spread applies to non-monthly incomes/bills (e.g., yearly) set to 'Default' when created. If set to something other than 'Default', they will not be affected.")
                                 .font(.footnote)
                                 .foregroundStyle(.primary.opacity(0.75))
                         }
@@ -987,7 +1092,7 @@ struct DebtPlanSheetView: View {
                                     if showLandscapeHint {
                                         HStack {
                                             Text("Plan by Month")
-                                            Label("Rotate for better view", systemImage: "iphone.rotate")
+                                            Label("Rotate for better view", systemImage: "rotate.left")
                                                 .font(.footnote)
                                                 .foregroundStyle(.secondary)
                                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -1000,7 +1105,7 @@ struct DebtPlanSheetView: View {
                         } header: {
                             Text("Explain my plan")
                         } footer: {
-                            Text("Shows which incomes contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
+                            Text("Shows which variable incomes/bills contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
                                 .font(.footnote)
                                 .foregroundStyle(.primary.opacity(0.75))
                         }
@@ -1097,7 +1202,9 @@ struct DebtPlanSheetView: View {
                 let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
                 
-                if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+                // Prefill from saved fixed amount whenever available,
+                // regardless of the useFixedDebtBudget flag state.
+                if debtBudgetOverrideAmount > 0 {
                     let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
                     tempMonthlyBudget = formatAmount(saved)
                 }
@@ -1110,6 +1217,18 @@ struct DebtPlanSheetView: View {
                 } else {
                     tempPlanMode = .currentInputs
                 }
+                // NEW: Seed local plan settings from persisted values
+                tempBaselineBudgetSourceRaw = baselineBudgetSourceRaw
+                // If a fixed budget is currently in effect, force the sheet to show "Fixed amount"
+                // and prefill the saved amount so validations use the correct value when launched
+                // from PlanBanner.
+                if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+                    tempBaselineBudgetSourceRaw = "fixed"
+                    let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                    tempMonthlyBudget = formatAmount(saved)
+                }
+                tempIncludeNonMonthlyIncomeSpreads = includeNonMonthlyIncomeSpreads
+                tempOneTimeIncomeDefaultSpreadMonths = oneTimeIncomeDefaultSpreadMonths
             }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1153,33 +1272,64 @@ struct DebtPlanSheetView: View {
 
                         // Determine budget series
                         let startDateForPlan = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                        // Replace the plan building condition to use temp values:
                         let schedule = budgetSchedule(start: startDateForPlan, months: 60, baselineOverride: tempBaselineSource())
 
                         do {
                             let planResult: DebtPlanResult
-                            if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
-                                planResult = try DebtPayoffEngine.plan(debts: debts, budgetByMonth: schedule, strategy: tempStrategy, startDate: startDateForPlan)
+                            // Use tempIncludeNonMonthlyIncomeSpreads and tempBaselineBudgetSourceRaw for preview logic
+                            if tempIncludeNonMonthlyIncomeSpreads || tempBaselineBudgetSourceRaw == "recurringNet" {
+                                planResult = try DebtPayoffEngine.plan(
+                                    debts: debts,
+                                    budgetByMonth: schedule,
+                                    strategy: tempStrategy,
+                                    startDate: startDateForPlan
+                                )
                             } else {
+                                // Fixed path requires a valid parsed budget
                                 let budgetToUse: Decimal = parsedBudget ?? debts.reduce(0) { $0 + $1.minPayment }
-                                planResult = try DebtPayoffEngine.plan(debts: debts, monthlyBudget: budgetToUse, strategy: tempStrategy, startDate: startDateForPlan)
+                                planResult = try DebtPayoffEngine.plan(
+                                    debts: debts,
+                                    monthlyBudget: budgetToUse,
+                                    strategy: tempStrategy,
+                                    startDate: startDateForPlan
+                                )
                             }
                             currentPlan = planResult
-                            // Persist selections for other views
+
+                            // Persist selections for other views — only now (on Set Plan)
+
+                            // 1) Strategy
                             switch tempStrategy {
-                            case .minimumsOnly:
-                                settings.defaultPayoffStrategyRaw = "minimumsOnly"
-                            case .snowball:
-                                settings.defaultPayoffStrategyRaw = "snowball"
-                            case .avalanche:
-                                settings.defaultPayoffStrategyRaw = "avalanche"
+                            case .minimumsOnly: settings.defaultPayoffStrategyRaw = "minimumsOnly"
+                            case .snowball:     settings.defaultPayoffStrategyRaw = "snowball"
+                            case .avalanche:    settings.defaultPayoffStrategyRaw = "avalanche"
                             }
-                            if let b = parsedBudget, b > 0 {
-                                useFixedDebtBudget = true
-                                debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+
+                            // 2) Baseline source & spreads
+                            baselineBudgetSourceRaw = tempBaselineBudgetSourceRaw
+                            includeNonMonthlyIncomeSpreads = tempIncludeNonMonthlyIncomeSpreads
+                            oneTimeIncomeDefaultSpreadMonths = tempOneTimeIncomeDefaultSpreadMonths
+
+                            // 3) Fixed/Recurring budget persistence
+                            if tempBaselineBudgetSourceRaw == "fixed" {
+                                // Require a valid budget amount for fixed baseline
+                                if let b = parsedBudget, b > 0 {
+                                    useFixedDebtBudget = true
+                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                                } else {
+                                    budgetValidationError = "Please enter a valid budget amount for Fixed source or choose Recurring Net."
+                                    planErrorMessage = budgetValidationError
+                                    showPlanErrorAlert = true
+                                    return
+                                }
                             } else {
+                                // Recurring Net path: ensure we are not stuck in fixed mode
                                 useFixedDebtBudget = false
                                 debtBudgetOverrideAmount = 0.0
                             }
+
+                            // 4) Start mode/date
                             debtPlanStartModeRaw = (tempPlanMode == .projectedAtDate) ? "projectedAtDate" : "currentInputs"
                             let normalizedStart = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
                             debtPlanStartDateEpoch = (tempPlanMode == .projectedAtDate) ? normalizedStart.timeIntervalSince1970 : 0
@@ -1307,7 +1457,7 @@ struct DebtPlanSheetView: View {
         guard tempStrategy != .minimumsOnly else { return "" }
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        if let d = parseCurrencyInput(trimmed) { return " • Budget: \(formatAmount(d))" } else { return " • Budget: —" }
+        if let d = parseCurrencyInput(trimmed) { return " • Adj Budget: \(formatAmount(d))" } else { return " • Budget: —" }
     }
 
     private func commitAndDismissKeyboard() {
@@ -1435,9 +1585,9 @@ struct DebtPlanSheetView: View {
                         let incomeColor = Color(red: 0.0, green: 0.5, blue: 0.0)
                         let billsColor  = Color(red: 0.8, green: 0.0, blue: 0.0)
                         HStack {
-                            column(title: "Monthly Total", value: budgetForMonth, color: .primary)
+                            column(title: "Adj Budget", value: budgetForMonth, color: .primary)
                             Image(systemName: "equal").foregroundStyle(.secondary)
-                            column(title: "Budget", value: baselineForMonth, color: .primary)
+                            column(title: "Base Budget", value: baselineForMonth, color: .primary)
                             Image(systemName: "plus").foregroundStyle(.secondary)
                             column(title: "Variable Income", value: variableIncome, color: incomeColor)
                             Image(systemName: "minus").foregroundStyle(.secondary)

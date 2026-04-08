@@ -92,7 +92,7 @@ final class PayoffPlanProvider {
         let debtBudgetOverrideAmount = UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount")
         var budgetText = ""
         if useFixedDebtBudget && debtBudgetOverrideAmount > 0, let formatted = currency(Decimal(debtBudgetOverrideAmount), code: settings.currencyCode) {
-            budgetText = " • Budget: \(formatted)"
+            budgetText = " • Adj Budget: \(formatted)"
         }
         return "Start now • \(strategyText)\(budgetText)"
     }
