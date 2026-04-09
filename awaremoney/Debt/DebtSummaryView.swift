@@ -926,7 +926,7 @@ struct DebtPlanSheetView: View {
     @State private var budgetValidationError: String? = nil
     @State private var showPlanErrorAlert = false
     @State private var planErrorMessage: String? = nil
-
+    @State private var showBudgetingHint: Bool = false
     @State private var currentPlan: DebtPlanResult? = nil
 
     // Keyboard handling
@@ -1038,7 +1038,7 @@ struct DebtPlanSheetView: View {
                             Text("Payoff Plan")
                         } footer: {
                             Group {
-                                Text("Enter your total monthly budget for debt payments. Leave empty if Minimums Only strategy.")
+                                Text("Your total monthly budget for debt payments. Leave empty if you use Minimums Only strategy or Reoccurring Net.")
                                     .font(.footnote)
                                     .foregroundStyle(.primary.opacity(0.75))
                                 if let error = budgetValidationError {
@@ -1053,6 +1053,36 @@ struct DebtPlanSheetView: View {
                                 Text("Fixed amount").tag("fixed")
                             }
                             .pickerStyle(.segmented)
+                            // Budgeting hint disclosure
+                            DisclosureGroup(isExpanded: $showBudgetingHint) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Recurring Net")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text("Uses your ongoing income and expenses to compute a monthly budget that can vary by month. It's adjusted for one‑time incomes/bills spread across several months. Debt payments adjust based on what’s available each month.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Divider()
+                                    Text("Fixed Amount")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text("Uses a single, constant monthly budget for debt payoff. It's adjusted for one‑time incomes/bills spread across several months. If the fixed amount is too low to cover minimums, the plan will fail until you increase it.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .padding(.top, 4)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "info.circle")
+                                        .foregroundStyle(.secondary)
+                                    Text("Budgeting hint")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
                             Toggle("Include non-monthly incomes/bills", isOn: $tempIncludeNonMonthlyIncomeSpreads)
                             Picker("Default spread for one-time income", selection: $tempOneTimeIncomeDefaultSpreadMonths) {
                                 Text("3 months").tag(3)

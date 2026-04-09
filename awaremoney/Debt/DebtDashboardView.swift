@@ -209,13 +209,19 @@ struct DebtDashboardView: View {
         if let sel = selection, let acct = liabilities.first(where: { $0.id == sel }) {
             VStack(spacing: 12) {
                 if !planSubtitle.isEmpty || planError != nil {
-                    PlanBanner(subtitle: planSubtitle, errorText: planError, onEdit: { showStrategySheet = true })
-                        .padding(.horizontal, 16)
+                    HStack {
+                        Spacer(minLength: 0)
+                        PlanBanner(subtitle: planSubtitle, errorText: planError, onEdit: { showStrategySheet = true })
+                            .fixedSize(horizontal: true, vertical: false) // prevent stretching to full width
+                            .frame(maxWidth: 1100, alignment: .center)    // cap to match the detail column
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16) // visible margins from both edges
                 }
                 HStack {
                     Spacer(minLength: 0)
                     DebtDetailView(account: acct)
-                        .frame(maxWidth: 700)
+                        .frame(maxWidth: 1100)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 16)
@@ -673,6 +679,8 @@ struct DebtDetailView: View {
         .sheet(isPresented: $showProjection) {
             NavigationStack {
                 DebtPayoffView(viewModel: DebtPayoffViewModel(account: account, context: modelContext))
+                    .environment(\.modelContext, modelContext)
+                    .environmentObject(settings)
                     .id(account.id)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
@@ -944,23 +952,23 @@ struct DebtDetailView: View {
                 LabeledContent("Type", value: account.type.rawValue.capitalized)
             }
             Section("Payment Plan") {
-                if account.type == .creditCard {
-                    HStack {
-                        Picker("Mode", selection: $ccMode) {
-                            ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
-                                Text(mode.rawValue.capitalized).tag(mode)
-                            }
-                        }
-                        Button(action: { showCCModePickerSheet = true }) {
-                            Image(systemName: "pencil")
-                                .imageScale(.small)
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 6)
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
-                    }
-                }
+//                if account.type == .creditCard {
+//                    HStack {
+//                        Picker("Mode", selection: $ccMode) {
+//                            ForEach(CreditCardPaymentMode.allCases, id: \.self) { mode in
+//                                Text(mode.rawValue.capitalized).tag(mode)
+//                            }
+//                        }
+//                        Button(action: { showCCModePickerSheet = true }) {
+//                            Image(systemName: "pencil")
+//                                .imageScale(.small)
+//                                .foregroundStyle(.secondary)
+//                                .padding(.leading, 6)
+//                        }
+//                        .buttonStyle(.plain)
+//                        .contentShape(Rectangle())
+//                    }
+//                }
 
                 // Payment amount (shown for loans and credit cards)
                 if account.type == .loan || account.type == .creditCard {
@@ -1213,17 +1221,20 @@ struct DebtDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary) // was .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
+
                 Text(value)
                     .font(.title3).bold().monospacedDigit()
-                    .foregroundStyle(valueColor ?? .primary)
+                    .foregroundStyle(valueColor ?? Color.primary) // was valueColor ?? .primary
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .layoutPriority(1) // optional, helps value text avoid truncation
+
                 Text(sub ?? " ")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary) // was .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -1248,15 +1259,6 @@ struct DebtDetailView: View {
                 let sum = account.transactions.reduce(Decimal.zero) { $0 + $1.amount }
                 return sum == 0 ? "Unavailable" : formatAmount(sum)
             }
-        }()
-
-        // Change since recorded (when both exist)
-        let changeSinceRecorded: (text: String, color: Color)? = {
-            guard let d = lastDate else { return nil }
-            let delta = account.transactions.filter { $0.datePosted > d }.reduce(Decimal.zero) { $0 + $1.amount }
-            let change = delta
-            let prefix = change >= 0 ? "+" : ""
-            return (prefix + formatAmount(change), change >= 0 ? .green : .red)
         }()
 
         // APR and Typical Payment
@@ -1309,11 +1311,11 @@ struct DebtDetailView: View {
         }()
 
         return VStack(alignment: .center, spacing: 12) {
-            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 8) { // was 24
                 GridRow {
                     cell(title: "Transaction Balance", value: transactionalText)
                     cell(title: "Recorded Balance", value: recordedText, sub: recordedDateText)
-                    if let change = changeSinceRecorded { cell(title: "Δ Since Rec.", value: change.text, sub: nil, valueColor: change.color) }
+                    // removed: Δ Since Rec.
                     if let apr = aprText { cell(title: "APR", value: apr) }
                     if let pay = paymentText { cell(title: "Payment", value: pay) }
                     if let pp = plannedPayment { cell(title: "Payment (plan)", value: formatAmount(pp)) }
@@ -1321,13 +1323,14 @@ struct DebtDetailView: View {
                     if let s = planPayoffText { cell(title: "Payoff (plan)", value: s) }
                 }
             }
-            .frame(maxWidth: 700, alignment: .center)
+            .frame(maxWidth: 1100, alignment: .center)
             .padding(16)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(.separator, lineWidth: 1)
             )
+            .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }

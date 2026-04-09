@@ -15,6 +15,7 @@ struct DebtPayoffView: View {
     @State private var plannedPayment: Decimal? = nil
     @State private var plannedPayoffDate: Date? = nil
     @State private var planComputeError: String? = nil
+    @State private var currentPlan: DebtPlanResult? = nil
 
     // Settings that drive the global plan
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
@@ -95,17 +96,50 @@ struct DebtPayoffView: View {
                 }
             }
 
-            if !viewModel.projection.isEmpty {
-                Section("Schedule (Monthly)") {
-                    ForEach(viewModel.projection) { p in
-                        HStack {
-                            Text(p.date, style: .date)
-                            Spacer()
-                            Text(formatCurrency(p.balance))
+            let cutoff = plannedPayoffDate ?? Date()
+            let calendar = Calendar.current
+            Section("Schedule (Monthly)") {
+                if let plan = currentPlan {
+                    // Filter out months where the date is past the payoff date
+                    let rows = Array(plan.months.enumerated()).filter { (_, month) in
+                        let monthDate = calendar.startOfDay(for: month.date)
+                        let cutoffDate = calendar.startOfDay(for: cutoff)
+                        
+                        return monthDate <= cutoffDate
+                    }
+                    if rows.isEmpty {
+                        Text("No schedule available.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(rows, id: \.0) { _, month in
+                            let bal = month.balances[viewModel.account.id] ?? 0
+                            HStack {
+                                Text(month.date, style: .date)
+                                Spacer()
+                                Text(formatCurrency(bal))
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to projection: also hides months past the payoff date
+                    let rows = viewModel.projection.filter {
+                        calendar.startOfDay(for: $0.date) <= calendar.startOfDay(for: cutoff)
+                    }
+                    if rows.isEmpty {
+                        Text("No schedule available.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(rows) { p in
+                            HStack {
+                                Text(p.date, style: .date)
+                                Spacer()
+                                Text(formatCurrency(p.balance))
+                            }
                         }
                     }
                 }
             }
+        
 
             Section("Disclaimers") {
                 Text("Estimates only. Actual payoff depends on lender calculations, fees, and APR changes. Update with statements to improve accuracy.")
@@ -238,17 +272,20 @@ struct DebtPayoffView: View {
             }
 
             // Apply this account’s values to the UI
+            self.currentPlan = plan
             self.plannedPayment = plan.months.first?.payments[viewModel.account.id]
             self.plannedPayoffDate = plan.payoffDates[viewModel.account.id]
             self.planComputeError = nil
         } catch DebtPlanError.infeasibleBudget(let requiredMin) {
             self.plannedPayment = nil
             self.plannedPayoffDate = nil
+            self.currentPlan = nil
             self.planComputeError = "Budget too low to cover minimums (\(formatCurrency(requiredMin)))."
         } catch {
             self.plannedPayment = nil
             self.plannedPayoffDate = nil
             self.planComputeError = nil
+            self.currentPlan = nil
         }
     }
 
