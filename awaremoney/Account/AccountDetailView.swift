@@ -34,6 +34,8 @@ struct AccountDetailView: View {
     @State private var activeAssetLink: AssetLiabilityLink? = nil
     @State private var suppressLinkOnChange = false
     @State private var showHelpSheet = false
+    @State private var showLTVInfo = false
+
     
     @FocusState private var focusedField: Field?
 
@@ -122,9 +124,11 @@ struct AccountDetailView: View {
                             })
                         }
                     }
-                    ToolbarItem(placement: (account.type == .property) ? .topBarLeading : .topBarTrailing) {
-                        PlanToolbarButton("Help", systemImage: "questionmark.circle", fixedWidth: 90) {
-                            showHelpSheet = true
+                    if UIDevice.type == "iPhone" {
+                        ToolbarItem(placement: (account.type == .property) ? .topBarLeading : .topBarTrailing) {
+                            PlanToolbarButton("Help", systemImage: "questionmark.circle", fixedWidth: 90) {
+                                showHelpSheet = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -285,12 +289,31 @@ struct AccountDetailView: View {
                             LabeledContent("Equity") {
                                 Text(format(amount: assetVal - debtMag))
                             }
-                            LabeledContent("LTV") {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("LTV")
+                                Spacer()
                                 Text(formatPercent(debtMag / assetVal))
                             }
                         }
                     }
+                    DisclosureGroup(isExpanded: $showLTVInfo) {
+                        Text("LTV = loan amount ÷ property value.\nExample: $80,000 on $100,000 = 80%.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity.combined(with: .move(edge: .leading)))
+                        
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                            Text("LTV hint")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityLabel(showLTVInfo ? "Hide LTV definition" : "Show LTV definition")
 
+                    
                     Text("Link a loan to track equity and LTV.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -641,7 +664,7 @@ struct AccountDetailView: View {
                     // Loan/Credit Card items
                     if isLoanLike {
                         if let apr = aprText { cell(title: "APR", value: apr, sub: nil) }
-                        if let pay = typicalPaymentText { cell(title: "Payment", value: pay, sub: nil) }
+                        if let pay = typicalPaymentText { cell(title: "Typical Payment", value: pay, sub: nil) }
                         if let parts = nextDueParts { cell(title: "Next Due", value: parts.date, sub: parts.rel) }
                     }
 

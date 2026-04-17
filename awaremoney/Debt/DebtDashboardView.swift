@@ -263,7 +263,7 @@ struct DebtDashboardView: View {
             }
         }
         .refreshable { await load() }
-        .navigationTitle("Planning")
+        .navigationTitle("Debt")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
@@ -1317,7 +1317,7 @@ struct DebtDetailView: View {
                     cell(title: "Recorded Balance", value: recordedText, sub: recordedDateText)
                     // removed: Δ Since Rec.
                     if let apr = aprText { cell(title: "APR", value: apr) }
-                    if let pay = paymentText { cell(title: "Payment", value: pay) }
+                    if let pay = paymentText { cell(title: "Typical Payment", value: pay) }
                     if let pp = plannedPayment { cell(title: "Payment (plan)", value: formatAmount(pp)) }
                     if let due = nextDueParts { cell(title: "Next Due", value: due.date, sub: due.rel) }
                     if let s = planPayoffText { cell(title: "Payoff (plan)", value: s) }

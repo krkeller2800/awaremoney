@@ -71,6 +71,11 @@ struct AccountsListView: View {
                             }
                         }
 #endif
+                        ToolbarItem(placement: .topBarTrailing) {
+                            PlanToolbarButton("Help", systemImage: "questionmark.circle") {
+                                showHelpSheet = true
+                            } 
+                        }
                     }
                 } detail: {
                     if let sel = selection, let account = accounts.first(where: { $0.id == sel }) {

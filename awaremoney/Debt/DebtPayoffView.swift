@@ -81,7 +81,7 @@ struct DebtPayoffView: View {
                         .foregroundStyle(.red)
                 }
                 if let pp = plannedPayment {
-                    LabeledContent("Payment (plan)") {
+                    LabeledContent("Payment (plan for this month)") {
                         Text(formatCurrency(pp))
                     }
                 }
@@ -100,43 +100,78 @@ struct DebtPayoffView: View {
             let calendar = Calendar.current
             Section("Schedule (Monthly)") {
                 if let plan = currentPlan {
-                    // Filter out months where the date is past the payoff date
+                    // Use the plan’s per‑month data (which already includes variable budget from Income & Bills)
                     let rows = Array(plan.months.enumerated()).filter { (_, month) in
                         let monthDate = calendar.startOfDay(for: month.date)
                         let cutoffDate = calendar.startOfDay(for: cutoff)
-                        
                         return monthDate <= cutoffDate
                     }
+
                     if rows.isEmpty {
                         Text("No schedule available.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(rows, id: \.0) { _, month in
-                            let bal = month.balances[viewModel.account.id] ?? 0
-                            HStack {
-                                Text(month.date, style: .date)
-                                Spacer()
-                                Text(formatCurrency(bal))
+                        ForEach(rows, id: \.0) { index, month in
+                            let id = viewModel.account.id
+                            let afterBal = month.balances[id] ?? 0
+                            let payment = month.payments[id] ?? 0
+                            let interest = month.interest[id] ?? 0
+
+                            // Prior month balance is the starting point for this month.
+                            // For the first plan month, reconstruct the starting balance using:
+                            // start = after + payment - interest
+                            let priorBal: Decimal = {
+                                if index > 0 {
+                                    let prevMonth = rows[index - 1].1
+                                    return prevMonth.balances[id] ?? 0
+                                } else {
+                                    return afterBal + payment - interest
+                                }
+                            }()
+
+                            DisclosureGroup {
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    HStack {
+                                        Text("Prior month balance")
+                                        Spacer()
+                                        Text(formatCurrency(priorBal)).monospacedDigit()
+                                    }
+                                    HStack {
+                                        Text("Payment (this month)")
+                                        Spacer()
+                                        Text("− " + formatCurrency(payment)).monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    HStack {
+                                        Text("Interest (this month)")
+                                        Spacer()
+                                        Text("+ " + formatCurrency(interest)).monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Divider()
+                                    HStack {
+                                        Text("Ending balance")
+                                        Spacer()
+                                        Text(formatCurrency(afterBal)).monospacedDigit().bold()
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .padding(.top, 2)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(month.date, style: .date)
+                                    Spacer()
+                                    Text(formatCurrency(afterBal)).monospacedDigit()
+                                }
                             }
                         }
                     }
                 } else {
-                    // Fallback to projection: also hides months past the payoff date
-                    let rows = viewModel.projection.filter {
-                        calendar.startOfDay(for: $0.date) <= calendar.startOfDay(for: cutoff)
-                    }
-                    if rows.isEmpty {
-                        Text("No schedule available.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(rows) { p in
-                            HStack {
-                                Text(p.date, style: .date)
-                                Spacer()
-                                Text(formatCurrency(p.balance))
-                            }
-                        }
-                    }
+                    // If no plan is available, you can keep your existing projection fallback,
+                    // or encourage the user to set a plan so schedule reflects actual payments.
+                    Text("No plan available for this account.")
+                        .foregroundStyle(.secondary)
                 }
             }
         

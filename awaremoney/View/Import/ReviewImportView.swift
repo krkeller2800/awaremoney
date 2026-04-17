@@ -28,16 +28,20 @@ struct ReviewImportView: View {
     @State private var pendingStartingBalance: Decimal? = nil
     @State private var scrollProxy: ScrollViewProxy? = nil
     @State private var highlightTarget: String? = nil
+    @State private var routingAnalysis: RoutingAnalysis? = nil
+    @State private var showRoutingSheet: Bool = false
+    @State private var lastAnalyzedSource: String? = nil
+    @State private var routedAccountIDs: [UUID] = []
     private var isEditing: Bool { focusedField != nil }
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable { case institution, typicalPayment, apr, startingBalance, balance(Int) }
     
     private var isPad: Bool {
-        #if os(iOS)
+#if os(iOS)
         return UIDevice.current.userInterfaceIdiom == .pad
-        #else
+#else
         return false
-        #endif
+#endif
     }
     
     private var isQFXSource: Bool {
@@ -45,7 +49,7 @@ struct ReviewImportView: View {
         return lower.hasSuffix(".qfx") || lower.hasSuffix(".ofx") || lower.hasSuffix(".ofc") || lower.hasSuffix(".qbo")
     }
     private var hasStagedPreviewData: Bool {
-            return !staged.transactions.isEmpty || !staged.balances.isEmpty || !staged.holdings.isEmpty
+        return !staged.transactions.isEmpty || !staged.balances.isEmpty || !staged.holdings.isEmpty
     }
     
     var body: some View {
@@ -58,7 +62,7 @@ struct ReviewImportView: View {
                                 mainList
                                     .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
                                     .frame(maxHeight: .infinity)
-
+                                
                                 NavigationStack {
                                     pdfPane
                                 }
@@ -105,6 +109,7 @@ struct ReviewImportView: View {
                 let hasSentinel = vm.staged?.balances.contains(where: { ($0.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "__typical_payment__" }) ?? false
                 AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                 seedTypicalPaymentFromSentinelIfNeeded()
+                computeRoutingAnalysisIfNeeded()
             }
             .safeAreaInset(edge: .bottom) {
                 Group {
@@ -118,7 +123,7 @@ struct ReviewImportView: View {
                             onNext: { moveFocus(1) },
                             onDone: { commitAndDismissKeyboard() }
                         )
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     } else {
                         bottomBar
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -188,6 +193,79 @@ struct ReviewImportView: View {
             .presentationDetents([.large])
             .applySheetSizing()
         }
+        .sheet(isPresented: $showRoutingSheet) {
+            if let staged = vm.staged {
+                let service = ImportRoutingService()
+                let result = service.buildPlans(staged: staged, context: modelContext)
+                RoutingConfirmationView(
+                    analysis: result.analysis,
+                    plans: result.plans,
+                    onConfirm: { overrides, selectedInstitution in
+                        AMLogging.log("ReviewImportView: Routing overrides confirmed — count=\(overrides.count)", component: "ReviewImportView")
+                        AMLogging.log("ReviewImportView: Routing selected institution — value=\(selectedInstitution ?? "nil")", component: "ReviewImportView")
+                        
+                        // Persist chosen institution into VM for ReviewImportView
+                        if let inst = selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines), !inst.isEmpty {
+                            self.vm.userInstitutionName = inst
+                            AMLogging.log("ReviewImportView: Persisted selected institution to VM — value=\(inst)", component: "ReviewImportView")
+                        }
+                        
+                        // Apply user-selected overrides to the routed plans
+                        let overriddenPlans = service.applyOverrides(to: result.plans, overrides: overrides)
+                        
+                        // Resolve institution for account creation/mapping
+                        let resolvedInstitution = (selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                        ? selectedInstitution
+                        : result.analysis.institution
+                        
+                        // Resolve or create accounts for each overridden plan
+                        do {
+                            let labelToAccount = try service.resolveAccounts(
+                                for: overriddenPlans,
+                                institution: resolvedInstitution,
+                                currencyCode: settings.currencyCode,
+                                context: modelContext
+                            )
+
+                            AMLogging.log("ReviewImportView: Resolved accounts for routing — mapped \(labelToAccount.count) label(s)", component: "ReviewImportView")
+                            
+                            // Store routed accounts IDs
+                            let uniqueAccounts: Set<UUID> = Set(labelToAccount.values.map { $0.id })
+                            self.routedAccountIDs = Array(uniqueAccounts)
+                            
+                            // Auto-select if all routed labels resolve to the same account
+                            if uniqueAccounts.count == 1, let onlyId = uniqueAccounts.first, let anyAccount = labelToAccount.values.first {
+                                self.selectedAccountId = onlyId
+                                self.vm.selectedAccountID = onlyId
+                                self.vm.newAccountType = anyAccount.type
+                                AMLogging.log("ReviewImportView: Auto-selected account from routing — id=\(onlyId) name=\(anyAccount.name)", component: "ReviewImportView")
+                            } else {
+                                AMLogging.log("ReviewImportView: Multiple accounts resolved from routing — leaving selection unset", component: "ReviewImportView")
+                            }
+                            
+                            // Persist mappings for future imports
+                            service.persistMappingsAfterSave(
+                                institution: resolvedInstitution,
+                                labelToAccount: labelToAccount,
+                                plans: overriddenPlans,
+                                context: modelContext
+                            )
+                            AMLogging.log("ReviewImportView: Persisted import mappings for routing — labels=\(labelToAccount.keys.count)", component: "ReviewImportView")
+                        } catch {
+                            AMLogging.error("ReviewImportView: Failed to resolve accounts for routing — \(error.localizedDescription)", component: "ReviewImportView")
+                        }
+                        
+                        // Dismiss the routing sheet
+                        showRoutingSheet = false
+                    },
+                    onCancel: {
+                        showRoutingSheet = false
+                    }
+                )
+            } else {
+                NavigationStack { ContentUnavailableView("No routing info", systemImage: "questionmark.circle") }
+            }
+        }
         .fullScreenCover(isPresented: $showHelpSheet) {
             NavigationStack { HelpVideosView() }
                 .ignoresSafeArea()
@@ -198,20 +276,20 @@ struct ReviewImportView: View {
         ScrollViewReader { proxy in
             Form {
                 // Prominent error callout at the very top
-//            if let err = vm.errorMessage, !err.isEmpty {
-//                Section {
-//                    HStack(alignment: .top, spacing: 8) {
-//                        Image(systemName: "exclamationmark.triangle.fill")
-//                            .foregroundStyle(.red)
-//                        Text(err)
-//                            .font(.subheadline)
-//                            .foregroundStyle(.red)
-//                    }
-//                    .padding(.vertical, 2)
-//                }
-//                .listRowBackground(Color.red.opacity(0.08))
-//            }
-
+                //            if let err = vm.errorMessage, !err.isEmpty {
+                //                Section {
+                //                    HStack(alignment: .top, spacing: 8) {
+                //                        Image(systemName: "exclamationmark.triangle.fill")
+                //                            .foregroundStyle(.red)
+                //                        Text(err)
+                //                            .font(.subheadline)
+                //                            .foregroundStyle(.red)
+                //                    }
+                //                    .padding(.vertical, 2)
+                //                }
+                //                .listRowBackground(Color.red.opacity(0.08))
+                //            }
+                
                 // Suppress banner when transactions are present
                 if staged.transactions.isEmpty && !vm.computeCompletenessIssues().isEmpty {
                     Section {
@@ -231,9 +309,9 @@ struct ReviewImportView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(vm.computeCompletenessIssues()) { issue in
                                     Button {
-                                        #if canImport(UIKit)
+#if canImport(UIKit)
                                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        #endif
+#endif
                                         performChecklistAction(for: issue.title)
                                     } label: {
                                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -261,10 +339,23 @@ struct ReviewImportView: View {
                     .listRowBackground(Color.yellow.opacity(0.08))
                     
                 }
-
+                
                 Section() {
                     VStack {
-                        if !staged.transactions.isEmpty {
+                        if routedAccountIDs.count > 1 {
+                            let routedNames = accounts.filter { routedAccountIDs.contains($0.id) }.map { $0.name }
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.footnote).italic()
+                                    .foregroundStyle(.yellow)
+                                Text("This import will be routed to multiple accounts: \(routedNames.joined(separator: ", ")).")
+                                    .font(.footnote).italic()
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .accessibilityElement(children: .combine)
+                        } else if !staged.transactions.isEmpty {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.footnote).italic()
@@ -292,6 +383,7 @@ struct ReviewImportView: View {
                                 }
                             }
                             .onAppear(perform: onAccountSectionAppear)
+                            .disabled(routedAccountIDs.count > 1)
                             Image(systemName: "pencil")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -364,10 +456,10 @@ struct ReviewImportView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                     }
                     .foregroundStyle(.primary)
-//                .multilineTextAlignment(.center)
-//                .frame(maxWidth: .infinity, alignment: .center)
+                    //                .multilineTextAlignment(.center)
+                    //                .frame(maxWidth: .infinity, alignment: .center)
                 }
-
+                
                 // Loan Terms — single place to edit Typical Payment and APR
                 if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
                     Section("Loan Terms") {
@@ -439,7 +531,7 @@ struct ReviewImportView: View {
                         }
                     }
                 }
-
+                
                 // Starting balance prompt
                 if (vm.staged?.balances.isEmpty ?? true), let earliestDate = vm.staged?.transactions.map({ $0.datePosted }).min() {
                     StartingBalanceInlineView(
@@ -482,7 +574,7 @@ struct ReviewImportView: View {
                     .background(highlightTarget == "startingBalancePrompt" ? Color.accentColor.opacity(0.12) : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-
+                
                 // Transactions preview
                 if !staged.transactions.isEmpty {
                     Section("Transactions") {
@@ -516,7 +608,7 @@ struct ReviewImportView: View {
                         }
                     }
                 }
-
+                
                 // Holdings
                 if !staged.holdings.isEmpty {
                     Section("Holdings") {
@@ -524,7 +616,7 @@ struct ReviewImportView: View {
                             let h = staged.holdings[idx]
                             HStack {
                                 Toggle("", isOn: holdingIncludeBinding(for: idx))
-                                .labelsHidden()
+                                    .labelsHidden()
                                 Text("\(h.symbol) — \(h.quantity.description)")
                                 Spacer()
                                 if let mv = h.marketValue {
@@ -534,7 +626,7 @@ struct ReviewImportView: View {
                         }
                     }
                 }
-
+                
                 if let balances = vm.staged?.balances, !balances.isEmpty {
                     Section("Balances") {
                         VStack {
@@ -543,16 +635,16 @@ struct ReviewImportView: View {
                                 HStack(alignment: .top) {
                                     Toggle("", isOn: balanceIncludeBinding(for: idx))
                                         .labelsHidden()
-
+                                    
                                     VStack(alignment: .leading, spacing: 6) {
                                         HStack(spacing: 2) {
                                             DatePicker("As of", selection: balanceDateBinding(for: idx), displayedComponents: .date)
                                                 .labelsHidden()
                                                 .datePickerStyle(.compact)
-//                                            Image(systemName: "pencil")
-//                                                .font(.caption)
-//                                                .foregroundStyle(.tertiary)
-//                                                .accessibilityHidden(true)
+                                            //                                            Image(systemName: "pencil")
+                                            //                                                .font(.caption)
+                                            //                                                .foregroundStyle(.tertiary)
+                                            //                                                .accessibilityHidden(true)
                                             Spacer()
                                             TextField("0.00", text: balanceAmountTextBinding(for: idx))
                                                 .lineLimit(1)
@@ -619,16 +711,16 @@ struct ReviewImportView: View {
                 }
                 
                 Section() {
-//                if let err = vm.errorMessage, !err.isEmpty {
-//                    HStack(alignment: .top, spacing: 8) {
-//                        Image(systemName: "exclamationmark.triangle")
-//                            .foregroundStyle(.red)
-//                        Text(err)
-//                            .font(.footnote)
-//                            .foregroundStyle(.red)
-//                    }
-//                    .padding(.vertical, 2)
-//                }
+                    //                if let err = vm.errorMessage, !err.isEmpty {
+                    //                    HStack(alignment: .top, spacing: 8) {
+                    //                        Image(systemName: "exclamationmark.triangle")
+                    //                            .foregroundStyle(.red)
+                    //                        Text(err)
+                    //                            .font(.footnote)
+                    //                            .foregroundStyle(.red)
+                    //                    }
+                    //                    .padding(.vertical, 2)
+                    //                }
                 } header: {
                     VStack {
                         Text("Notes")
@@ -648,7 +740,7 @@ struct ReviewImportView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-//                .foregroundStyle(.primary)
+                    //                .foregroundStyle(.primary)
                 }
             }
             .onAppear { self.scrollProxy = proxy }
@@ -662,7 +754,7 @@ struct ReviewImportView: View {
             }
         }
     }
-
+    
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider()
@@ -672,6 +764,7 @@ struct ReviewImportView: View {
                     vm.infoMessage = nil
                     typicalPaymentInput = ""
                     vm.userInstitutionName = ""
+                    routedAccountIDs = []
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark.circle")
@@ -684,7 +777,7 @@ struct ReviewImportView: View {
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)
-
+                
                 Button {
                     AMLogging.log("ReviewImportView: Approve tapped — typicalPaymentInput='\(typicalPaymentInput)' parsedField=\(String(describing: parseCurrencyInput(typicalPaymentInput))) typicalPaymentParsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                     // Diagnostics: log institution state at approve time
@@ -694,7 +787,7 @@ struct ReviewImportView: View {
                     // NOTE: Typical payment entered here is currently not persisted; expose a VM API to pass it if needed.
                     vm.applyLiabilityLabelSafetyNetIfNeeded()
                     AMLogging.log("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
-
+                    
                     // If the only missing required field was a starting/ending balance and the user has typed it but not tapped Add, append it now
                     if let pending = pendingStartingBalance, (vm.staged?.balances.isEmpty ?? true) {
                         let asOf = (vm.staged?.transactions.map { $0.datePosted }.min()) ?? Date()
@@ -702,7 +795,7 @@ struct ReviewImportView: View {
                         vm.staged?.balances.append(sb)
                         AMLogging.log("ReviewImportView: Auto-appended pending starting balance before save — value=\(pending) date=\(asOf)", component: "ReviewImportView")
                     }
-
+                    
                     do {
                         try vm.approveAndSave(context: modelContext)
                         AMLogging.log("ReviewImportView: post-save, attempting to persist Typical Payment — candidate=\(String(describing: (typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput))))", component: "ReviewImportView")
@@ -808,46 +901,46 @@ struct ReviewImportView: View {
         }
     }
     
-//    private var editingAccessoryBar: some View {
-//        HStack(spacing: 16) {
-//
-//            Button { moveFocus(-1) } label: {
-//                Image(systemName: "chevron.left")
-//                    .font(.title2)
-//                    .frame(width: 44, height: 44)
-//                    .contentShape(Rectangle())
-//            }
-//            .buttonStyle(.plain)
-//            .disabled(!canGoPrevious)
-//            .accessibilityLabel("Previous field")
-//
-//            Button { moveFocus(1) } label: {
-//                Image(systemName: "chevron.right")
-//                    .font(.title2)
-//                    .frame(width: 44, height: 44)
-//                    .contentShape(Rectangle())
-//            }
-//            .buttonStyle(.plain)
-//            .disabled(!canGoNext)
-//            .accessibilityLabel("Next field")
-//
-//            Spacer()
-//
-//            Button { commitAndDismissKeyboard() } label: {
-//                Image(systemName: "checkmark")
-//                    .font(.title2.weight(.semibold))
-//                    .frame(width: 44, height: 44)
-//                    .contentShape(Rectangle())
-//            }
-//            .buttonStyle(.plain)
-//            .accessibilityLabel("Done editing")
-//        }
-//        .padding(.horizontal, 12)
-//        .padding(.vertical, 10)
-//        .background(.bar)
-//        .overlay(Divider(), alignment: .top)
-//    }
-//    
+    //    private var editingAccessoryBar: some View {
+    //        HStack(spacing: 16) {
+    //
+    //            Button { moveFocus(-1) } label: {
+    //                Image(systemName: "chevron.left")
+    //                    .font(.title2)
+    //                    .frame(width: 44, height: 44)
+    //                    .contentShape(Rectangle())
+    //            }
+    //            .buttonStyle(.plain)
+    //            .disabled(!canGoPrevious)
+    //            .accessibilityLabel("Previous field")
+    //
+    //            Button { moveFocus(1) } label: {
+    //                Image(systemName: "chevron.right")
+    //                    .font(.title2)
+    //                    .frame(width: 44, height: 44)
+    //                    .contentShape(Rectangle())
+    //            }
+    //            .buttonStyle(.plain)
+    //            .disabled(!canGoNext)
+    //            .accessibilityLabel("Next field")
+    //
+    //            Spacer()
+    //
+    //            Button { commitAndDismissKeyboard() } label: {
+    //                Image(systemName: "checkmark")
+    //                    .font(.title2.weight(.semibold))
+    //                    .frame(width: 44, height: 44)
+    //                    .contentShape(Rectangle())
+    //            }
+    //            .buttonStyle(.plain)
+    //            .accessibilityLabel("Done editing")
+    //        }
+    //        .padding(.horizontal, 12)
+    //        .padding(.vertical, 10)
+    //        .background(.bar)
+    //        .overlay(Divider(), alignment: .top)
+    //    }
+    //
     private var accountSelectionBinding: Binding<UUID?> {
         Binding(
             get: { selectedAccountId },
@@ -856,7 +949,7 @@ struct ReviewImportView: View {
             }
         )
     }
-
+    
     private func handleAccountSelectionChange(_ newValue: UUID?) {
         selectedAccountId = newValue
         vm.selectedAccountID = newValue
@@ -864,9 +957,9 @@ struct ReviewImportView: View {
         if newValue != nil {
             // The Institution field may disappear; clear editing state and dismiss keyboard
             focusedField = nil
-            #if canImport(UIKit)
+#if canImport(UIKit)
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            #endif
+#endif
         }
         if let id = newValue {
             vm.newAccountName = ""
@@ -896,7 +989,7 @@ struct ReviewImportView: View {
             set: { vm.creditCardFlipOverride = $0 }
         )
     }
-
+    
     private func transactionIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
             get: {
@@ -910,7 +1003,7 @@ struct ReviewImportView: View {
             }
         )
     }
-
+    
     private func holdingIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
             get: {
@@ -924,7 +1017,7 @@ struct ReviewImportView: View {
             }
         )
     }
-
+    
     private func balanceIncludeBinding(for index: Int) -> Binding<Bool> {
         Binding(
             get: {
@@ -938,11 +1031,9 @@ struct ReviewImportView: View {
             }
         )
     }
-
+    
     private func onAccountSectionAppear() {
         AMLogging.log("ReviewImportView.onAppear — file=\(staged.sourceFileName), initial userInstitutionName='\(vm.userInstitutionName)'", component: "ReviewImportView")
-        selectedAccountId = nil
-        vm.selectedAccountID = nil
         if let suggested = staged.suggestedAccountType {
             vm.newAccountType = suggested
         }
@@ -969,7 +1060,7 @@ struct ReviewImportView: View {
                 typicalPaymentParsed = hint
             }
         }
-
+        
         // Seed Typical Payment from a sentinel balance embedded by PDFSummaryParser (top-level init and fallback here)
         seedTypicalPaymentFromSentinelIfNeeded()
         
@@ -981,6 +1072,9 @@ struct ReviewImportView: View {
                 AMLogging.log("ReviewImportView: Seeded APR from staged balances — apr=\(apr) scale=\(String(describing: aprScale))", component: "ReviewImportView")
             }
         }
+        
+        // Run first-pass routing analysis once per source file
+        computeRoutingAnalysisIfNeeded()
     }
     
     private func seedTypicalPaymentFromSentinelIfNeeded() {
@@ -1017,6 +1111,20 @@ struct ReviewImportView: View {
         }
     }
     
+    private func computeRoutingAnalysisIfNeeded() {
+        guard let staged = vm.staged else { return }
+        let src = staged.sourceFileName
+        if lastAnalyzedSource == src { return }
+        let service = ImportRoutingService()
+        let analysis = service.analyze(staged: staged, context: modelContext)
+        routingAnalysis = analysis
+        lastAnalyzedSource = src
+        AMLogging.log("Routing analysis computed — clusters=\(analysis.clusters.count) needsConfirmation=\(analysis.needsConfirmation)", component: "ReviewImportView")
+        if analysis.needsConfirmation {
+            showRoutingSheet = true
+        }
+    }
+
     private func resolvedPDFURL() -> URL? {
         // Only use lastPickedLocalURL when it's a PDF
         if let direct = vm.lastPickedLocalURL {
