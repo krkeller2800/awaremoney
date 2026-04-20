@@ -560,11 +560,25 @@ struct ImportBatchDetailView: View {
     // MARK: - PDF caching helpers
     private func perBatchPreviewDirectory(for batch: ImportBatch) -> URL? {
         let fm = FileManager.default
-        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-            return caches.appendingPathComponent("StatementPreviews", isDirectory: true)
-                .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+        guard let appSupport = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            return nil
         }
-        return nil
+        let dir = appSupport
+            .appendingPathComponent("StatementPreviews", isDirectory: true)
+            .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+
+        // Ensure directory exists and is excluded from iCloud backups
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            var dirCopy = dir
+            try dirCopy.setResourceValues(resourceValues)
+        } catch {
+            // Best effort; still return dir
+        }
+
+        return dir
     }
 
     private func cachePDF(for batch: ImportBatch, from originalURL: URL) -> URL? {
@@ -596,17 +610,22 @@ struct ImportBatchDetailView: View {
         // Only attempt migration for .pdf source filenames
         let lower = batch.sourceFileName.lowercased()
         guard lower.hasSuffix(".pdf") else { return }
-        // Legacy fallback location was Caches/<sourceFileName>
-        if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            let legacy = caches.appendingPathComponent(batch.sourceFileName)
-            if FileManager.default.fileExists(atPath: legacy.path) {
-                AMLogging.log("Migrating legacy cached PDF for batchID=\(batch.id) from legacy=\(legacy.path)", component: "ImportBatchDetailView")
-                if let newURL = cachePDF(for: batch, from: legacy) {
+        // 3b) Migrate from old per-batch cache under Caches/StatementPreviews/<batchID>
+        if let caches = try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            let oldPerBatchDir = caches
+                .appendingPathComponent("StatementPreviews", isDirectory: true)
+                .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+
+            if let items = try? FileManager.default.contentsOfDirectory(at: oldPerBatchDir, includingPropertiesForKeys: nil),
+               let first = items.first {
+                AMLogging.log("Migrating old per-batch cached PDF for batchID=\(batch.id) from \(first.path)", component: "ImportBatchDetailView")
+                if let newURL = cachePDF(for: batch, from: first) {
                     batch.sourceFileLocalPath = newURL.path
                     try? modelContext.save()
-                    // Best-effort cleanup of legacy file to prevent future confusion
-                    try? FileManager.default.removeItem(at: legacy)
-                    AMLogging.log("Migration complete; updated sourceFileLocalPath and removed legacy file", component: "ImportBatchDetailView")
+                    // Best-effort cleanup of old per-batch directory
+                    try? FileManager.default.removeItem(at: oldPerBatchDir)
+                    AMLogging.log("Per-batch migration complete; updated sourceFileLocalPath and removed old Caches folder", component: "ImportBatchDetailView")
+                    return
                 }
             }
         }

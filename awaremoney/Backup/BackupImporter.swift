@@ -7,11 +7,25 @@ import SwiftData
 private enum ImportBatchDetailView_PreviewHelpers {
     static func perBatchPreviewDirectory(for batch: ImportBatch) -> URL? {
         let fm = FileManager.default
-        if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-            return caches.appendingPathComponent("StatementPreviews", isDirectory: true)
-                .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+        guard let appSupport = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            return nil
         }
-        return nil
+        let dir = appSupport
+            .appendingPathComponent("StatementPreviews", isDirectory: true)
+            .appendingPathComponent(batch.id.uuidString, isDirectory: true)
+
+        // Ensure directory exists and is excluded from iCloud backups
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            var dirCopy = dir
+            try dirCopy.setResourceValues(resourceValues)
+        } catch {
+            // Best effort; still return dir
+        }
+
+        return dir
     }
 }
 

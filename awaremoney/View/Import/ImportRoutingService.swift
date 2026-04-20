@@ -49,8 +49,8 @@ final class ImportRoutingService {
     // MARK: - Execution Models
 
     struct RoutedClusterPlan: Identifiable, Hashable {
-        let id = UUID()
-        let label: String // normalized label key this plan ("__default__" when none)
+        var id: String { label }          // <- stable identity
+        let label: String
         let candidate: RoutingCandidate
         let transactions: [StagedTransaction]
         let balances: [StagedBalance]

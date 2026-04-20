@@ -32,9 +32,14 @@ struct ReviewImportView: View {
     @State private var showRoutingSheet: Bool = false
     @State private var lastAnalyzedSource: String? = nil
     @State private var routedAccountIDs: [UUID] = []
-    private var isEditing: Bool { focusedField != nil }
+    @State private var routingOverrides: [String: RoutingCandidate.Action] = [:]
+    @State private var routingGlobalTargetMode: Int = 0
+    @State private var routingPreviewEffective: [String: RoutingCandidate.Action] = [:]
+    @State private var routingPreviewInstitution: String? = nil
+    @State private var childIsEditing: Bool = false
+    private var isEditing: Bool { focusedField != nil || childIsEditing }
     @FocusState private var focusedField: FocusedField?
-    private enum FocusedField: Hashable { case institution, typicalPayment, apr, startingBalance, balance(Int) }
+    private enum FocusedField: Hashable { case typicalPayment, apr, startingBalance, balance(Int) }
     
     private var isPad: Bool {
 #if os(iOS)
@@ -102,6 +107,23 @@ struct ReviewImportView: View {
                         Image(systemName: "questionmark.circle")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    if (staged.sourceFileName.lowercased().hasSuffix(".pdf") || hasStagedPreviewData) {
+                        Button {
+                            AMLogging.log("ReviewImportView: View Statement tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
+                            showPDFSheet = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text.magnifyingglass")
+                                Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Trans")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+            .onPreferenceChange(RoutingChildEditingKey.self) { value in
+                childIsEditing = value
             }
             .onAppear {
                 let hasStaged = (vm.staged != nil)
@@ -119,8 +141,8 @@ struct ReviewImportView: View {
                         EditingAccessoryBar(
                             canGoPrevious: canGoPrevious,
                             canGoNext: canGoNext,
-                            onPrevious: { moveFocus(-1) },
-                            onNext: { moveFocus(1) },
+                            onPrevious: { accessoryPrevious() },
+                            onNext: { accessoryNext() },
                             onDone: { commitAndDismissKeyboard() }
                         )
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -134,7 +156,7 @@ struct ReviewImportView: View {
             }
             .onChange(of: focusedField) { _, newValue in
                 switch newValue {
-                case .some(.institution), .some(.typicalPayment), .some(.apr):
+                case .some(.typicalPayment), .some(.apr):
                     selectAllInFirstResponder()
                 case .some(.balance(_)):
                     selectAllInFirstResponder()
@@ -193,79 +215,102 @@ struct ReviewImportView: View {
             .presentationDetents([.large])
             .applySheetSizing()
         }
-        .sheet(isPresented: $showRoutingSheet) {
-            if let staged = vm.staged {
-                let service = ImportRoutingService()
-                let result = service.buildPlans(staged: staged, context: modelContext)
-                RoutingConfirmationView(
-                    analysis: result.analysis,
-                    plans: result.plans,
-                    onConfirm: { overrides, selectedInstitution in
-                        AMLogging.log("ReviewImportView: Routing overrides confirmed — count=\(overrides.count)", component: "ReviewImportView")
-                        AMLogging.log("ReviewImportView: Routing selected institution — value=\(selectedInstitution ?? "nil")", component: "ReviewImportView")
-                        
-                        // Persist chosen institution into VM for ReviewImportView
-                        if let inst = selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines), !inst.isEmpty {
-                            self.vm.userInstitutionName = inst
-                            AMLogging.log("ReviewImportView: Persisted selected institution to VM — value=\(inst)", component: "ReviewImportView")
-                        }
-                        
-                        // Apply user-selected overrides to the routed plans
-                        let overriddenPlans = service.applyOverrides(to: result.plans, overrides: overrides)
-                        
-                        // Resolve institution for account creation/mapping
-                        let resolvedInstitution = (selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                        ? selectedInstitution
-                        : result.analysis.institution
-                        
-                        // Resolve or create accounts for each overridden plan
-                        do {
-                            let labelToAccount = try service.resolveAccounts(
-                                for: overriddenPlans,
-                                institution: resolvedInstitution,
-                                currencyCode: settings.currencyCode,
-                                context: modelContext
-                            )
-
-                            AMLogging.log("ReviewImportView: Resolved accounts for routing — mapped \(labelToAccount.count) label(s)", component: "ReviewImportView")
-                            
-                            // Store routed accounts IDs
-                            let uniqueAccounts: Set<UUID> = Set(labelToAccount.values.map { $0.id })
-                            self.routedAccountIDs = Array(uniqueAccounts)
-                            
-                            // Auto-select if all routed labels resolve to the same account
-                            if uniqueAccounts.count == 1, let onlyId = uniqueAccounts.first, let anyAccount = labelToAccount.values.first {
-                                self.selectedAccountId = onlyId
-                                self.vm.selectedAccountID = onlyId
-                                self.vm.newAccountType = anyAccount.type
-                                AMLogging.log("ReviewImportView: Auto-selected account from routing — id=\(onlyId) name=\(anyAccount.name)", component: "ReviewImportView")
-                            } else {
-                                AMLogging.log("ReviewImportView: Multiple accounts resolved from routing — leaving selection unset", component: "ReviewImportView")
-                            }
-                            
-                            // Persist mappings for future imports
-                            service.persistMappingsAfterSave(
-                                institution: resolvedInstitution,
-                                labelToAccount: labelToAccount,
-                                plans: overriddenPlans,
-                                context: modelContext
-                            )
-                            AMLogging.log("ReviewImportView: Persisted import mappings for routing — labels=\(labelToAccount.keys.count)", component: "ReviewImportView")
-                        } catch {
-                            AMLogging.error("ReviewImportView: Failed to resolve accounts for routing — \(error.localizedDescription)", component: "ReviewImportView")
-                        }
-                        
-                        // Dismiss the routing sheet
-                        showRoutingSheet = false
-                    },
-                    onCancel: {
-                        showRoutingSheet = false
-                    }
-                )
-            } else {
-                NavigationStack { ContentUnavailableView("No routing info", systemImage: "questionmark.circle") }
-            }
-        }
+//        .sheet(isPresented: $showRoutingSheet) {
+//            if let staged = vm.staged {
+//                let service = ImportRoutingService()
+//                let result = service.buildPlans(staged: staged, context: modelContext)
+//                RoutingConfirmationView(
+//                    analysis: result.analysis,
+//                    plans: result.plans,
+//
+//                    // NEW: preload with any previously inputted values
+//                    initialOverrides: routingOverrides,
+//                    initialSelectedInstitution: {
+//                        let trimmed = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+//                        return trimmed.isEmpty ? result.analysis.institution : trimmed
+//                    }(),
+//                    initialGlobalTargetMode: routingGlobalTargetMode,
+//
+//                    onConfirm: { overrides, selectedInstitution in
+//                        AMLogging.log("ReviewImportView: Routing overrides confirmed — count=\(overrides.count)", component: "ReviewImportView")
+//                        AMLogging.log("ReviewImportView: Routing selected institution — value=\(selectedInstitution ?? "nil")", component: "ReviewImportView")
+//
+//                        // Persist chosen institution into VM so it preloads next time
+//                        if let inst = selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines), !inst.isEmpty {
+//                            self.vm.userInstitutionName = inst
+//                            AMLogging.log("ReviewImportView: Persisted selected institution to VM — value=\(inst)", component: "ReviewImportView")
+//                        }
+//
+//                        // NEW: remember the user’s overrides so the sheet preloads next time
+//                        self.routingOverrides = overrides
+//
+//                        // NEW: remember the global target mode based on whether all overrides choose Create New
+//                        let allCreateNew = overrides.values.allSatisfy {
+//                            if case .createNew = $0 { return true } else { return false }
+//                        }
+//                        self.routingGlobalTargetMode = allCreateNew ? 1 : 0
+//
+//                        // Apply user-selected overrides to the routed plans (existing code)
+//                        let overriddenPlans = service.applyOverrides(to: result.plans, overrides: overrides)
+//
+//                        // Resolve institution for account creation/mapping (existing code)
+//                        let resolvedInstitution = (selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+//                        ? selectedInstitution
+//                        : result.analysis.institution
+//
+//                        // Resolve or create accounts for each overridden plan (existing code)
+//                        do {
+//                            let labelToAccount = try service.resolveAccounts(
+//                                for: overriddenPlans,
+//                                institution: resolvedInstitution,
+//                                currencyCode: settings.currencyCode,
+//                                context: modelContext
+//                            )
+//
+//                            AMLogging.log("ReviewImportView: Resolved accounts for routing — mapped \(labelToAccount.count) label(s)", component: "ReviewImportView")
+//
+//                            // Store routed accounts IDs (existing code)
+//                            let uniqueAccounts: Set<UUID> = Set(labelToAccount.values.map { $0.id })
+//                            self.routedAccountIDs = Array(uniqueAccounts)
+//
+//                            if uniqueAccounts.count == 1, let onlyId = uniqueAccounts.first, let anyAccount = labelToAccount.values.first {
+//                                self.selectedAccountId = onlyId
+//                                self.vm.selectedAccountID = onlyId
+//                                self.vm.newAccountType = anyAccount.type
+//                                AMLogging.log("ReviewImportView: Auto-selected account from routing — id=\(onlyId) name=\(anyAccount.name)", component: "ReviewImportView")
+//                            } else {
+//                                AMLogging.log("ReviewImportView: Multiple accounts resolved from routing — leaving selection unset", component: "ReviewImportView")
+//                            }
+//
+//                            // Persist mappings (existing code)
+//                            service.persistMappingsAfterSave(
+//                                institution: resolvedInstitution,
+//                                labelToAccount: labelToAccount,
+//                                plans: overriddenPlans,
+//                                context: modelContext
+//                            )
+//                            AMLogging.log("ReviewImportView: Persisted import mappings for routing — labels=\(labelToAccount.keys.count)", component: "ReviewImportView")
+//                        } catch {
+//                            AMLogging.error("ReviewImportView: Failed to resolve accounts for routing — \(error.localizedDescription)", component: "ReviewImportView")
+//                        }
+//
+//                        // Dismiss the routing sheet (existing code)
+//                        showRoutingSheet = false
+//                    },
+//                    onCancel: {
+//                        // User canceled routing; cancel the entire review since routing isn't defined
+//                        showRoutingSheet = false
+//                        vm.staged = nil
+//                        vm.infoMessage = nil
+//                        typicalPaymentInput = ""
+//                        vm.userInstitutionName = ""
+//                        routedAccountIDs = []
+//                    }
+//                )
+//            } else {
+//                NavigationStack { ContentUnavailableView("No routing info", systemImage: "questionmark.circle") }
+//            }
+//        }
         .fullScreenCover(isPresented: $showHelpSheet) {
             NavigationStack { HelpVideosView() }
                 .ignoresSafeArea()
@@ -275,21 +320,6 @@ struct ReviewImportView: View {
     private var mainList: some View {
         ScrollViewReader { proxy in
             Form {
-                // Prominent error callout at the very top
-                //            if let err = vm.errorMessage, !err.isEmpty {
-                //                Section {
-                //                    HStack(alignment: .top, spacing: 8) {
-                //                        Image(systemName: "exclamationmark.triangle.fill")
-                //                            .foregroundStyle(.red)
-                //                        Text(err)
-                //                            .font(.subheadline)
-                //                            .foregroundStyle(.red)
-                //                    }
-                //                    .padding(.vertical, 2)
-                //                }
-                //                .listRowBackground(Color.red.opacity(0.08))
-                //            }
-                
                 // Suppress banner when transactions are present
                 if staged.transactions.isEmpty && !vm.computeCompletenessIssues().isEmpty {
                     Section {
@@ -339,108 +369,59 @@ struct ReviewImportView: View {
                     .listRowBackground(Color.yellow.opacity(0.08))
                     
                 }
-                
-                Section() {
+                Section {
                     VStack {
-                        if routedAccountIDs.count > 1 {
-                            let routedNames = accounts.filter { routedAccountIDs.contains($0.id) }.map { $0.name }
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.footnote).italic()
-                                    .foregroundStyle(.yellow)
-                                Text("This import will be routed to multiple accounts: \(routedNames.joined(separator: ", ")).")
-                                    .font(.footnote).italic()
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .accessibilityElement(children: .combine)
-                        } else if !staged.transactions.isEmpty {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.footnote).italic()
-                                    .foregroundStyle(.yellow)
-                                Group {
-                                    if selectedAccountId == nil {
-                                        Text("Select an existing account, or keep “Create New…” to create a new account for these transactions.")
-                                    } else {
-                                        let name = accounts.first(where: { $0.id == selectedAccountId })?.name ?? "the selected account"
-                                        Text("These transactions will be saved to \(name).")
-                                    }
+                        // Build a single banner text, preferring the live preview
+                        let bannerText: String = {
+                            if let preview = routingPreviewBannerText() {
+                                return preview
+                            } else if routedAccountIDs.count > 1 {
+                                let routedAccounts = accounts.filter { routedAccountIDs.contains($0.id) }
+                                let routedNames = routedAccounts.map { disambiguatedName(for: $0, among: routedAccounts) }
+                                return "This import will be routed to multiple accounts: \(routedNames.joined(separator: ", "))."
+                            } else {
+                                if let sel = selectedAccountId, let acct = accounts.first(where: { $0.id == sel }) {
+                                    let baseName = disambiguatedName(for: acct, among: accounts)
+                                    let typeName = displayName(for: acct.type)
+                                    let nameWithType: String = {
+                                        if baseName.localizedCaseInsensitiveContains(typeName) { return baseName }
+                                        return "\(baseName) (\(typeName))"
+                                    }()
+                                    let noun = staged.transactions.isEmpty ? "This snapshot" : "These transactions"
+                                    return "\(noun) will be saved to \(nameWithType)."
+                                } else {
+                                    return "Input Routing Information below"
                                 }
-                                .font(.footnote).italic()
+                            }
+                        }()
+
+                        // The row UI used in both tappable and non‑tappable modes
+                        let row = HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.footnote)
+                                .italic()
+                                .foregroundStyle(.yellow)
+
+                            Text(bannerText)
+                                .font(.footnote)
+                                .italic()
                                 .foregroundStyle(.orange)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .multilineTextAlignment(.center)
-                            }
-                            .accessibilityElement(children: .combine)
+                            Spacer(minLength: 0)
                         }
-                        HStack {
-                            Picker("Account", selection: accountSelectionBinding) {
-                                Text("Create New…").tag(nil as UUID?)
-                                ForEach(accounts, id: \.id) { acct in
-                                    Text("\(acct.name) (\(acct.type.rawValue))").tag(Optional(acct.id))
-                                }
-                            }
-                            .onAppear(perform: onAccountSectionAppear)
-                            .disabled(routedAccountIDs.count > 1)
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .accessibilityHidden(true)
-                        }
-                        if selectedAccountId == nil {
-                            HStack {
-                                TextField("Institution (required)", text: Binding(get: { vm.userInstitutionName }, set: { vm.userInstitutionName = $0 }))
-                                    .textInputAutocapitalization(.words)
-                                    .autocorrectionDisabled()
-                                    .focused($focusedField, equals: .institution)
-                                    .submitLabel(.next)
-                                    .onSubmit { moveFocus(1) }
-                                    .onTapGesture { selectAllInFirstResponder() }
-                                Button {
-                                    focusedField = .institution
-                                    selectAllInFirstResponder()
-                                } label: {
-                                    Image(systemName: "pencil")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.secondary)
-                                .accessibilityLabel("Edit institution")
-                            }
-                            HStack {
-                                Picker("Type", selection: Binding(get: { vm.newAccountType }, set: { vm.newAccountType = $0 })) {
-                                    ForEach(Account.AccountType.allCases, id: \.self) {
-                                        Text($0.rawValue)
-                                    }
-                                }
-                                Image(systemName: "pencil")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                                    .accessibilityHidden(true)
-                            }
-                            if (staged.sourceFileName.lowercased().hasSuffix(".pdf") || hasStagedPreviewData) && UIDevice.type == "iPhone" {
-                                Button {
-                                    AMLogging.log("ReviewImportView: View Statement tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
-                                    showPDFSheet = true
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "doc.text.magnifyingglass")
-                                        Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Transactions")
-                                    }
-                                }
-                                .buttonStyle(.bordered)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
+                        .accessibilityElement(children: .combine)
+                        row
                     }
-                }  header: {
+                    .onAppear(perform: onAccountSectionAppear)
+
+                } header: {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("File: \(staged.sourceFileName)")
                             .font(.callout)
                             .padding(.top, 10)
                             .frame(maxWidth: .infinity, alignment: .center)
+
                         HStack {
                             Text("Transactions: \(staged.transactions.count)")
                             if !staged.holdings.isEmpty {
@@ -452,14 +433,45 @@ struct ReviewImportView: View {
                         }
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .padding(.bottom,10)
+                        .padding(.bottom, 10)
                         .frame(maxWidth: .infinity, alignment: .center)
                     }
                     .foregroundStyle(.primary)
-                    //                .multilineTextAlignment(.center)
-                    //                .frame(maxWidth: .infinity, alignment: .center)
                 }
-                
+                Section("Routing") {
+                    let service = ImportRoutingService()
+                    let result = service.buildPlans(staged: staged, context: modelContext)
+
+                    RoutingConfirmationView(
+                        analysis: result.analysis,
+                        plans: result.plans,
+                        overrides: $routingOverrides,
+                        selectedInstitution: Binding<String?>(
+                            get: {
+                                // Prefer any user-entered value; otherwise analysis
+                                let trimmed = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                return trimmed.isEmpty ? result.analysis.institution : vm.userInstitutionName
+                            },
+                            set: { newVal in
+                                vm.userInstitutionName = newVal ?? ""
+                            }
+                        ),
+                        globalTargetMode: $routingGlobalTargetMode,
+                        onPreviewUpdate: { effective, selectedInstitution in
+                            // Capture the preview-only effective actions and institution without persisting
+                            routingPreviewEffective = effective
+                            routingPreviewInstitution = selectedInstitution
+                        },
+                        onCancel: {
+                            // No-op in embedded mode; parent controls dismissal
+                        }
+                    )
+                }
+                .onPreferenceChange(RoutingChildEditingKey.self) { value in
+                    childIsEditing = value
+                }
+                .id("routingSectionTop")
+              
                 // Loan Terms — single place to edit Typical Payment and APR
                 if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
                     Section("Loan Terms") {
@@ -749,9 +761,6 @@ struct ReviewImportView: View {
             .listSectionSpacing(.compact)
             .environment(\.defaultMinListRowHeight, 34)
             .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
-            .onChange(of: selectedAccountId, initial: false) { _, newValue in
-                AMLogging.log("ReviewImportView: selectedAccountId changed -> \(String(describing: newValue))", component: "ReviewImportView")
-            }
         }
     }
     
@@ -787,7 +796,7 @@ struct ReviewImportView: View {
                     // NOTE: Typical payment entered here is currently not persisted; expose a VM API to pass it if needed.
                     vm.applyLiabilityLabelSafetyNetIfNeeded()
                     AMLogging.log("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
-                    
+
                     // If the only missing required field was a starting/ending balance and the user has typed it but not tapped Add, append it now
                     if let pending = pendingStartingBalance, (vm.staged?.balances.isEmpty ?? true) {
                         let asOf = (vm.staged?.transactions.map { $0.datePosted }.min()) ?? Date()
@@ -795,9 +804,54 @@ struct ReviewImportView: View {
                         vm.staged?.balances.append(sb)
                         AMLogging.log("ReviewImportView: Auto-appended pending starting balance before save — value=\(pending) date=\(asOf)", component: "ReviewImportView")
                     }
-                    
+
+                    // Prepare routing based on preview selections (no persistence yet)
+                    let service = ImportRoutingService()
+                    let result = service.buildPlans(staged: staged, context: modelContext)
+
+                    // Use preview-effective overrides; fallback to current overrides if preview hasn't emitted yet
+                    let effectiveOverrides: [String: RoutingCandidate.Action] = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
+
+                    let resolvedInstitution: String? = {
+                        let trimmed = routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        if !trimmed.isEmpty { return trimmed }
+                        return result.analysis.institution
+                    }()
+
+                    let overriddenPlans = service.applyOverrides(to: result.plans, overrides: effectiveOverrides)
+
+                    var labelToAccount: [String: Account] = [:]
+
                     do {
+                        // Resolve or create accounts as needed based on the preview at approval time
+                        labelToAccount = try service.resolveAccounts(
+                            for: overriddenPlans,
+                            institution: resolvedInstitution,
+                            currencyCode: settings.currencyCode,
+                            context: modelContext
+                        )
+
+                        // Update routedAccountIDs and auto-select if a single account
+                        let uniqueIDs = Set(labelToAccount.values.map { $0.id })
+                        routedAccountIDs = Array(uniqueIDs)
+                        if uniqueIDs.count == 1, let only = uniqueIDs.first, let any = labelToAccount.values.first {
+                            selectedAccountId = only
+                            vm.selectedAccountID = only
+                            vm.newAccountType = any.type
+                        }
+
+                        // Save the import
                         try vm.approveAndSave(context: modelContext)
+
+                        // Persist mappings after save
+                        service.persistMappingsAfterSave(
+                            institution: resolvedInstitution,
+                            labelToAccount: labelToAccount,
+                            plans: overriddenPlans,
+                            context: modelContext
+                        )
+                        AMLogging.log("ReviewImportView: Persisted import mappings for routing — labels=\(labelToAccount.keys.count)", component: "ReviewImportView")
+
                         AMLogging.log("ReviewImportView: post-save, attempting to persist Typical Payment — candidate=\(String(describing: (typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput))))", component: "ReviewImportView")
                         // Persist Typical Payment to the chosen account if available
                         if let pay = typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput), pay > 0 {
@@ -831,7 +885,7 @@ struct ReviewImportView: View {
                         } else {
                             AMLogging.log("ReviewImportView: Not persisting Typical Payment — value is nil or non-positive", component: "ReviewImportView")
                         }
-                        
+
                         // Persist APR to the chosen account if available
                         if let (aprFraction, scale) = parsePercentInput(aprInput) {
                             let targetAccount: Account? = {
@@ -862,7 +916,7 @@ struct ReviewImportView: View {
                         } else {
                             AMLogging.log("ReviewImportView: Not persisting APR — input empty or invalid", component: "ReviewImportView")
                         }
-                        
+
                         vm.userInstitutionName = ""
                     } catch {
                         vm.errorMessage = error.localizedDescription
@@ -941,48 +995,6 @@ struct ReviewImportView: View {
     //        .overlay(Divider(), alignment: .top)
     //    }
     //
-    private var accountSelectionBinding: Binding<UUID?> {
-        Binding(
-            get: { selectedAccountId },
-            set: { newValue in
-                handleAccountSelectionChange(newValue)
-            }
-        )
-    }
-    
-    private func handleAccountSelectionChange(_ newValue: UUID?) {
-        selectedAccountId = newValue
-        vm.selectedAccountID = newValue
-        AMLogging.log("ReviewImportView: Account selection changed -> \(String(describing: newValue))", component: "ReviewImportView")
-        if newValue != nil {
-            // The Institution field may disappear; clear editing state and dismiss keyboard
-            focusedField = nil
-#if canImport(UIKit)
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-#endif
-        }
-        if let id = newValue {
-            vm.newAccountName = ""
-            if let acct = accounts.first(where: { $0.id == id }) {
-                let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if current.isEmpty, let inst = acct.institutionName, !inst.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    vm.userInstitutionName = inst
-                    AMLogging.log("ReviewImportView: Prefilled institution from selected account — category=selectedAccount value=\(inst)", component: "ReviewImportView")
-                } else {
-                    let reason = current.isEmpty ? "noAccountInstitution" : "alreadySet"
-                    AMLogging.log("ReviewImportView: Did not prefill from selected account — category=none reason=\(reason)", component: "ReviewImportView")
-                }
-            }
-        } else {
-            let current = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsed = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if current.isEmpty, let inst = parsed, !inst.isEmpty {
-                vm.userInstitutionName = inst
-                AMLogging.log("ReviewImportView: Prefilled institution from parser on Create New — category=parser value=\(inst)", component: "ReviewImportView")
-            }
-        }
-    }
-    
     private var creditCardFlipBinding: Binding<Bool> {
         Binding(
             get: { vm.creditCardFlipOverride ?? false },
@@ -1120,9 +1132,7 @@ struct ReviewImportView: View {
         routingAnalysis = analysis
         lastAnalyzedSource = src
         AMLogging.log("Routing analysis computed — clusters=\(analysis.clusters.count) needsConfirmation=\(analysis.needsConfirmation)", component: "ReviewImportView")
-        if analysis.needsConfirmation {
-            showRoutingSheet = true
-        }
+        showRoutingSheet = true
     }
 
     private func resolvedPDFURL() -> URL? {
@@ -1215,7 +1225,108 @@ struct ReviewImportView: View {
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr * 100)%"
     }
+    
+    private func displayName(for type: Account.AccountType) -> String {
+        switch type {
+        case .checking: return "Checking"
+        case .savings: return "Savings"
+        case .creditCard: return "Credit Card"
+        case .loan: return "Loan"
+        case .brokerage: return "Brokerage"
+        case .cash: return "Cash"
+        case .property: return "Property"
+        case .other: return "Other"
+        }
+    }
+    
+    private func disambiguatedName(for account: Account, among all: [Account]) -> String {
+        let name = account.name
+        // Consider duplicates by case-insensitive name
+        let group = all.filter { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        if group.count <= 1 {
+            return name
+        }
 
+        // Try institution if it actually disambiguates and isn't redundant with the name
+        let instRaw = (account.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let instUsable = !instRaw.isEmpty &&
+            instRaw.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame
+
+        if instUsable {
+            // Only use institution if not all duplicates share the same institution
+            let sameInstAcrossGroup = group.allSatisfy {
+                let otherInst = ($0.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return otherInst.compare(instRaw, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            if !sameInstAcrossGroup {
+                return "\(name) (\(instRaw))"
+            }
+            // else fall through to type/ID
+        }
+
+        // Try type if types differ within the duplicate-name group
+        let sameTypeAcrossGroup = group.allSatisfy { $0.type == account.type }
+        if !sameTypeAcrossGroup {
+            let typeName = displayName(for: account.type)
+            // Avoid “Savings (Savings)” and “Checking (Checking)” when the base name already includes the type
+            if name.localizedCaseInsensitiveContains(typeName) {
+                return name
+            } else {
+                return "\(name) (\(typeName))"
+            }
+        }
+
+        // Last resort: short id suffix to ensure uniqueness in the banner
+        let short = account.id.uuidString.prefix(4)
+        return "\(name) [\(short)]"
+    }
+    // Returns true when the user has not resolved routing yet.
+    // Existing mode (globalTargetMode == 0) requires the user to explicitly pick an Institution
+    // (not "Select"/"Unknown") and for each cluster to resolve to an existing account.
+    private func isRoutingUnresolved() -> Bool {
+        // Only care in "Existing Account" mode
+        if routingGlobalTargetMode != 0 { return false }
+
+        // Effective user-chosen institution from live preview > VM.
+        // IMPORTANT: Ignore the analysis default here; we want an explicit user choice.
+        let raw = (routingPreviewInstitution ?? vm.userInstitutionName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let userInstitution = raw.isEmpty || raw.lowercased() == "unknown" ? nil : raw
+
+        // If Institution is still on "Select" (nil/"Unknown"), routing is unresolved
+        if userInstitution == nil { return true }
+
+        // Must have at least one existing account at the chosen institution
+        let hasAccountAtInst = accounts.contains {
+            (($0.institutionName ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(userInstitution!) == .orderedSame)
+        }
+        if !hasAccountAtInst { return true }
+
+        // Evaluate effective actions per cluster
+        let service = ImportRoutingService()
+        let result = service.buildPlans(staged: staged, context: modelContext)
+
+        // Prefer live-preview overrides over stored overrides
+        let effectiveOverrides = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
+
+        // In Existing mode, any cluster that would still create new indicates unresolved
+        for plan in result.plans {
+            if let override = effectiveOverrides[plan.label] {
+                if case .createNew = override { return true }
+            } else {
+                if case .createNew = plan.candidate.action { return true }
+            }
+        }
+
+        // If multiple clusters and no explicit overrides, require a pick for safety
+        if result.plans.count > 1 && effectiveOverrides.isEmpty {
+            return true
+        }
+
+        return false
+    }
     private var currencyFormatter: NumberFormatter {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
@@ -1229,7 +1340,69 @@ struct ReviewImportView: View {
         if let s = scale { nf.minimumFractionDigits = s; nf.maximumFractionDigits = s } else { nf.minimumFractionDigits = 2; nf.maximumFractionDigits = 3 }
         return nf.string(from: NSDecimalNumber(decimal: apr)) ?? "\(apr)"
     }
+    // Summarize the live routing preview into a single banner string.
+    // Uses the effective overrides directly and matches the actual enum cases:
+    //
+    // enum RoutingCandidate.Action {
+    //   case existing(accountID: UUID, name: String)
+    //   case createNew(type: Account.AccountType?)
+    // }
+    private func routingPreviewBannerText() -> String? {
+        // Prefer live preview overrides; otherwise fall back to current overrides
+        let effective = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
 
+        let hasInst = !(routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard !effective.isEmpty || hasInst else { return nil }
+
+        func humanLabel(from raw: String) -> String {
+            return raw == "__default__" ? "Default" : raw.capitalized
+        }
+
+        var targetNames: [String] = []
+
+        // Iterate label -> action so we can show a sensible name for Create New
+        for (label, action) in effective {
+            switch action {
+            case .createNew(let optType):
+                let labelTitle = humanLabel(from: label)
+                if let t = optType {
+                    let typeName = displayName(for: t)
+                    // Avoid “Savings (Savings)” and “Checking (Checking)”
+                    if labelTitle.localizedCaseInsensitiveCompare(typeName) == .orderedSame {
+                        targetNames.append(labelTitle)
+                    } else {
+                        targetNames.append("\(labelTitle) (\(typeName))")
+                    }
+                } else {
+                    // No type specified; don’t add a generic “(New Account)” suffix to avoid clutter
+                    targetNames.append(labelTitle)
+                }
+
+            case .existing(let accountID, let name):
+                if let acct = accounts.first(where: { $0.id == accountID }) {
+                    targetNames.append(disambiguatedName(for: acct, among: accounts))
+                } else {
+                    // Fallback to provided name if the account isn't in the current query result
+                    targetNames.append(name)
+                }
+            }
+        }
+
+        // Include institution if the user has provided one in the preview
+        let inst = routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let instSuffix = (inst?.isEmpty == false) ? " at \(inst!)" : ""
+
+        if targetNames.isEmpty {
+            // Only institution changed
+            return instSuffix.isEmpty ? nil : "Routing preview updated\(instSuffix)."
+        } else if targetNames.count > 1 {
+            return "This import will be routed to multiple accounts\(instSuffix): \(targetNames.joined(separator: ", "))."
+        } else if let only = targetNames.first {
+            let noun = staged.transactions.isEmpty ? "This snapshot" : "These transactions"
+            return "\(noun) will be saved to \(only)\(instSuffix)."
+        }
+        return nil
+    }
     private func balanceDateBinding(for index: Int) -> Binding<Date> {
         Binding(
             get: {
@@ -1266,9 +1439,6 @@ struct ReviewImportView: View {
     
     private var focusOrder: [FocusedField] {
         var order: [FocusedField] = []
-        if selectedAccountId == nil {
-            order.append(.institution)
-        }
         if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
             order.append(.typicalPayment)
             order.append(.apr)
@@ -1285,11 +1455,17 @@ struct ReviewImportView: View {
     }
 
     private var canGoPrevious: Bool {
+        if childIsEditing { return !focusOrder.isEmpty }
         guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
+        if i == 0 {
+            // Enable going “back” into the routing child only when the institution TextField exists (Create New mode)
+            return routingGlobalTargetMode != 0
+        }
         return i > 0
     }
 
     private var canGoNext: Bool {
+        if childIsEditing { return !focusOrder.isEmpty }
         guard let focusedField, let i = focusOrder.firstIndex(of: focusedField) else { return false }
         return i < focusOrder.count - 1
     }
@@ -1362,7 +1538,53 @@ struct ReviewImportView: View {
         keyWindow?.endEditing(true)
         #endif
     }
-    
+    private func dismissAnyKeyboard() {
+        #if canImport(UIKit)
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        keyWindow?.endEditing(true)
+        #endif
+    }
+
+    private func accessoryPrevious() {
+        if childIsEditing {
+            // Resign child focus and move to the last field in the parent's order (if any)
+            dismissAnyKeyboard()
+            childIsEditing = false
+            if let last = focusOrder.last {
+                focusedField = last
+            }
+        } else {
+            let order = focusOrder
+            guard !order.isEmpty else { return }
+
+            if let focused = focusedField, let idx = order.firstIndex(of: focused), idx == 0, routingGlobalTargetMode != 0 {
+                // When at the first parent field and the child has an institution TextField, jump back into the child
+                focusedField = nil
+                dismissAnyKeyboard()
+                withAnimation(.snappy) { scrollProxy?.scrollTo("routingSectionTop", anchor: .top) }
+                NotificationCenter.default.post(name: .focusRoutingInstitution, object: nil)
+                return
+            }
+
+            moveFocus(-1)
+        }
+    }
+
+    private func accessoryNext() {
+        if childIsEditing {
+            // Resign child focus and move to the first field in the parent's order (if any)
+            dismissAnyKeyboard()
+            childIsEditing = false
+            if let first = focusOrder.first {
+                focusedField = first
+            }
+        } else {
+            moveFocus(1)
+        }
+    }
     private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
         #if canImport(UIKit)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -1389,7 +1611,9 @@ private struct DismissOverlay: View {
         .accessibilityLabel("Close")
     }
 }
-
+private extension Notification.Name {
+    static let focusRoutingInstitution = Notification.Name("focusRoutingInstitution")
+}
 private struct ChecklistRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
