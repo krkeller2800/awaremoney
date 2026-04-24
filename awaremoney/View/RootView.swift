@@ -14,6 +14,7 @@ struct RootView: View {
     @State private var selectedTab: Int = 0
     @State private var lastNonSettingsTab: Int = 0
     @State private var showSettings: Bool = false
+    @State private var isShowingBackupAlert: Bool = false
     @EnvironmentObject private var importRouter: ImportOpenRouter
     @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
 
@@ -67,15 +68,17 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
-        .alert("Import Backup", isPresented: Binding(
-            get: { backupCoordinator.alertMessage != nil },
-            set: { if !$0 { backupCoordinator.alertMessage = nil } }
-        )) {
+        .alert("Import Backup", isPresented: $isShowingBackupAlert) {
             Button("OK", role: .cancel) {
+                // Clear the coordinator message when the alert is dismissed
                 backupCoordinator.alertMessage = nil
             }
         } message: {
             Text(backupCoordinator.alertMessage ?? "")
+        }
+        .onChange(of: backupCoordinator.alertMessage) { oldValue, newValue in
+            // Present the alert whenever a new message appears
+            isShowingBackupAlert = (newValue != nil)
         }
         .onAppear {
             #if canImport(UIKit)

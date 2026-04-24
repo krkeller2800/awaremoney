@@ -774,6 +774,8 @@ struct ReviewImportView: View {
                     typicalPaymentInput = ""
                     vm.userInstitutionName = ""
                     routedAccountIDs = []
+                    selectedAccountId = nil
+                    vm.selectedAccountID = nil
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark.circle")
@@ -788,6 +790,8 @@ struct ReviewImportView: View {
                 .frame(maxWidth: .infinity)
                 
                 Button {
+                    selectedAccountId = nil
+                    vm.selectedAccountID = nil
                     AMLogging.log("ReviewImportView: Approve tapped — typicalPaymentInput='\(typicalPaymentInput)' parsedField=\(String(describing: parseCurrencyInput(typicalPaymentInput))) typicalPaymentParsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                     // Diagnostics: log institution state at approve time
                     let guess = vm.guessInstitutionName(from: staged.sourceFileName)
@@ -811,7 +815,7 @@ struct ReviewImportView: View {
 
                     // Use preview-effective overrides; fallback to current overrides if preview hasn't emitted yet
                     let effectiveOverrides: [String: RoutingCandidate.Action] = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
-
+                    let beforeSnap = snapshotAccounts(modelContext)
                     let resolvedInstitution: String? = {
                         let trimmed = routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         if !trimmed.isEmpty { return trimmed }
@@ -838,6 +842,9 @@ struct ReviewImportView: View {
                             selectedAccountId = only
                             vm.selectedAccountID = only
                             vm.newAccountType = any.type
+                        } else {
+                            selectedAccountId = nil
+                            vm.selectedAccountID = nil
                         }
 
                         // Save the import
@@ -918,6 +925,22 @@ struct ReviewImportView: View {
                         }
 
                         vm.userInstitutionName = ""
+                        let afterSnap = snapshotAccounts(modelContext)
+                        let changes = diffAccounts(before: beforeSnap, after: afterSnap)
+                        if changes.isEmpty {
+                            AMLogging.always("RoutingDebug: No account type/institution changes across Approve & Save", component: "RoutingDebug")
+                        } else {
+                            AMLogging.always("RoutingDebug: Account changes across Approve & Save — \(changes.joined(separator: " | "))", component: "RoutingDebug")
+                        }
+                        let routedIDs = Set(labelToAccount.values.map { $0.id })
+                        // For each changed id, indicate whether it was routed this run
+                        let annotated = changes.map { change in
+                            // If you change diffAccounts to return (id, summary) tuples, you can avoid parsing
+                            // Otherwise, parse the UUID substring out of `change` or adjust `diffAccounts` to carry the id.
+                            change
+                        }
+                        self.selectedAccountId = nil
+                        AMLogging.always("RoutingDebug: Changes across save — routedIDs=\(Array(routedIDs)) details=\(annotated.joined(separator: " | "))", component: "RoutingDebug")
                     } catch {
                         vm.errorMessage = error.localizedDescription
                     }
@@ -1572,7 +1595,25 @@ struct ReviewImportView: View {
             moveFocus(-1)
         }
     }
+    private func snapshotAccounts(_ ctx: ModelContext) -> [UUID: (name: String, type: String, inst: String?)] {
+        let all = (try? ctx.fetch(FetchDescriptor<Account>())) ?? []
+        return Dictionary(uniqueKeysWithValues: all.map { ($0.id, (name: $0.name, type: $0.typeRaw, inst: $0.institutionName)) })
+    }
 
+    private func diffAccounts(before: [UUID: (name: String, type: String, inst: String?)],
+                              after: [UUID: (name: String, type: String, inst: String?)]) -> [String] {
+        var changes: [String] = []
+        let ids = Set(before.keys).union(after.keys)
+        for id in ids {
+            let b = before[id]
+            let a = after[id]
+            guard let b = b, let a = a else { continue } // created/deleted not interesting for this bug
+            if b.type != a.type || (b.inst ?? "") != (a.inst ?? "") {
+                changes.append("Account \(id): type \(b.type) → \(a.type); inst '\(b.inst ?? "nil")' → '\(a.inst ?? "nil")'")
+            }
+        }
+        return changes
+    }
     private func accessoryNext() {
         if childIsEditing {
             // Resign child focus and move to the first field in the parent's order (if any)

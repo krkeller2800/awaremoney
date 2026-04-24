@@ -54,6 +54,10 @@ struct RoutingConfirmationView: View {
 
     @State private var previewDebounce: DispatchWorkItem?
     
+    // Verification state and explicit user selections
+    @State private var verificationIssues: [String] = []
+    @State private var userSelectedTypes: [String: Account.AccountType?] = [:]
+
     // Unique institution names including the analyzed institution
     private func uniqueInstitutionsIncludingAnalysis() -> [String] {
         var set: Set<String> = []
@@ -73,6 +77,15 @@ struct RoutingConfirmationView: View {
 
     // Accounts filtered to a given institution name (case-insensitive). If name is nil, use analysis.institution.
     private func accounts(at institutionName: String?) -> [Account] {
+        // In Existing mode, show all accounts until the user explicitly chooses an institution.
+        // This avoids hiding valid matches due to an incorrect default guess and reduces false-positive verification issues.
+        let rawInstitution = (selectedInstitution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        let hasChosenInstitution = !rawInstitution.isEmpty && rawInstitution.lowercased() != "unknown"
+        if globalTargetMode == 0 && !hasChosenInstitution {
+            // Return all accounts (optionally sorted) so the user can pick the correct existing account first.
+            return accounts
+        }
+        
         let target = (institutionName ?? analysis.institution)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let lowered = target.lowercased()
         let filtered = accounts.filter { acct in
@@ -81,8 +94,10 @@ struct RoutingConfirmationView: View {
             if lowered.isEmpty { return true }
             return key.lowercased() == lowered
         }
+        // Deduplicate by id just in case the fetch produced duplicates
+        let deduped = Dictionary(grouping: filtered, by: { $0.id }).compactMap { $0.value.first }
         // Sort for stable presentation
-        return filtered.sorted { lhs, rhs in
+        return deduped.sorted { lhs, rhs in
             if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
@@ -97,8 +112,10 @@ struct RoutingConfirmationView: View {
         do {
             let fetched = try modelContext.fetch(FetchDescriptor<Account>())
             self.accounts = fetched.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            AMLogging.log("Loaded accounts=\(self.accounts.count)", component: "RoutingConfirmationView")
         } catch {
             self.accounts = []
+            AMLogging.log("Failed to load accounts; defaulting to empty list", component: "RoutingConfirmationView")
         }
     }
 
@@ -115,6 +132,52 @@ struct RoutingConfirmationView: View {
         case .other: return "Other"
         }
     }
+    // Add this helper inside RoutingConfirmationView
+    private func reviewHint(
+        for plan: ImportRoutingService.RoutedClusterPlan,
+        baseAction: RoutingCandidate.Action
+    ) -> String? {
+        let c = plan.candidate.confidence
+        // Mirror AttentionBadge thresholds
+        guard c < 0.85 else { return nil }
+
+        var reasons: [String] = []
+
+        // Mode-specific checks
+        if globalTargetMode == 0 {
+            // Existing account mode
+            if accounts(at: selectedInstitution).isEmpty {
+                reasons.append("No existing accounts at the selected institution")
+            }
+            if case .existing(_, let name) = baseAction, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                reasons.append("No account selected")
+            }
+        } else {
+            // Create new mode
+            if case .createNew(let t) = baseAction, t == nil {
+                reasons.append("Account type not specified")
+            }
+        }
+
+        // Signal strength: very few transactions/balances/holdings
+        let signalCount = plan.transactions.count + plan.balances.count + plan.holdings.count
+        if signalCount < 2 {
+            reasons.append("Limited balances")
+        }
+
+        // Catch-all cluster
+        if plan.label == "__default__" {
+            reasons.append("Default catch‑all cluster")
+        }
+
+        // Compose final, short message
+        let prefix = c >= 0.65 ? "" : "Check account type -"
+        if let primary = reasons.first {
+            return "\(prefix) \(primary)."
+        } else {
+            return "\(prefix) please verify the institution."
+        }
+    }
     // Helper to describe the enum
     private func describe(_ action: RoutingCandidate.Action) -> String {
         switch action {
@@ -122,29 +185,174 @@ struct RoutingConfirmationView: View {
         case .createNew(let t): return "createNew(type=\(String(describing: t)))"
         }
     }
+    private func shortDescribe(_ action: RoutingCandidate.Action) -> String {
+        switch action {
+        case .existing(_, let name):
+            return name.isEmpty ? "existing" : "existing(\(name))"
+        case .createNew(let t):
+            if let t = t {
+                return "createNew(\(displayName(for: t)))"
+            } else {
+                return "createNew(unspecified)"
+            }
+        }
+    }
 
     private func effectiveResolvedActions() -> [String: RoutingCandidate.Action] {
         var result: [String: RoutingCandidate.Action] = [:]
+        let instAccounts = accounts(at: selectedInstitution)
         for p in plans {
-            let base: RoutingCandidate.Action = overrides[p.label] ?? p.candidate.action
-            if globalTargetMode != 0 {
+            if globalTargetMode == 0 {
+                // Existing mode: only accept .existing that belongs to the selected institution
+                if let override = overrides[p.label], case .existing(let id, _) = override,
+                   instAccounts.contains(where: { $0.id == id }) {
+                    result[p.label] = override
+                } else if case .existing(let id, _) = p.candidate.action,
+                          instAccounts.contains(where: { $0.id == id }) {
+                    result[p.label] = p.candidate.action
+                } else {
+                    // No valid existing selection at the chosen institution; mark unresolved
+                    result[p.label] = .createNew(type: nil)
+                }
+            } else {
+                // Create New mode: force create-new for all clusters, preserving type when available.
+                let base: RoutingCandidate.Action = overrides[p.label] ?? p.candidate.action
                 switch base {
                 case .createNew(let t):
                     result[p.label] = .createNew(type: t)
                 case .existing:
                     result[p.label] = .createNew(type: nil)
                 }
-            } else {
-                result[p.label] = base
             }
         }
         return result
     }
 
-    private func notifyPreviewUpdate() {
-        onPreviewUpdate(effectiveResolvedActions(), selectedInstitution ?? analysis.institution)
+    private func effectiveAction(for plan: ImportRoutingService.RoutedClusterPlan) -> RoutingCandidate.Action {
+        if globalTargetMode == 0 {
+            // Existing mode: only accept .existing that belongs to the selected institution
+            let instAccounts = accounts(at: selectedInstitution)
+            if let override = overrides[plan.label], case .existing(let id, _) = override,
+               instAccounts.contains(where: { $0.id == id }) {
+                return override
+            }
+            if case .existing(let id, _) = plan.candidate.action,
+               instAccounts.contains(where: { $0.id == id }) {
+                return plan.candidate.action
+            }
+            // Unresolved in Existing mode
+            return .createNew(type: nil)
+        } else {
+            // Create New mode: force create-new, preserving type if base is createNew
+            let base = overrides[plan.label] ?? plan.candidate.action
+            switch base {
+            case .createNew(let t):
+                return .createNew(type: t)
+            case .existing:
+                return .createNew(type: nil)
+            }
+        }
     }
 
+    private func effectiveAction(for plan: ImportRoutingService.RoutedClusterPlan, newMode: Int) -> RoutingCandidate.Action {
+        // Compute effective action given a prospective new global mode, with simple control flow to aid type-checker.
+        if newMode == 0 {
+            // Existing mode: only accept .existing that belongs to the selected institution
+            let instAccounts = accounts(at: selectedInstitution)
+            if let override = overrides[plan.label], case .existing = override {
+                if case .existing(let id, _) = override,
+                   instAccounts.contains(where: { $0.id == id }) {
+                    return override
+                }
+            }
+            if case .existing(let id, _) = plan.candidate.action,
+               instAccounts.contains(where: { $0.id == id }) {
+                return plan.candidate.action
+            }
+            return RoutingCandidate.Action.createNew(type: nil)
+        } else {
+            // Create New mode: force create-new, preserving type if base is createNew
+            let base: RoutingCandidate.Action = overrides[plan.label] ?? plan.candidate.action
+            switch base {
+            case .createNew(let t):
+                return RoutingCandidate.Action.createNew(type: t)
+            case .existing:
+                return RoutingCandidate.Action.createNew(type: nil)
+            }
+        }
+    }
+
+    // Compute user-facing verification issues based on the current mode and effective actions.
+    private func computeVerificationIssues(effective: [String: RoutingCandidate.Action]) -> [String] {
+        var issues: [String] = []
+        if globalTargetMode == 0 {
+            // Existing mode: flag when the effective resolution is not an account at the chosen institution
+            let instAccounts = accounts(at: selectedInstitution)
+            for p in plans {
+                guard let eff = effective[p.label] else {
+                    issues.append("\(p.label): no account selected at the chosen institution")
+                    continue
+                }
+                switch eff {
+                case .existing(let id, _):
+                    if !instAccounts.contains(where: { $0.id == id }) {
+                        issues.append("\(p.label): selected account isn’t at the chosen institution")
+                    }
+                case .createNew:
+                    issues.append("\(p.label): no account selected at the chosen institution")
+                }
+            }
+        } else {
+            // Create New mode: only flag when the user explicitly selected a type and the effective resolution disagrees.
+            for p in plans {
+                let eff = effective[p.label]
+                if let intended = userSelectedTypes[p.label] {
+                    switch eff {
+                    case .createNew(let t):
+                        if intended != t {
+                            let effName = t.map { displayName(for: $0) } ?? "Unspecified"
+                            let inName = intended.map { displayName(for: $0) } ?? "Unspecified"
+                            issues.append("\(p.label): will be saved as \(effName), but you selected \(inName)")
+                        }
+                    default:
+                        issues.append("\(p.label): will be saved differently than you selected")
+                    }
+                }
+            }
+        }
+        return issues
+    }
+
+    private func notifyPreviewUpdate() {
+        let eff = effectiveResolvedActions()
+        // Update verification issues before emitting
+        verificationIssues = computeVerificationIssues(effective: eff)
+
+        let inst = selectedInstitution ?? analysis.institution
+        let summary = plans.map { p -> String in
+            let act = eff[p.label] ?? p.candidate.action
+            return "\(p.label)=\(shortDescribe(act))"
+        }.joined(separator: ", ")
+        AMLogging.log("PreviewUpdate institution=\(inst ?? "nil") actions=[\(summary)]", component: "RoutingConfirmationView")
+        onPreviewUpdate(eff, inst)
+    }
+    private func logOverrideDiff(old: [String: RoutingCandidate.Action], new: [String: RoutingCandidate.Action]) {
+        var changes: [String] = []
+        let keys = Set(old.keys).union(new.keys)
+        for k in keys.sorted() {
+            let ov = old[k]
+            let nv = new[k]
+            if ov == nv { continue }
+            let od = ov.map { describe($0) } ?? "nil"
+            let nd = nv.map { describe($0) } ?? "nil"
+            changes.append("\(k): \(od) -> \(nd)")
+        }
+        if !changes.isEmpty {
+            AMLogging.log("overrides changed (\(changes.count)): \(changes.joined(separator: ", "))", component: "RoutingConfirmationView")
+        } else {
+            AMLogging.log("overrides changed (no-op)", component: "RoutingConfirmationView")
+        }
+    }
     #if canImport(UIKit)
     private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -173,6 +381,40 @@ struct RoutingConfirmationView: View {
 
     @ViewBuilder
     private var routingSections: some View {
+        // Verification banner
+        if !verificationIssues.isEmpty {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text("Please review your selections")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    ForEach(Array(verificationIssues.prefix(4)), id: \.self) { issue in
+                        Text("• \(issue)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if verificationIssues.count > 4 {
+                        Text("…and \(verificationIssues.count - 4) more")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(8)
+                .background(Color.red.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.red.opacity(0.6), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Verification issues present")
+            }
+        }
+
         // 1) Global institution + single New/Existing picker
         Section() {
             if globalTargetMode == 0 {
@@ -244,7 +486,7 @@ struct RoutingConfirmationView: View {
                             ),
                             prompt: Text("Account")
                         )
-                        .textInputAutocapitalization(.never)
+                        .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
                         .multilineTextAlignment(.trailing)
                         .submitLabel(.done)
@@ -337,35 +579,30 @@ struct RoutingConfirmationView: View {
                     let baseAction: RoutingCandidate.Action = overrides[plan.label] ?? plan.candidate.action
 
                     // Decide which UI to show based on the global target mode
-                    let showExistingUI: Bool = (globalTargetMode == 0)
+//                    let showExistingUI: Bool = (globalTargetMode == 0)
 
-                    // Header title that reflects the forced UI mode + type/account when available
-                    let headerTitle: String = {
-                        let base = (plan.label == "__default__") ? "Default" : plan.label.capitalized
-                        if showExistingUI {
-                            // Prefer the selected account name from overrides; otherwise just say Existing
-                            if case .some(.existing(_, let name)) = overrides[plan.label], !name.isEmpty {
-                                return "\(base) — Existing (\(name))"
-                            } else if case .existing(_, let name) = plan.candidate.action, !name.isEmpty {
-                                // Fall back to candidate's existing name if present
-                                return "\(base) — Existing (\(name))"
+                    // Header title that reflects the effective action for this row
+                    let eff = effectiveAction(for: plan)
+                    let baseLabel = (plan.label == "__default__") ? "Default" : plan.label.capitalized
+
+                    let suffix: String = {
+                        switch eff {
+                        case .existing(_, let name):
+                            return name.isEmpty ? " — Existing" : " — Existing (\(name))"
+                        case .createNew(let t):
+                            if globalTargetMode == 0 {
+                                return " — Needs Selection"
                             } else {
-                                return "\(base) — Existing"
-                            }
-                        } else {
-                            // Create New mode: reflect type if available from the (override or) candidate
-                            switch baseAction {
-                            case .createNew(let optType):
-                                if let t = optType {
-                                    return "\(base) — Create New (\(displayName(for: t)))"
+                                if let t {
+                                    let typeName = displayName(for: t)
+                                    return " — Create New (\(typeName))"
                                 } else {
-                                    return "\(base) — Create New"
+                                    return " — Create New"
                                 }
-                            case .existing(_, let name):
-                                return name.isEmpty ? "\(base) — Existing" : "\(base) — Existing (\(name))"
                             }
                         }
                     }()
+                    let headerTitle: String = baseLabel + suffix
 
                     // Header + confidence
                     HStack(alignment: .firstTextBaseline) {
@@ -379,7 +616,18 @@ struct RoutingConfirmationView: View {
                             }
                         }
                         Spacer()
-                        ConfidenceBadge(confidence: plan.candidate.confidence)
+                        VStack(alignment: .trailing, spacing: 4) {
+                            AttentionBadge(confidence: plan.candidate.confidence)
+
+                            if let hint = reviewHint(for: plan, baseAction: baseAction) {
+                                Text(hint)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityLabel(hint)
+                            }
+                        }
                     }
 
                     // Institution line (derived from the global picker)
@@ -409,6 +657,7 @@ struct RoutingConfirmationView: View {
                                 plan: plan,
                                 baseAction: baseAction,
                                 newAccountNames: $newAccountNames,
+                                userSelectedTypes: $userSelectedTypes,
                                 overrides: $overrides,
                                 onChange: { notifyPreviewUpdate() }
                             )
@@ -416,24 +665,14 @@ struct RoutingConfirmationView: View {
                         }
                     }
                     // Force a fresh subtree when mode or institution changes (prevents stale branch reuse)
-                    .id("routing-\(plan.label)-mode-\(globalTargetMode)")
+                    .id("routing-\(plan.label)-mode-\(globalTargetMode)-inst-\(selectedInstitution ?? "nil")")
                 }
                 // Key the row so SwiftUI tears it down/rebuilds when the mode flips
                 .id("row-\(plan.label)-mode-\(globalTargetMode)")
                 // Attach onChange to the VStack (a View), not to the `let` above
                 .onChange(of: globalTargetMode) { _, newVal in
-                    // Recompute base and effective for logging at the moment of change
                     let currentBase: RoutingCandidate.Action = overrides[plan.label] ?? plan.candidate.action
-                    let currentEff: RoutingCandidate.Action = {
-                        if newVal != 0 {
-                            if case .createNew(let t) = currentBase {
-                                return RoutingCandidate.Action.createNew(type: t) // fully qualified
-                            }
-                            return RoutingCandidate.Action.createNew(type: nil)    // fully qualified
-                        } else {
-                            return currentBase
-                        }
-                    }()
+                    let currentEff: RoutingCandidate.Action = effectiveAction(for: plan, newMode: newVal)
                     AMLogging.log(
                         "Row mode -> \(newVal) label=\(plan.label) base=\(describe(currentBase)) eff=\(describe(currentEff))",
                         component: "RoutingConfirmationView"
@@ -451,11 +690,59 @@ struct RoutingConfirmationView: View {
                 AMLogging.log("Global mode changed -> \(newValue)", component: "RoutingConfirmationView")
                 notifyPreviewUpdate()
             }
-            .onChange(of: selectedInstitution) { _, _ in
+            .onChange(of: selectedInstitution) { _, newValue in
+                // Compute once and reuse
+                let instAccounts = accounts(at: newValue)
+                let count = instAccounts.count
+
+                // Prune overrides that no longer belong to the chosen institution
+                for (label, action) in overrides {
+                    if case .existing(let id, _) = action,
+                       !instAccounts.contains(where: { $0.id == id }) {
+                        overrides[label] = nil
+                    }
+                }
+
+                AMLogging.log("Institution changed -> \(newValue ?? "nil"), accountsAtInst=\(count)", component: "RoutingConfirmationView")
+
+                // Preselect per cluster by intended account type (Existing mode only)
+                if globalTargetMode == 0 {
+                    for p in plans {
+                        // Skip if already explicitly selected
+                        if case .existing = overrides[p.label] { continue }
+
+                        // Infer intended type from candidate or label
+                        let intendedType: Account.AccountType? = {
+                            if case .createNew(let t) = p.candidate.action, let t { return t }
+                            switch p.label.lowercased() {
+                            case "checking": return .checking
+                            case "savings": return .savings
+                            case "credit card", "creditcard", "card": return .creditCard
+                            case "loan": return .loan
+                            case "brokerage": return .brokerage
+                            case "cash": return .cash
+                            case "property": return .property
+                            default: return nil
+                            }
+                        }()
+
+                        if let t = intendedType {
+                            let matches = instAccounts.filter { $0.type == t } // adjust property name if needed
+                            if matches.count == 1, let only = matches.first {
+                                overrides[p.label] = .existing(accountID: only.id, name: only.name)
+                            }
+                        }
+                    }
+                }
+
                 previewDebounce?.cancel()
                 let work = DispatchWorkItem { notifyPreviewUpdate() }
                 previewDebounce = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+            }
+            .onChange(of: overrides) { old, new in
+                logOverrideDiff(old: old, new: new)
+                notifyPreviewUpdate()
             }
             .onChange(of: institutionIsFirstResponder) { _, isFocused in
                 AMLogging.log("RCV editing changed -> \(isFocused), isVisible=\(isVisible)", component: "RoutingConfirmationView")
@@ -477,6 +764,10 @@ struct RoutingConfirmationView: View {
                     selectedInstitution = nil
                 }
                 notifyPreviewUpdate()
+                
+                let currentInst = selectedInstitution ?? analysis.institution
+                let count = accounts(at: currentInst).count
+                AMLogging.log("onAppear institution=\(currentInst ?? "nil"), accountsAtInst=\(count)", component: "RoutingConfirmationView")
             }
             .onDisappear {
                 isVisible = false
@@ -503,31 +794,149 @@ private struct ExistingAccountSelectionRow: View {
     @Binding var overrides: [String: RoutingCandidate.Action]
     let onChange: () -> Void
 
+    // Replace the entire function with this version
+    private func currentSelectedID() -> UUID? {
+        let intended = intendedType()
+
+        // 1) User override wins, but only if valid for the current institution and intended type
+        if let override = overrides[plan.label], case .existing(let id, _) = override {
+            if let acct = accountsAtInst.first(where: { $0.id == id }) {
+                if let intended, acct.type != intended { // adjust property if not `acct.type`
+                    return nil // override mismatches the cluster type
+                }
+                return id
+            } else {
+                return nil // override not visible at current institution
+            }
+        }
+
+        // 2) Candidate selection: only accept if it’s visible and matches intended type (if any)
+        if case .existing(let id, _) = baseAction {
+            if let acct = accountsAtInst.first(where: { $0.id == id }) {
+                if let intended, acct.type != intended { // adjust property if not `acct.type`
+                    return nil // candidate mismatches the cluster type
+                }
+                return id
+            }
+        }
+
+        // 3) No valid selection
+        return nil
+    }
+
+    private func applySelection(_ newID: UUID?) {
+        if let id = newID, let acct = accountsAtInst.first(where: { $0.id == id }) {
+            overrides[plan.label] = .existing(accountID: id, name: acct.name)
+        } else {
+            overrides[plan.label] = nil
+        }
+    }
+    // Disambiguation helpers moved out of the ViewBuilder
+    private var nameCounts: [String: Int] {
+        Dictionary(
+            grouping: accountsAtInst,
+            by: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+        .mapValues { $0.count }
+    }
+
+    private func typeDisplay(_ type: Account.AccountType?) -> String {
+        guard let t = type else { return "Unspecified" }
+        switch t {
+        case .checking: return "Checking"
+        case .savings: return "Savings"
+        case .creditCard: return "Credit Card"
+        case .loan: return "Loan"
+        case .brokerage: return "Brokerage"
+        case .cash: return "Cash"
+        case .property: return "Property"
+        case .other: return "Other"
+        }
+    }
+
+    private func titleForAccount(_ acct: Account) -> String {
+        let baseName = acct.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needsType = (nameCounts[baseName] ?? 0) > 1
+        return needsType ? "\(baseName) — \(typeDisplay(acct.type))" : baseName // adjust acct.type if needed
+    }
+    private func intendedType() -> Account.AccountType? {
+        if case .createNew(let t) = baseAction, let t { return t }
+        switch plan.label.lowercased() {
+        case "checking": return .checking
+        case "savings": return .savings
+        case "credit card", "creditcard", "card": return .creditCard
+        case "loan": return .loan
+        case "brokerage": return .brokerage
+        case "cash": return .cash
+        case "property": return .property
+        default: return nil
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-//            Picker("Existing Account", selection: Binding<UUID?>(
-//                get: {
-//                    if case .existing(let id, _) = baseAction { return id }
-//                    return nil
-//                },
-//                set: { newID in
-//                    if let id = newID, let acct = accountsAtInst.first(where: { $0.id == id }) {
-//                        overrides[plan.label] = .existing(accountID: id, name: acct.name)
-//                    } else {
-//                        overrides[plan.label] = nil
-//                    }
-//                }
-//            )) {
-//                ForEach(accountsAtInst, id: \.id) { acct in
-//                    Text(acct.name).tag(Optional(acct.id))
-//                }
-//            }
-//            .pickerStyle(.menu)
+            Picker("Existing Account", selection: Binding<UUID?>(
+                get: { currentSelectedID() },
+                set: { newID in
+                    applySelection(newID)
+                    onChange()
+                }
+            )) {
+                // Provide a placeholder for the nil selection to avoid 'invalid tag' warnings
+                if accountsAtInst.isEmpty {
+                      Text("No accounts").tag(nil as UUID?)
+                  } else {
+                      Text("Select an account").tag(nil as UUID?)
+                  }
+
+                ForEach(accountsAtInst, id: \.id) { acct in
+                    Text(titleForAccount(acct)).tag(Optional(acct.id))
+                }
+            }
+            .pickerStyle(.menu)
+
+            if !accountsAtInst.isEmpty && currentSelectedID() == nil {
+                Text("Select an account")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
             if accountsAtInst.isEmpty {
                 Text("No existing accounts at this institution.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear {
+            guard currentSelectedID() == nil else { return }
+
+            // Try to infer desired account type from baseAction or cluster label
+            let intendedType: Account.AccountType? = {
+                if case .createNew(let t) = baseAction, let t { return t }
+                switch plan.label.lowercased() {
+                case "checking": return .checking
+                case "savings": return .savings
+                case "credit card", "creditcard", "card": return .creditCard
+                case "loan": return .loan
+                case "brokerage": return .brokerage
+                case "cash": return .cash
+                case "property": return .property
+                default: return nil
+                }
+            }()
+
+            if let t = intendedType {
+                let matches = accountsAtInst.filter { $0.type == t } // adjust property name if needed
+                if matches.count == 1, let only = matches.first {
+                    applySelection(only.id)
+                    onChange()
+                    return
+                }
+            }
+
+            // Fallback: if exactly one account is visible, select it
+            if accountsAtInst.count == 1, let only = accountsAtInst.first {
+                applySelection(only.id)
+                onChange()
             }
         }
     }
@@ -537,6 +946,7 @@ private struct CreateNewSelectionRow: View {
     let plan: ImportRoutingService.RoutedClusterPlan
     let baseAction: RoutingCandidate.Action
     @Binding var newAccountNames: [String: String]
+    @Binding var userSelectedTypes: [String: Account.AccountType?]
     @Binding var overrides: [String: RoutingCandidate.Action]
     let onChange: () -> Void
 
@@ -544,24 +954,33 @@ private struct CreateNewSelectionRow: View {
         if case .createNew(let t) = baseAction { return t }
         return nil
     }
-
+    private func applyTypeSelection(_ newType: Account.AccountType?) {
+        userSelectedTypes[plan.label] = newType
+        overrides[plan.label] = .createNew(type: newType)
+        let desc = newType.map { displayName(for: $0) } ?? "Unspecified"
+        AMLogging.log("Override[\(plan.label)] -> createNew(\(desc))", component: "RoutingConfirmationView")
+        onChange()
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             let allTypes: [Account.AccountType] = [.checking, .savings, .creditCard, .loan, .brokerage, .cash, .property, .other]
 
             Picker("New Account Type", selection: Binding<Account.AccountType?>(
                 get: { seedType },
-                set: { newType in
-                    overrides[plan.label] = .createNew(type: newType)
-                    onChange()
-                }
+                set: { applyTypeSelection($0) }
             )) {
                 Text("Unspecified").tag(nil as Account.AccountType?)
                 ForEach(allTypes, id: \.self) { t in
-                    Text(displayName(for: t)).tag(Optional(t))
+                    Text(displayName(for: t)).tag(Optional<Account.AccountType>(t))
                 }
             }
             .pickerStyle(.menu)
+
+            if seedType == nil && userSelectedTypes[plan.label] == nil {
+                Text("Choose a type")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
 //            TextField("Account Name", text: Binding(
 //                get: { newAccountNames[plan.label] ?? "" },
@@ -587,27 +1006,43 @@ private struct CreateNewSelectionRow: View {
     }
 }
 
-private struct ConfidenceBadge: View {
+private struct AttentionBadge: View {
     let confidence: Double
+
     var body: some View {
-        let pct = Int((max(0, min(1, confidence)) * 100).rounded())
-        Text("\(pct)%")
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(badgeColor)
-            .foregroundStyle(.white)
-            .clipShape(Capsule())
-            .accessibilityLabel("Confidence \(pct) percent")
-    }
-    private var badgeColor: Color {
-        switch confidence {
-        case let c where c >= 0.85: return .green
-        case let c where c >= 0.65: return .orange
-        default: return .red
+        switch status {
+        case .ok:
+            EmptyView() // Don’t show anything when the system is confident
+        case .needsReview:
+            Label("Needs Review", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(.yellow)
+                .background(Color.yellow.opacity(0.15))
+                .clipShape(Capsule())
+                .accessibilityLabel("Needs review")
+        case .uncertain:
+            Label("Uncertain", systemImage: "xmark.octagon.fill")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(.red)
+                .background(Color.red.opacity(0.15))
+                .clipShape(Capsule())
+                .accessibilityLabel("Uncertain")
         }
     }
-    
+
+    private enum Status { case ok, needsReview, uncertain }
+
+    private var status: Status {
+        switch confidence {
+        case let c where c >= 0.85: return .ok
+        case let c where c >= 0.65: return .needsReview
+        default: return .uncertain
+        }
+    }
 }
 
 struct RoutingChildEditingKey: PreferenceKey {
@@ -620,3 +1055,4 @@ struct RoutingChildEditingKey: PreferenceKey {
 #Preview {
     Text("Preview requires model data")
 }
+

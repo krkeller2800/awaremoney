@@ -125,100 +125,182 @@ final class ImportRoutingService {
     ///   - institution: Optional normalized institution name to assign to newly created accounts.
     ///   - currencyCode: Currency code for new accounts.
     /// - Returns: A dictionary mapping normalized label -> Account.
-    func resolveAccounts(for plans: [RoutedClusterPlan], institution: String?, currencyCode: String, context: ModelContext) throws -> [String: Account] {
+    func resolveAccounts(
+        for plans: [RoutedClusterPlan],
+        institution: String?,
+        currencyCode: String,
+        context: ModelContext,
+        applyInstitutionToExisting: Bool = false
+    ) throws -> [String: Account] {
         var result: [String: Account] = [:]
-        let allAccounts: [Account] = (try? context.fetch(FetchDescriptor<Account>())) ?? []
 
-        func displayName(for type: Account.AccountType?) -> String {
-            guard let t = type else { return "Account" }
-            switch t {
-            case .checking: return "Checking"
-            case .savings: return "Savings"
-            case .creditCard: return "Credit Card"
-            case .loan: return "Loan"
-            case .brokerage: return "Brokerage"
-            case .cash: return "Cash"
-            default: return t.rawValue.capitalized
-            }
+        let trimmed = institution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedInstitution: String? = trimmed.isEmpty ? nil : trimmed
+        // De-dupe newly created accounts within this resolve run.
+        // Key by (type, institution) and only reuse when plans look complementary (one has zero tx or zero balances).
+        struct CreateKey: Hashable {
+            let type: Account.AccountType
+            let institution: String? // already trimmed/normalized above
         }
+        var createdByKey: [CreateKey: (account: Account, tx: Int, bal: Int)] = [:]
 
+        // Precompute counts per label so we can compare plans when deciding to reuse.
+        let planCounts: [String: (tx: Int, bal: Int)] = Dictionary(
+            uniqueKeysWithValues: plans.map { ($0.label, ($0.transactions.count, $0.balances.count)) }
+        )
         for plan in plans {
-            // Prefer existing account when candidate points to one
             switch plan.candidate.action {
-            case .existing(let accountID, _):
-                if let acct = allAccounts.first(where: { $0.id == accountID }) {
-                    result[plan.label] = acct
-                    continue
-                }
-
-                // If the referenced account isn't found, try to prefer an existing match before creating
-                let desiredType: Account.AccountType? = inferType(from: plan.label)
-                if let preferred = preferExistingAccount(allAccounts: allAccounts, institution: institution, sourceLabel: plan.label, desiredType: desiredType) {
-                    result[plan.label] = preferred
-                    continue
-                }
-
-                // No suitable existing account found; create a new one
-                let inferred = desiredType ?? .other
-                let inst = AccountImportMapping.normalizedInstitution(institution)
-
-                // Build a reasonable default name and ensure it doesn't collide
-                let baseName: String = {
-                    if let i = inst, !i.isEmpty { return "\(i) \(displayName(for: inferred))" }
-                    return "Imported \(displayName(for: inferred))"
-                }()
-                var name = baseName
-                var suffix = 2
-                while allAccounts.contains(where: { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
-                    name = "\(baseName) \(suffix)"
-                    suffix += 1
-                }
-
-                let acct = Account(name: name, type: inferred, institutionName: inst, currencyCode: currencyCode)
-                context.insert(acct)
-                result[plan.label] = acct
-
             case .createNew(let optType):
-                // Determine a type for the new account and try to prefer an existing match first
-                let desiredType = optType ?? inferType(from: plan.label)
-                if let preferred = preferExistingAccount(allAccounts: allAccounts, institution: institution, sourceLabel: plan.label, desiredType: desiredType) {
-                    result[plan.label] = preferred
-                    continue
-                }
-
-                // No suitable existing account found; create a new one
-                let inferred = desiredType ?? .other
-                let inst = AccountImportMapping.normalizedInstitution(institution)
-
-                // Build a reasonable default name and ensure it doesn't collide
-                let baseName: String = {
-                    if let i = inst, !i.isEmpty { return "\(i) \(displayName(for: inferred))" }
-                    return "Imported \(displayName(for: inferred))"
+                let type = optType ?? .other
+                let baseLabel = (plan.label == "__default__") ? "Account" : plan.label.capitalized
+                let typeName: String = {
+                    switch type {
+                    case .checking: return "Checking"
+                    case .savings: return "Savings"
+                    case .creditCard: return "Credit Card"
+                    case .loan: return "Loan"
+                    case .brokerage: return "Brokerage"
+                    case .cash: return "Cash"
+                    case .property: return "Property"
+                    case .other: return "Other"
+                    }
                 }()
-                var name = baseName
-                var suffix = 2
-                while allAccounts.contains(where: { $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
-                    name = "\(baseName) \(suffix)"
-                    suffix += 1
+
+                // Prefer a human title for this cluster: label title if present, else the type
+                let labelTitle = (plan.label == "__default__") ? typeName : baseLabel
+
+                // Reuse previously created account for the same (type, institution)
+                // when plans look complementary (one has zero tx or zero balances).
+                let key = CreateKey(type: type, institution: normalizedInstitution)
+                let currentCounts = planCounts[plan.label] ?? (tx: plan.transactions.count, bal: plan.balances.count)
+                if let existing = createdByKey[key] {
+                    let prevTx = existing.tx, prevBal = existing.bal
+                    let complementary: Bool = (prevTx == 0 || prevBal == 0) && (currentCounts.tx == 0 || currentCounts.bal == 0)
+                    if complementary {
+                        result[plan.label] = existing.account
+                        AMLogging.log("ImportRoutingService: reusing created account '\(existing.account.name)' for label '\(plan.label)' (complementary tx/bal)", component: "ImportRoutingService")
+                        break
+                    }
                 }
 
-                let acct = Account(name: name, type: inferred, institutionName: inst, currencyCode: currencyCode)
+                // Build a friendly final name: just the institution when available; otherwise fall back to label/title
+                let finalName: String = {
+                    if let inst = normalizedInstitution, !inst.isEmpty {
+                        return inst
+                    } else {
+                        return labelTitle
+                    }
+                }()
+
+                let acct = Account(
+                    name: finalName,
+                    type: type,
+                    institutionName: normalizedInstitution,
+                    currencyCode: currencyCode
+                )
                 context.insert(acct)
+                AMLogging.always("RoutingDebug: resolveAccounts.createNew — label=\(plan.label) id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+                result[plan.label] = acct
+                createdByKey[key] = (acct, currentCounts.tx, currentCounts.bal)
+                AMLogging.log("ImportRoutingService: created account '\(acct.name)' inst='\(normalizedInstitution ?? "nil")' type=\(type)", component: "ImportRoutingService")
+            case .existing(let accountID, _):
+                // Fetch existing account by id
+                let predicate = #Predicate<Account> { $0.id == accountID }
+                let fd = FetchDescriptor<Account>(predicate: predicate)
+                let fetched = try context.fetch(fd)
+                guard let acct = fetched.first else {
+                    AMLogging.error("ImportRoutingService: resolveAccounts failed — existing account not found id=\(accountID)", component: "ImportRoutingService")
+                    struct LocalError: Error {}
+                    throw LocalError()
+                }
+                AMLogging.always("RoutingDebug: resolveAccounts.existing BEFORE — id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+
+                if applyInstitutionToExisting, let inst = normalizedInstitution {
+                    let before = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if before.isEmpty {
+//                        acct.institutionName = inst
+                        AMLogging.log("ImportRoutingService: filled empty institution for existing id=\(acct.id) -> '\(inst)'", component: "ImportRoutingService")
+                    } else {
+                        AMLogging.log("ImportRoutingService: leaving existing institution for id=\(acct.id) '\(before)'", component: "ImportRoutingService")
+                    }
+                } else {
+                    AMLogging.log("ImportRoutingService: using existing account id=\(acct.id) name='\(acct.name)' (no institution overwrite)", component: "ImportRoutingService")
+                }
+                AMLogging.always("RoutingDebug: resolveAccounts.existing AFTER — id=\(acct.id) type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+
                 result[plan.label] = acct
             }
         }
-
-        try? context.save()
         return result
     }
 
     /// After saving a batch with routed items, upsert import mappings for each non-default label.
     /// Use the candidate's confidence as the mapping confidence.
-    func persistMappingsAfterSave(institution: String?, labelToAccount: [String: Account], plans: [RoutedClusterPlan], context: ModelContext) {
-        let defaultKey = "__default__"
-        for plan in plans {
-            guard plan.label != defaultKey, let acct = labelToAccount[plan.label] else { continue }
-            upsertMapping(institution: institution, label: plan.label, accountID: acct.id, confidence: plan.candidate.confidence, context: context)
+    func persistMappingsAfterSave(
+        institution: String?,
+        labelToAccount: [String: Account],
+        plans: [RoutedClusterPlan],
+        context: ModelContext
+    ) {
+        // Normalize institution using the same helper used elsewhere
+        guard let inst = AccountImportMapping.normalizedInstitution(institution), !inst.isEmpty else {
+            AMLogging.log("ImportRoutingService: persistMappingsAfterSave — no institution; skipping", component: "ImportRoutingService")
+            return
+        }
+        AMLogging.always("RoutingDebug: persistMappingsAfterSave start — inst='\(inst)' labels=\(labelToAccount.keys.count)", component: "RoutingDebug")
+
+        // Build a lookup of normalized label -> candidate confidence from the provided plans
+        // so we can persist a meaningful confidence instead of a hardcoded 1.0
+        let confidenceByLabel: [String: Double] = {
+            var dict: [String: Double] = [:]
+            for p in plans {
+                if let lab = AccountImportMapping.normalizedLabel(p.label) {
+                    dict[lab] = clamp(p.candidate.confidence)
+                }
+            }
+            return dict
+        }()
+
+        for (rawLabel, account) in labelToAccount {
+            // Normalize the label; skip empty and synthetic default labels
+            guard let normalizedLabel = AccountImportMapping.normalizedLabel(rawLabel),
+                  !normalizedLabel.isEmpty,
+                  normalizedLabel != "__default__" else { continue }
+
+            // Use the plan-derived confidence when available; otherwise a reasonable default
+            let conf = confidenceByLabel[normalizedLabel] ?? clamp(0.9)
+
+            do {
+                let existing = try context.fetch(
+                    FetchDescriptor<AccountImportMapping>(
+                        predicate: #Predicate { $0.institutionName == inst && $0.subaccountLabel == normalizedLabel }
+                    )
+                ).first
+                let existed = (existing != nil)
+                AMLogging.always("RoutingDebug: upsert mapping — inst='\(inst)' label='\(normalizedLabel)' accountID=\(account.id) conf=\(conf) existed=\(existed)", component: "RoutingDebug")
+
+                if let map = existing {
+                    map.accountID = account.id
+                    map.confidence = conf
+                } else {
+                    let map = AccountImportMapping(
+                        institutionName: inst,
+                        subaccountLabel: normalizedLabel,
+                        accountID: account.id,
+                        confidence: conf
+                    )
+                    context.insert(map)
+                }
+            } catch {
+                AMLogging.error("ImportRoutingService: persistMappingsAfterSave fetch failed — \(error.localizedDescription)", component: "ImportRoutingService")
+            }
+        }
+
+        do {
+            try context.save()
+            AMLogging.always("RoutingDebug: persistMappingsAfterSave complete", component: "RoutingDebug")
+        } catch {
+            AMLogging.error("ImportRoutingService: persistMappingsAfterSave save failed — \(error.localizedDescription)", component: "ImportRoutingService")
         }
     }
 
