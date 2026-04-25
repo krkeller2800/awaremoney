@@ -7,7 +7,11 @@ import SwiftData
 struct DebtPlannerView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
-    @State private var liabilities: [Account] = []
+    @Query private var liabilities: [Account]
+    
+    init() {
+        _liabilities = Query(filter: #Predicate<Account> { $0.typeRaw == "loan" || $0.typeRaw == "creditCard" })
+    }
 
     var body: some View {
         List {
@@ -17,7 +21,7 @@ struct DebtPlannerView: View {
                 Section("Choose an account to plan") {
                     ForEach(liabilities, id: \.id) { acct in
                         NavigationLink {
-                            DebtPayoffView(viewModel: DebtPayoffViewModel(account: acct, context: modelContext))
+                            DebtPayoffContainer(accountID: acct.id)
                         } label: {
                             HStack(alignment: .firstTextBaseline) {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -37,19 +41,6 @@ struct DebtPlannerView: View {
             }
         }
         .navigationTitle("Debt Planner")
-        .task { await load() }
-        .refreshable { await load() }
-    }
-
-    @Sendable private func load() async {
-        do {
-            let all = try modelContext.fetch(FetchDescriptor<Account>())
-            await MainActor.run {
-                self.liabilities = all.filter { $0.type == .loan || $0.type == .creditCard }
-            }
-        } catch {
-            await MainActor.run { self.liabilities = [] }
-        }
     }
 
     private func currentBalance(for account: Account) -> String {

@@ -8,7 +8,7 @@ struct AccountTransactionsListView: View {
     let accountID: UUID
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
-    @State private var account: Account? = nil
+    @Query private var accounts: [Account]
 
     @State private var rows: [TxRow] = []
     struct TxRow: Identifiable { let id: UUID; let payee: String; let date: Date; let amount: Decimal }
@@ -16,12 +16,12 @@ struct AccountTransactionsListView: View {
     init(accountID: UUID) {
         self.accountID = accountID
         AMLogging.log("AccountTransactionsListView init accountID=\(accountID)", component: "AccountTransactionsListView")
+        _accounts = Query(filter: #Predicate<Account> { $0.id == accountID })
     }
 
     // Convenience for existing call sites that pass an Account
     init(account: Account) {
         self.init(accountID: account.id)
-        _account = State(initialValue: account)
     }
 
     private var isIPad: Bool {
@@ -31,6 +31,8 @@ struct AccountTransactionsListView: View {
         return false
         #endif
     }
+    
+    private var account: Account? { accounts.first }
 
     var body: some View {
         List {
@@ -123,7 +125,6 @@ struct AccountTransactionsListView: View {
         }
         .task(id: accountID) {
             AMLogging.log("AccountTransactionsListView task loadRows accountID=\(accountID)", component: "AccountTransactionsListView")
-            await loadAccount()
             await loadRows()
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
@@ -137,27 +138,6 @@ struct AccountTransactionsListView: View {
         nf.numberStyle = .currency
         nf.currencyCode = "USD"
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
-    }
-    
-    private func loadAccount() async {
-        let t0 = Date()
-        let container = modelContext.container
-        let bg = ModelContext(container)
-        bg.autosaveEnabled = false
-
-        do {
-            let id = accountID
-            let predicate = #Predicate<Account> { acct in acct.id == id }
-            let descriptor = FetchDescriptor<Account>(predicate: predicate)
-            let fetched = try bg.fetch(descriptor)
-            let ms = Int(Date().timeIntervalSince(t0) * 1000)
-            AMLogging.log("loadAccount fetched=\(fetched.count) in \(ms)ms for accountID=\(id)", component: "AccountTransactionsListView")
-            await MainActor.run { self.account = fetched.first }
-        } catch {
-            let ms = Int(Date().timeIntervalSince(t0) * 1000)
-            AMLogging.error("loadAccount failed after \(ms)ms for accountID=\(accountID): \(error.localizedDescription)", component: "AccountTransactionsListView")
-            await MainActor.run { self.account = nil }
-        }
     }
 
     private func loadRows() async {
