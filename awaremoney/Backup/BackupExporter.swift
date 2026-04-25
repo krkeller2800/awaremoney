@@ -4,6 +4,7 @@
 import Foundation
 import SwiftData
 import UniformTypeIdentifiers
+import CryptoKit
 
 // MARK: - Backup DTOs
 
@@ -132,6 +133,25 @@ struct EmbeddedStatementDTO: Codable {
 
 enum BackupExporter {
 
+    /// Deterministically derive a UUID from an arbitrary string (first 16 bytes of SHA256)
+    private static func deterministicUUID(from string: String) -> UUID {
+        let data = Data(string.utf8)
+        let digest = SHA256.hash(data: data)
+        let bytes = Array(digest.prefix(16))
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    /// Surrogate ID based on SwiftData persistentModelID so we can avoid touching model.id
+    private static func surrogateID<T: PersistentModel>(for model: T) -> UUID {
+        let s = String(describing: model.persistentModelID)
+        return deterministicUUID(from: s)
+    }
+
     /// Safely reflect a property by name without relying on KVC. Returns nil if the key isn't present.
     private static func reflectValue<T>(_ object: Any, key: String, as type: T.Type) -> T? {
         var mirror: Mirror? = Mirror(reflecting: object)
@@ -160,10 +180,11 @@ enum BackupExporter {
         }
 
         for b in batches {
+            let surrogate = surrogateID(for: b)
             let fileName = b.sourceFileName
             let isPDF = !fileName.isEmpty && fileName.lowercased().hasSuffix(".pdf")
             guard isPDF else {
-                AMLogging.log("BackupExporter: skip batch id=\(b.id) — non-PDF sourceFileName='\(fileName)'", component: "BackupExporter")
+                AMLogging.log("BackupExporter: skip batch sid=\(surrogate) — non-PDF sourceFileName='\(fileName)'", component: "BackupExporter")
                 continue
             }
 
@@ -172,7 +193,7 @@ enum BackupExporter {
             // 1) Preferred: explicit per-batch local path
             if let path = b.sourceFileLocalPath, !path.isEmpty, fm.fileExists(atPath: path) {
                 sourceURL = URL(fileURLWithPath: path)
-                AMLogging.log("BackupExporter: using sourceFileLocalPath for batch id=\(b.id) path=\(path)", component: "BackupExporter")
+                AMLogging.log("BackupExporter: using sourceFileLocalPath for batch sid=\(surrogate) path=\(path)", component: "BackupExporter")
             }
 
             // 2) Legacy fallback: Caches/<sourceFileName>
@@ -180,7 +201,7 @@ enum BackupExporter {
                 let legacy = caches.appendingPathComponent(fileName)
                 if fm.fileExists(atPath: legacy.path) {
                     sourceURL = legacy
-                    AMLogging.log("BackupExporter: using legacy Caches path for batch id=\(b.id) path=\(legacy.path)", component: "BackupExporter")
+                    AMLogging.log("BackupExporter: using legacy Caches path for batch sid=\(surrogate) path=\(legacy.path)", component: "BackupExporter")
                 }
             }
 
@@ -189,28 +210,28 @@ enum BackupExporter {
                 let expected = dir.appendingPathComponent(fileName)
                 if fm.fileExists(atPath: expected.path) {
                     sourceURL = expected
-                    AMLogging.log("BackupExporter: using per-batch preview path for batch id=\(b.id) path=\(expected.path)", component: "BackupExporter")
+                    AMLogging.log("BackupExporter: using per-batch preview path for batch sid=\(surrogate) path=\(expected.path)", component: "BackupExporter")
                 } else if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil),
                           let anyPDF = items.first(where: { $0.lastPathComponent.lowercased().hasSuffix(".pdf") }) {
                     // Heuristic: if the exact name isn't present, pick any PDF in the per-batch folder
                     sourceURL = anyPDF
-                    AMLogging.log("BackupExporter: using first discovered PDF in per-batch dir for batch id=\(b.id) path=\(anyPDF.path)", component: "BackupExporter")
+                    AMLogging.log("BackupExporter: using first discovered PDF in per-batch dir for batch sid=\(surrogate) path=\(anyPDF.path)", component: "BackupExporter")
                 } else {
-                    AMLogging.log("BackupExporter: no PDF found in per-batch dir for batch id=\(b.id) dir=\(dir.path)", component: "BackupExporter")
+                    AMLogging.log("BackupExporter: no PDF found in per-batch dir for batch sid=\(surrogate) dir=\(dir.path)", component: "BackupExporter")
                 }
             }
 
             guard let src = sourceURL else {
-                AMLogging.log("BackupExporter: skipped batch id=\(b.id) — cached PDF not found for '\(fileName)'", component: "BackupExporter")
+                AMLogging.log("BackupExporter: skipped batch sid=\(surrogate) — cached PDF not found for '\(fileName)'", component: "BackupExporter")
                 continue
             }
 
             guard let data = try? Data(contentsOf: src) else {
-                AMLogging.log("BackupExporter: failed to read PDF data for batch id=\(b.id) at \(src.path)", component: "BackupExporter")
+                AMLogging.log("BackupExporter: failed to read PDF data for batch sid=\(surrogate) at \(src.path)", component: "BackupExporter")
                 continue
             }
 
-            results.append(EmbeddedStatementDTO(batchID: b.id, fileName: src.lastPathComponent, data: data))
+            results.append(EmbeddedStatementDTO(batchID: surrogate, fileName: src.lastPathComponent, data: data))
         }
 
         AMLogging.log("BackupExporter: collectStatementPDFs — embedded count=\(results.count)", component: "BackupExporter")
@@ -232,7 +253,7 @@ enum BackupExporter {
         // Map to DTOs
         let accountDTOs: [AccountDTO] = accounts.map { acct in
             AccountDTO(
-                id: acct.id,
+                id: surrogateID(for: acct),
                 name: acct.name,
                 typeRaw: acct.typeRaw,
                 institutionName: acct.institutionName,
@@ -246,9 +267,9 @@ enum BackupExporter {
 
         let txDTOs: [TransactionDTO] = transactions.map { tx in
             TransactionDTO(
-                id: tx.id,
-                accountID: tx.account?.id,
-                importBatchID: tx.importBatch?.id,
+                id: surrogateID(for: tx),
+                accountID: tx.account.map { surrogateID(for: $0) },
+                importBatchID: tx.importBatch.map { surrogateID(for: $0) },
                 datePosted: tx.datePosted,
                 amount: tx.amount,
                 payee: tx.payee,
@@ -268,9 +289,9 @@ enum BackupExporter {
 
         let balDTOs: [BalanceSnapshotDTO] = balances.map { bs in
             BalanceSnapshotDTO(
-                id: bs.id,
-                accountID: bs.account?.id,
-                importBatchID: bs.importBatch?.id,
+                id: surrogateID(for: bs),
+                accountID: bs.account.map { surrogateID(for: $0) },
+                importBatchID: bs.importBatch.map { surrogateID(for: $0) },
                 asOfDate: bs.asOfDate,
                 balance: bs.balance,
                 interestRateAPR: bs.interestRateAPR,
@@ -282,9 +303,9 @@ enum BackupExporter {
 
         let holdDTOs: [HoldingSnapshotDTO] = holdings.map { hs in
             HoldingSnapshotDTO(
-                id: hs.id,
-                accountID: hs.account?.id,
-                importBatchID: hs.importBatch?.id,
+                id: surrogateID(for: hs),
+                accountID: hs.account.map { surrogateID(for: $0) },
+                importBatchID: hs.importBatch.map { surrogateID(for: $0) },
                 symbol: hs.security?.symbol,
                 marketValue: hs.marketValue
             )
@@ -292,7 +313,7 @@ enum BackupExporter {
 
         let batchDTOs: [ImportBatchDTO] = batches.map { b in
             ImportBatchDTO(
-                id: b.id,
+                id: surrogateID(for: b),
                 createdAt: b.createdAt,
                 label: b.label,
                 sourceFileName: b.sourceFileName,
@@ -302,7 +323,7 @@ enum BackupExporter {
 
         let mappingDTOs: [CSVColumnMappingDTO] = mappings.map { m in
             CSVColumnMappingDTO(
-                id: m.id,
+                id: surrogateID(for: m),
                 label: m.label,
                 mappings: m.mappings,
                 amountMode: m.amountMode,
@@ -312,7 +333,7 @@ enum BackupExporter {
 
         let cashDTOs: [CashFlowItemDTO] = cashFlows.map { c in
             CashFlowItemDTO(
-                id: c.id,
+                id: surrogateID(for: c),
                 kindRaw: c.kindRaw,
                 name: c.name,
                 amount: c.amount,
@@ -321,15 +342,15 @@ enum BackupExporter {
                 firstPaymentDate: c.firstPaymentDate,
                 notes: c.notes,
                 ssaWednesday: c.ssaWednesday,
-                accountID: c.account?.id,
+                accountID: c.account.map { surrogateID(for: $0) },
                 createdAt: c.createdAt
             )
         }
 
         let linkDTOs: [AssetLiabilityLinkDTO] = links.map { link in
             AssetLiabilityLinkDTO(
-                assetID: link.asset.id,
-                liabilityID: link.liability.id,
+                assetID: surrogateID(for: link.asset),
+                liabilityID: surrogateID(for: link.liability),
                 startDate: link.startDate,
                 endDate: link.endDate
             )

@@ -71,7 +71,7 @@ final class Account {
         case checking, savings, creditCard, loan, cash, brokerage, property, other
     }
 
-    @Attribute(.unique) var id: UUID
+    @Attribute(.unique) var id: UUID = UUID()
     var name: String
     var typeRaw: String
     var institutionName: String?

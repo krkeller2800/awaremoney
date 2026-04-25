@@ -25,6 +25,41 @@ struct awaremoneyApp: App {
         service.updateReserves(asOf: date)
     }
 
+    @MainActor
+    private static func repairAccountIDsIfNeeded(context: ModelContext) {
+        do {
+            let accounts = try context.fetch(FetchDescriptor<Account>())
+            var seen: Set<UUID> = []
+            var fixes = 0
+            for acct in accounts {
+                var needsNew = false
+                // Guard against all-zero UUIDs (in case of legacy/migration artifacts)
+                if acct.id.uuidString == "00000000-0000-0000-0000-000000000000" {
+                    needsNew = true
+                }
+                // Deduplicate
+                if seen.contains(acct.id) {
+                    needsNew = true
+                }
+                if needsNew {
+                    let old = acct.id
+                    acct.id = UUID()
+                    AMLogging.log("Repaired Account id duplicate/invalid: old=\(old) new=\(acct.id)", component: "App")
+                    fixes += 1
+                }
+                seen.insert(acct.id)
+            }
+            if fixes > 0 {
+                try context.save()
+                AMLogging.always("Account ID repair completed — fixes=\(fixes)", component: "App")
+            } else {
+                AMLogging.log("Account ID repair not needed — all IDs valid/unique", component: "App")
+            }
+        } catch {
+            AMLogging.error("Account ID repair failed: \(error.localizedDescription)", component: "App")
+        }
+    }
+
     init() {
         let schema = Schema([
             Account.self,
@@ -55,6 +90,12 @@ struct awaremoneyApp: App {
 
         container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
         AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")
+
+        let ctx = container.mainContext
+        Task { @MainActor in
+            awaremoneyApp.repairAccountIDsIfNeeded(context: ctx)
+        }
+
         runInstitutionMigrationIfNeeded()
         ReserveMigrationService.initializeReserveAnchorsIfNeeded(container: container, settings: settings)
     }
