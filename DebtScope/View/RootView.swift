@@ -1,0 +1,108 @@
+//
+//  RootView.swift
+//  DebtScope
+//
+//  Created by Karl Keller on 1/23/26.
+//
+
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+import Combine
+
+struct RootView: View {
+    @State private var selectedTab: Int = 0
+    @State private var lastNonSettingsTab: Int = 0
+    @State private var showSettings: Bool = false
+    @State private var isShowingBackupAlert: Bool = false
+    @State private var showImportFlow: Bool = false
+    @EnvironmentObject private var importRouter: ImportOpenRouter
+    @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
+
+    #if canImport(UIKit)
+    private func configureTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground() // opaque background
+        appearance.shadowColor = UIColor.separator   // visible top border
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+    #endif
+    
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            QuickStartView()
+                .tabItem { Label("Quick Start", systemImage: "sparkles") }
+                .tag(0)
+
+            AccountsListView()
+                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
+                .tag(1)
+            
+            NetWorthView()
+                .tabItem { Label("Net Worth", systemImage: "chart.pie") }
+                .tag(2)
+            
+            DebtDashboardView()
+                .tabItem { Label("Debt", systemImage: "creditcard") }
+                .tag(3)
+            
+            Color.clear
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(999)
+        }
+        .onChange(of: selectedTab) { oldValue, newValue in
+            if newValue == 999 {
+                selectedTab = lastNonSettingsTab
+                showSettings = true
+            } else {
+                lastNonSettingsTab = newValue
+            }
+        }
+        .onReceive(importRouter.$pendingURL) { url in
+            if let url = url {
+                selectedTab = 0
+                lastNonSettingsTab = 0
+                AMLogging.always("Received import URL: \(url.lastPathComponent)", component: "RootView")
+                showImportFlow = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickStartImportRequested)) { note in
+            guard let info = note.userInfo else { return }
+            if let url = info["url"] as? URL {
+                // Forward hints to the shared import router
+                importRouter.pendingURL = url
+                if let t = info["type"] as? StatementType { importRouter.pendingType = t }
+                if let inst = info["institution"] as? String { importRouter.pendingInstitution = inst }
+                AMLogging.always("RootView: QuickStart routed URL: \(url.lastPathComponent) type=\(String(describing: importRouter.pendingType)) inst=\(importRouter.pendingInstitution ?? "nil")", component: "RootView")
+                selectedTab = 0
+                lastNonSettingsTab = 0
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
+        .sheet(isPresented: $showImportFlow) {
+            ImportFlowView()
+        }
+        .alert("Import Backup", isPresented: $isShowingBackupAlert) {
+            Button("OK", role: .cancel) {
+                // Clear the coordinator message when the alert is dismissed
+                backupCoordinator.alertMessage = nil
+            }
+        } message: {
+            Text(backupCoordinator.alertMessage ?? "")
+        }
+        .onChange(of: backupCoordinator.alertMessage) { oldValue, newValue in
+            // Present the alert whenever a new message appears
+            isShowingBackupAlert = (newValue != nil)
+        }
+        .onAppear {
+            #if canImport(UIKit)
+            configureTabBarAppearance()
+            #endif
+        }
+    }
+}
+
