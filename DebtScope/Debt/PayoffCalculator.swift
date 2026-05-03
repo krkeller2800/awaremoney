@@ -22,6 +22,31 @@ struct PayoffInputs {
 /// - Projection: delegated to DebtProjectionEngine (maxMonths ~50 years)
 /// - Payoff date: first zero balance mapped to the statement date for that month
 enum PayoffCalculator {
+    /// Simple payoff date calculation using standard amortization math.
+    /// - Parameters:
+    ///   - balance: Starting balance (positive magnitude).
+    ///   - apr: Annual percentage rate; accepts either fraction (0.1999) or percent (19.99).
+    ///   - monthlyPayment: Monthly payment amount (positive magnitude).
+    ///   - start: Start date for month counting (defaults to now).
+    /// - Returns: The estimated payoff date, or nil if payment does not cover interest.
+    static func payoffDate(balance: Decimal, apr: Decimal, monthlyPayment: Decimal, from start: Date = Date()) -> Date? {
+        let P = abs(NSDecimalNumber(decimal: balance).doubleValue)
+        var annualRate = NSDecimalNumber(decimal: apr).doubleValue
+        if annualRate > 1.0 { annualRate /= 100.0 }
+        let A = abs(NSDecimalNumber(decimal: monthlyPayment).doubleValue)
+        guard P > 0, A > 0 else { return nil }
+        let r = annualRate / 12.0
+        if r <= 0 {
+            let months = Int(ceil(P / A))
+            return Calendar.current.date(byAdding: .month, value: months, to: start)
+        } else {
+            if A <= P * r { return nil }
+            let monthsDouble = log(A / (A - r * P)) / log(1.0 + r)
+            let months = Int(ceil(monthsDouble))
+            return Calendar.current.date(byAdding: .month, value: max(0, months), to: start)
+        }
+    }
+
     /// Compute unified inputs for a given account.
     static func computeInputs(for account: Account, asOf: Date = Date()) -> PayoffInputs? {
         guard let latest = latestSnapshot(for: account) else { return nil }
@@ -177,3 +202,4 @@ private extension PayoffCalculator {
         return cal.date(from: comps)!
     }
 }
+

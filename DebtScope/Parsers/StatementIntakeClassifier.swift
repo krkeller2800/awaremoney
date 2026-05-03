@@ -122,7 +122,15 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: "_", with: "")
     }
-
+    
+    // Word-boundary check to avoid substring false-positives like 'purchase' -> 'chase'
+        private func containsWord(_ word: String, in text: String) -> Bool {
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: word) + "\\b"
+            guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return false }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            return rx.firstMatch(in: text, options: [], range: range) != nil
+        }
+    
     private func guessInstitution(from fileName: String) -> String? {
         // Mirror the app's existing heuristics; keep minimal here and expand later.
         let base = (fileName as NSString).deletingPathExtension
@@ -194,13 +202,16 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
     }
 
     private func strongInstitutionPhrasesNormalized() -> [(String, String)] {
-        // Aggressively normalized (no spaces, dashes, underscores, commas, or periods; lowercase)
-        // Use for exact-phrase strong signals in headers/contact blocks
-        return [
-            ("sofibankna", "SoFi"),
-            ("wwwsoficom", "SoFi")
-        ]
-    }
+            // Aggressively normalized (no spaces, dashes, underscores, commas, or periods; lowercase)
+            // Use for exact-phrase strong signals in headers/contact blocks
+            return [
+                ("sofibankna", "SoFi"),
+                ("wwwsoficom", "SoFi"),
+                // Additions for Chase to help true positives
+                ("jpmorganchase", "Chase"),
+                ("wwwchasecom", "Chase")
+            ]
+        }
 
     private func creditCardSummaryTokensNormalized() -> [String] {
         // Common summary headers on credit card statements (normalized: no spaces/dashes/underscores, lowercase)
@@ -487,58 +498,68 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
     }
 
     private func detectInstitutionInPDF(headerLines: [String], normalizedHeader: String) -> String? {
-        // Strong phrase check (aggressive normalization): exact phrases that strongly indicate an institution
-        let normalizedAggressive = normalizedHeader
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: ",", with: "")
-        for (needle, display) in strongInstitutionPhrasesNormalized() {
-            if normalizedAggressive.contains(needle) {
-                return display
+            // Strong phrase check (aggressive normalization): exact phrases that strongly indicate an institution
+            let normalizedAggressive = normalizedHeader
+                .replacingOccurrences(of: ".", with: "")
+                .replacingOccurrences(of: ",", with: "")
+            for (needle, display) in strongInstitutionPhrasesNormalized() {
+                if normalizedAggressive.contains(needle) {
+                    return display
+                }
             }
-        }
 
-        var bestDisplay: String? = nil
-        var bestScore = Int.min
+            var bestDisplay: String? = nil
+            var bestScore = Int.min
 
-        // Aggressively normalized text to detect phrases like 'division of <bank>' or 'issued by <bank>'
-        let normalizedAggressive2 = normalizedHeader
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
+            // Aggressively normalized text to detect phrases like 'division of <bank>' or 'issued by <bank>'
+            let normalizedAggressive2 = normalizedHeader
+                .replacingOccurrences(of: ".", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "-", with: "")
+                .replacingOccurrences(of: "_", with: "")
 
-        for (needle, display) in knownInstitutions() {
-            if normalizedHeader.contains(needle) && isInstitutionContextPresent(needle: needle, lines: headerLines, normalizedText: normalizedHeader) {
-                var score = 0
-                // Base on frequency
-                score += countOccurrences(in: normalizedHeader, of: needle) * 10
-                // Bonus if appears on a line with aux header/contact context
-                if hasLineWithAuxContext(needle: needle, lines: headerLines) { score += 5 }
+            // NEW: raw lowercased header for word-boundary checks
+            let rawLowerHeader = headerLines.joined(separator: "\n").lowercased()
 
-                // Special-case Discover: require the registered trademark symbol and boost when present
-                if needle == "discover" {
-                    if normalizedHeader.contains("discover®") {
-                        score += 30
-                    } else {
-                        continue
+            for (needle, display) in knownInstitutions() {
+                // Require word boundary for ambiguous short tokens to avoid 'purchase' -> 'chase' and 'solicitation' -> 'citi'
+                let requiresWordBoundary = (needle == "chase" || needle == "citi")
+                let appearsInNormalized = normalizedHeader.contains(needle)
+                let appearsAsWord = containsWord(needle, in: rawLowerHeader)
+
+                if appearsInNormalized && (!requiresWordBoundary || appearsAsWord) &&
+                   isInstitutionContextPresent(needle: needle, lines: headerLines, normalizedText: normalizedHeader) {
+
+                    var score = 0
+                    // Base on frequency
+                    score += countOccurrences(in: normalizedHeader, of: needle) * 10
+                    // Bonus if appears on a line with aux header/contact context
+                    if hasLineWithAuxContext(needle: needle, lines: headerLines) { score += 5 }
+
+                    // Special-case Discover: require the registered trademark symbol and boost when present
+                    if needle == "discover" {
+                        if normalizedHeader.contains("discover®") {
+                            score += 30
+                        } else {
+                            continue
+                        }
+                    }
+
+                    // Penalize negative contexts for other institutions (e.g., 'a division of Capital One')
+                    if normalizedAggressive2.contains("divisionof" + needle) { score -= 20 }
+                    if normalizedAggressive2.contains("affiliateof" + needle) { score -= 12 }
+                    // Boost when the institution appears in 'issued by <institution>' context
+                    if normalizedAggressive2.contains("issuedby" + needle) { score += 8 }
+
+                    if score > bestScore {
+                        bestScore = score
+                        bestDisplay = display
                     }
                 }
-
-                // Penalize negative contexts for other institutions (e.g., 'a division of Capital One')
-                if normalizedAggressive2.contains("divisionof" + needle) { score -= 20 }
-                if normalizedAggressive2.contains("affiliateof" + needle) { score -= 12 }
-                // Boost when the institution appears in 'issued by <institution>' context
-                if normalizedAggressive2.contains("issuedby" + needle) { score += 8 }
-
-                if score > bestScore {
-                    bestScore = score
-                    bestDisplay = display
-                }
             }
+            return bestDisplay
         }
-        return bestDisplay
-    }
 
     private func knownTypeTokens() -> [(String, StatementType)] {
         return [

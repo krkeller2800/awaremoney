@@ -13,7 +13,8 @@ struct ImportFlowView: View {
     @EnvironmentObject private var purchases: PurchaseManager
     @EnvironmentObject private var importRouter: ImportOpenRouter
     @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
-    @StateObject private var vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
+    @StateObject private var vm: ImportViewModel
+    @State private var coordinator: StatementImportCoordinator
 
     @State private var batches: [ImportBatch] = []
     @State private var pickerKind: PickerKind? = nil
@@ -54,6 +55,12 @@ struct ImportFlowView: View {
         case excel = "Excel (XLSX/XLS)"
         case zip = "ZIP Archive"
         var id: String { rawValue }
+    }
+
+    init() {
+        let vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
+        _vm = StateObject(wrappedValue: vm)
+        _coordinator = State(initialValue: StatementImportCoordinator(vm: vm))
     }
 
     private func handlePendingURLWithIntake(_ url: URL) {
@@ -113,15 +120,19 @@ struct ImportFlowView: View {
         case .ofx, .qif, .excel, .zip:
             vm.userSelectedDocHint = nil
         }
-        let isPDF = url.pathExtension.lowercased() == "pdf"
-        DispatchQueue.main.async {
-            if isPDF {
-                self.handlePDFSnapshotImport(url: url)
-            } else {
-                Task { await self.handleImport(url) }
-            }
-        }
+        Task { await self.coordinator.importURL(url, hint: self.statementHint(from: self.vm.newAccountType), modelContext: self.modelContext, settings: self.settings) }
         AMLogging.always("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
+    }
+
+    private func statementHint(from type: Account.AccountType?) -> StatementType? {
+        guard let t = type else { return nil }
+        switch t {
+        case .creditCard: return .creditCard
+        case .loan:       return .loan
+        case .brokerage:  return .brokerage
+        case .checking, .savings: return .bank
+        default: return nil
+        }
     }
 
     private func allowedTypesForCurrentPicker() -> [UTType] {
@@ -325,390 +336,6 @@ struct ImportFlowView: View {
             }
         } catch {
             AMLogging.error("ImportFlowView: fetch saved mappings failed: \(error.localizedDescription)", component: "Import")
-        }
-    }
-
-    private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {
-        if snaps.isEmpty { return snaps }
-        var chosen: [String: StagedBalance] = [:]
-        var order: [String] = []
-        let cal = Calendar.current
-        for snap in snaps {
-            let label = (snap.sourceAccountLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
-            let key = "\(label)|\(Int(dayStart))"
-            if let existing = chosen[key] {
-                if existing.balance == .zero && snap.balance != .zero {
-                    chosen[key] = snap
-                } else {
-                    // keep existing (either both zero or both non-zero)
-                }
-            } else {
-                chosen[key] = snap
-                order.append(key)
-            }
-        }
-        return order.compactMap { chosen[$0] }
-    }
-    
-    private func deduplicateStagedBalancesForCreditCard(_ snaps: [StagedBalance]) -> [StagedBalance] {
-        // Credit card tweak: de-duplicate by calendar day only (ignore labels),
-        // prefer non-zero over zero, and when both are non-zero with opposite signs,
-        // prefer the negative value (liability convention).
-        if snaps.isEmpty { return snaps }
-        var chosen: [Int: StagedBalance] = [:]
-        var order: [Int] = []
-        let cal = Calendar.current
-        for snap in snaps {
-            let dayStart = cal.startOfDay(for: snap.asOfDate).timeIntervalSince1970
-            let key = Int(dayStart)
-            if let existing = chosen[key] {
-                let e = existing.balance
-                let s = snap.balance
-                if e == .zero && s != .zero {
-                    chosen[key] = snap
-                } else if e != .zero && s != .zero {
-                    // Prefer negative when signs differ
-                    if (e >= 0 && s < 0) {
-                        chosen[key] = snap
-                    } else {
-                        // keep existing
-                    }
-                } else {
-                    // keep existing (both zero or new is zero)
-                }
-            } else {
-                chosen[key] = snap
-                order.append(key)
-            }
-        }
-        return order.compactMap { chosen[$0] }
-    }
-    
-    private func handlePDFSnapshotImport(url: URL) {
-        // Show global importing overlay
-        vm.isImporting = true
-        Task {
-            defer { DispatchQueue.main.async { self.vm.isImporting = false } }
-            await MainActor.run {
-                self.vm.infoMessage = nil
-                self.vm.errorMessage = nil
-            }
-
-            // Capture the current hint on the main actor
-            let hintOpt = await MainActor.run { self.vm.userSelectedDocHint }
-            guard let hint = hintOpt else {
-                AMLogging.log("ImportFlowView: handlePDFSnapshotImport called without a userSelectedDocHint; falling back to default handler", component: "Import")
-                // Fall back to default handler on the main actor
-                await MainActor.run { self.vm.handlePickedURL(url) }
-                return
-            }
-            AMLogging.log("ImportFlowView: handlePDFSnapshotImport hint=\(hint) file=\(url.lastPathComponent)", component: "Import")
-
-            do {
-                // Start security scoped access
-                let didStart = url.startAccessingSecurityScopedResource()
-                AMLogging.log("ImportFlowView: security scope started=\(didStart) for file=\(url.path)", component: "Import")
-                defer {
-                    if didStart {
-                        url.stopAccessingSecurityScopedResource()
-                        AMLogging.log("ImportFlowView: security scope stopped for file=\(url.path)", component: "Import")
-                    }
-                }
-
-                // Cache the picked PDF to the app's Caches directory so we can preview it later
-                do {
-                    let fm = FileManager.default
-                    if let caches = try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-                        let dest = caches.appendingPathComponent(url.lastPathComponent)
-                        AMLogging.log("ImportFlowView: caching picked PDF to: \(dest.path)", component: "Import")
-
-                        // If the source and destination are the same file, skip removal/copy and just record it
-                        if dest.standardizedFileURL.path == url.standardizedFileURL.path {
-                            AMLogging.log("ImportFlowView: source is already cached at destination; skipping copy", component: "Import")
-                            await MainActor.run { self.vm.lastPickedLocalURL = dest }
-                        } else {
-                            // Remove any existing file at the destination to avoid copy errors
-                            try? fm.removeItem(at: dest)
-                            if fm.fileExists(atPath: url.path) {
-                                do {
-                                    try fm.copyItem(at: url, to: dest)
-                                    await MainActor.run { self.vm.lastPickedLocalURL = dest }
-                                    AMLogging.log("ImportFlowView: cached PDF copied; lastPickedLocalURL set", component: "Import")
-                                } catch {
-                                    AMLogging.error("ImportFlowView: failed to cache PDF copy — \(error.localizedDescription)", component: "Import")
-                                }
-                            } else {
-                                AMLogging.log("ImportFlowView: picked PDF path does not exist at \(url.path)", component: "Import")
-                            }
-                        }
-                    }
-                }
-
-                // Heavy work: extract and parse
-                let importer = StatementImporter()
-                // Request Summary behavior for bank/loan/brokerage, but fall back to .transactions if summary mode isn't available
-                let requestedSummary: Bool = {
-                    switch hint {
-                    case .creditCard: return false
-                    case .loan, .brokerage, .checking: return true
-                    default: return true
-                    }
-                }()
-                // Current extractor doesn't expose a .summary case; use .transactions and rely on augmentation + PDFSummaryParser
-                let preferMode: PDFStatementExtractor.Mode = .transactions
-                let userOverride: StatementImporter.UserOverride? = {
-                    switch hint {
-                    case .creditCard: return .creditCard
-                    case .loan: return .loan
-                    case .brokerage: return .brokerage
-                    case .checking: return .bank
-                    default: return nil
-                    }
-                }()
-                let result = try importer.importStatement(from: url, prefer: preferMode, userOverride: userOverride)
-                AMLogging.log("ImportFlowView: StatementImporter invoked with preferMode=\(preferMode) requestedSummary=\(requestedSummary) userOverride=\(String(describing: userOverride))", component: "Import")
-                AMLogging.log("ImportFlowView: StatementImporter returned rows=\(result.rows.count) headers=\(result.headers)", component: "Import")
-
-                // Augment extractor output with raw PDF text and synthetic sections (mirrors Replace flow behavior)
-                var augmentedRows = result.rows
-                let augmentedHeaders = result.headers
-                if let fullText = PDFTextExtractor.extractText(from: url) {
-                    AMLogging.log("ImportFlowView: PDF raw text length=\(fullText.count)", component: "Import")
-                    if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: fullText) {
-                        AMLogging.log("ImportFlowView: Interest Charges section found — length=\(interestSection.count)", component: "Import")
-                        augmentedRows.append([interestSection])
-                    } else {
-                        AMLogging.log("ImportFlowView: Interest Charges section not found in raw text", component: "Import")
-                    }
-                    if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: fullText) {
-                        AMLogging.log("ImportFlowView: Balance Summary section found — length=\(balanceSection.count)", component: "Import")
-                        augmentedRows.append([balanceSection])
-                    } else {
-                        AMLogging.log("ImportFlowView: Balance Summary section not found in raw text", component: "Import")
-                    }
-                    AMLogging.log("ImportFlowView: appending full document text as synthetic row", component: "Import")
-                    augmentedRows.append([fullText])
-                }
-
-                AMLogging.log("ImportFlowView: about to attempt PDFSummaryParser — headers=\(augmentedHeaders.count) rows=\(augmentedRows.count)", component: "Import")
-                var staged: StagedImport
-                do {
-                    let summaryParser = PDFSummaryParser()
-                    staged = try summaryParser.parse(rows: augmentedRows, headers: augmentedHeaders)
-                    AMLogging.log("ImportFlowView: PDFSummaryParser succeeded — balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
-                    AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (success path)", component: "Import")
-                } catch {
-                    AMLogging.log("ImportFlowView: PDFSummaryParser failed (\(error.localizedDescription)) — attempting default parsers", component: "Import")
-                    let parsers = ImportViewModel.defaultParsers()
-                    let matching = parsers.filter { $0.canParse(headers: augmentedHeaders) }
-                    if let parser = matching.first {
-                        staged = try parser.parse(rows: augmentedRows, headers: augmentedHeaders)
-                        AMLogging.log("ImportFlowView: fallback parser succeeded — parser=\(type(of: parser)) balances=\(staged.balances.count) tx=\(staged.transactions.count)", component: "Import")
-                        AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (fallback success)", component: "Import")
-                    } else {
-                        AMLogging.log("ImportFlowView: finished PDFSummaryParser attempt (no parser matched; falling back)", component: "Import")
-                        AMLogging.log("ImportFlowView: no parser matched augmented PDF — falling back to manual entry with ReviewImportView", component: "Import")
-                        await MainActor.run {
-                            // Present manual fallback immediately. Do NOT call handlePickedURL here — it may clear `staged` asynchronously.
-                            let suggested: Account.AccountType? = {
-                                switch self.vm.userSelectedDocHint {
-                                case .loan: return .loan
-                                case .creditCard: return .creditCard
-                                case .brokerage: return .brokerage
-                                case .checking: return .checking
-                                default: return nil
-                                }
-                            }()
-                            if let s = suggested { self.vm.newAccountType = s }
-                            self.vm.staged = StagedImport(
-                                parserId: "manual.fallback",
-                                sourceFileName: url.lastPathComponent,
-                                inferredInstitutionName: nil,
-                                suggestedAccountType: self.vm.newAccountType,
-                                transactions: [],
-                                holdings: [],
-                                balances: []
-                            )
-                            self.vm.mappingSession = nil
-                            self.vm.errorMessage = nil
-                            self.vm.infoMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
-                        }
-                        return
-                    }
-                }
-
-                staged.sourceFileName = url.lastPathComponent
-
-                // In non-liability contexts (bank/brokerage), normalize balances to positive values
-                if hint != .creditCard && hint != .loan {
-                    var flipped = 0
-                    for i in staged.balances.indices {
-                        if staged.balances[i].balance < 0 {
-                            staged.balances[i].balance = -staged.balances[i].balance
-                            flipped += 1
-                        }
-                    }
-                    if flipped > 0 {
-                        AMLogging.log("ImportFlowView: normalized \(flipped) negative balances to positive for non-liability context", component: "Import")
-                    }
-                }
-
-                // If the user hinted this is a loan statement, suppress any document-level CC coercion by relabeling snapshots
-                if hint == .loan {
-                    var relabeled = 0
-                    for i in staged.balances.indices {
-                        let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        if lbl == "creditcard" {
-                            staged.balances[i].sourceAccountLabel = "loan"
-                            relabeled += 1
-                        }
-                    }
-                    if relabeled > 0 {
-                        AMLogging.log("ImportFlowView: suppressed CC coercion per .loan hint — relabeled \(relabeled) snapshot(s) to 'loan'", component: "Import")
-                    }
-                }
-                // If the user hinted this is a bank/checking statement, suppress any document-level CC coercion by relabeling snapshots
-                if hint == .checking {
-                    var relabeled = 0
-                    for i in staged.balances.indices {
-                        let lbl = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        if lbl == "creditcard" || lbl == "credit card" {
-                            staged.balances[i].sourceAccountLabel = "checking"
-                            relabeled += 1
-                        }
-                    }
-                    if relabeled > 0 {
-                        AMLogging.log("ImportFlowView: suppressed CC coercion per .checking hint — relabeled \(relabeled) snapshot(s) to 'checking'", component: "Import")
-                    }
-                }
-
-                // In a bank/checking context, drop any accidental brokerage labels if there are no holdings
-                if hint == .checking, staged.holdings.isEmpty {
-                    var scrubbed = 0
-                    for i in staged.balances.indices {
-                        let lbl = (staged.balances[i].sourceAccountLabel ?? "")
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .lowercased()
-                        if lbl == "brokerage" || lbl == "investment" || lbl == "investments" {
-                            // Prefer relabeling to 'checking'; set to nil if you prefer to drop the label entirely
-                            staged.balances[i].sourceAccountLabel = "checking"
-                            scrubbed += 1
-                        }
-                    }
-                    if scrubbed > 0 {
-                        AMLogging.log("ImportFlowView: scrubbed \(scrubbed) accidental brokerage label(s) in bank context", component: "Import")
-                    }
-                }
-                
-                AMLogging.log("Pre-dedupe balances: " + staged.balances.map { b in
-                    let lbl = (b.sourceAccountLabel ?? "nil")
-                    return "[date=\(b.asOfDate), amt=\(b.balance), label=\(lbl)]"
-                }.joined(separator: ", "), component: "Import")
-                // Prefer non-zero snapshots when multiple exist for the same day
-                let before = staged.balances.count
-                if hint == .creditCard {
-                    staged.balances = deduplicateStagedBalancesForCreditCard(staged.balances)
-                } else {
-                    staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
-                }
-                AMLogging.log("ImportFlowView: balance de-dup (PDF snapshot) before=\(before) after=\(staged.balances.count)", component: "Import")
-
-                // Log importer warnings for diagnostics; do not surface as user-facing info
-                if !result.warnings.isEmpty {
-                    AMLogging.log("ImportFlowView: importer warnings (suppressed from UI): " + result.warnings.joined(separator: " | "), component: "Import")
-                }
-
-                // Set the default account type based on the user hint
-                await MainActor.run {
-                    switch hint {
-                    case .loan:
-                        self.vm.newAccountType = .loan
-                    case .creditCard:
-                        self.vm.newAccountType = .creditCard
-                    case .brokerage:
-                        self.vm.newAccountType = .brokerage
-                    case .checking:
-                        self.vm.newAccountType = .checking
-                    default:
-                        break
-                    }
-                }
-
-                // Apply liability safety net in credit-card context to relabel ambiguous balances
-                if hint == .creditCard {
-                    await MainActor.run { self.vm.applyLiabilityLabelSafetyNetIfNeeded(to: &staged) }
-                }
-
-                // Prefer Purchases APR when available for credit card statements
-                if hint == .creditCard {
-                    if let fullText = PDFTextExtractor.extractText(from: url),
-                       let (apr, scale) = PDFTextExtractor.extractPreferredAPR(from: fullText) {
-                        var applied = 0
-                        for i in staged.balances.indices {
-                            // Only set if missing or if previously set APR is higher (e.g., cash advance); prefer the lower rate as a heuristic
-                            if let existing = staged.balances[i].interestRateAPR {
-                                if apr < existing {
-                                    staged.balances[i].interestRateAPR = apr
-                                    staged.balances[i].interestRateScale = scale
-                                    let existingLabel = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespaces)
-                                    staged.balances[i].sourceAccountLabel = (existingLabel.isEmpty ? "apr:purchases" : existingLabel + " apr:purchases")
-                                    applied += 1
-                                }
-                            } else {
-                                staged.balances[i].interestRateAPR = apr
-                                staged.balances[i].interestRateScale = scale
-                                let existingLabel = (staged.balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespaces)
-                                staged.balances[i].sourceAccountLabel = (existingLabel.isEmpty ? "apr:purchases" : existingLabel + " apr:purchases")
-                                applied += 1
-                            }
-                        }
-                        if applied > 0 {
-                            AMLogging.log("ImportFlowView: applied preferred APR (likely Purchases) to \(applied) balance snapshot(s)", component: "Import")
-                        }
-                    }
-                }
-                // Carry any prefilled institution hint into the staged import if not already set
-                do {
-                    let prefilledInst = await MainActor.run { self.vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    if !prefilledInst.isEmpty && (staged.inferredInstitutionName == nil || staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true) {
-                        staged.inferredInstitutionName = prefilledInst
-                    }
-                }
-                // Commit staged import and clear any mapping session on the main actor
-                await MainActor.run {
-                    self.vm.staged = staged
-                    self.vm.mappingSession = nil
-                }
-                AMLogging.log("ImportFlowView: staged import prepared (PDF snapshot) — balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
-            } catch {
-                AMLogging.error("ImportFlowView: PDF snapshot import failed — \(error.localizedDescription). Presenting manual ReviewImportView fallback.", component: "Import")
-                await MainActor.run {
-                    // Present manual fallback immediately. Do NOT call handlePickedURL here — it may clear `staged` asynchronously.
-                    let suggested: Account.AccountType? = {
-                        switch self.vm.userSelectedDocHint {
-                        case .loan: return .loan
-                        case .creditCard: return .creditCard
-                        case .brokerage: return .brokerage
-                        case .checking: return .checking
-                        default: return nil
-                        }
-                    }()
-                    if let s = suggested { self.vm.newAccountType = s }
-                    self.vm.staged = StagedImport(
-                        parserId: "manual.fallback",
-                        sourceFileName: url.lastPathComponent,
-                        inferredInstitutionName: nil,
-                        suggestedAccountType: self.vm.newAccountType,
-                        transactions: [],
-                        holdings: [],
-                        balances: []
-                    )
-                    self.vm.mappingSession = nil
-                    self.vm.errorMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
-                    self.vm.infoMessage = nil
-                }
-            }
         }
     }
 
@@ -1573,7 +1200,7 @@ struct ImportFlowView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                Task { await handleImport(url) }
+                Task { await coordinator.importURL(url, hint: statementHint(from: vm.newAccountType), modelContext: modelContext, settings: settings) }
             case .failure(let error):
                 AMLogging.error("ImportFlowView: fileImporter failed — \(error.localizedDescription)", component: "Import")
                 vm.errorMessage = error.localizedDescription
@@ -1626,154 +1253,7 @@ struct ImportFlowView: View {
             await MainActor.run { self.batches = [] }
         }
     }
-
-    private func handleImport(_ url: URL) async {
-        await MainActor.run { vm.lastPickedLocalURL = url }
-        // Determine if PDF or not; handle accordingly
-        if url.pathExtension.lowercased() == "pdf" {
-            handlePDFSnapshotImport(url: url)
-        } else if ["qfx", "ofx", "qbo"].contains(url.pathExtension.lowercased()) {
-            await MainActor.run { vm.isImporting = true }
-            await MainActor.run { vm.lastPickedLocalURL = url }
-            defer { DispatchQueue.main.async { vm.isImporting = false } }
-
-            // Local async helper functions inside this branch
-            @MainActor
-            func setNewAccountTypeFromHint() {
-                switch vm.userSelectedDocHint {
-                case .creditCard: vm.newAccountType = .creditCard
-                case .loan:       vm.newAccountType = .loan
-                case .brokerage:  vm.newAccountType = .brokerage
-                case .checking:   vm.newAccountType = .checking
-                default:          break
-                }
-            }
-
-            func handleParsedOFXLike(rows: [[String]], headers: [String], url: URL) async throws {
-                let parsers = ImportViewModel.defaultParsers()
-                let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
-                if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
-                    setNewAccountTypeFromHint()
-                    var staged = try parser.parse(rows: rows, headers: headers)
-                    staged.sourceFileName = url.lastPathComponent
-                    staged.suggestedAccountType = vm.newAccountType
-                    await MainActor.run {
-                        vm.staged = staged
-                        vm.mappingSession = nil
-                    }
-                    AMLogging.log("ImportFlowView: OFX-like parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
-                } else {
-                    await MainActor.run {
-                        vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
-                        vm.staged = nil
-                    }
-                    AMLogging.log("ImportFlowView: OFX-like parsed but no parser matched headers; opened mapping editor", component: "Import")
-                }
-            }
-
-            let ext = url.pathExtension.lowercased()
-            if ext == "qbo" {
-                do {
-                    AMLogging.log("ImportFlowView: using QBOStatementExtractor for \(url.lastPathComponent)", component: "Import")
-                    let (rows, headers) = try QBOStatementExtractor.parse(url: url)
-                    try await handleParsedOFXLike(rows: rows, headers: headers, url: url)
-                    return
-                } catch {
-                    await MainActor.run {
-                        vm.errorMessage = "We couldn’t read this QBO file."
-                        showImportError = true
-                    }
-                    AMLogging.error("ImportFlowView: QBOStatementExtractor failed — \(error.localizedDescription)", component: "Import")
-                    return
-                }
-            } else {
-                do {
-                    AMLogging.log("ImportFlowView: using OFXStatementExtractor for \(url.lastPathComponent)", component: "Import")
-                    let (rows, headers) = try OFXStatementExtractor.parse(url: url)
-                    try await handleParsedOFXLike(rows: rows, headers: headers, url: url)
-                    return
-                } catch {
-                    await MainActor.run {
-                        vm.errorMessage = "We couldn’t read this OFX/QFX file."
-                        showImportError = true
-                    }
-                    AMLogging.error("ImportFlowView: OFXStatementExtractor failed — \(error.localizedDescription)", component: "Import")
-                    return
-                }
-            }
-        } else if url.pathExtension.lowercased() == "qif" {
-            await MainActor.run { vm.isImporting = true }
-            await MainActor.run { vm.lastPickedLocalURL = url }
-            defer { DispatchQueue.main.async { vm.isImporting = false } }
-
-            do {
-                AMLogging.log("ImportFlowView: using QIFStatementExtractor for \(url.lastPathComponent)", component: "Import")
-                let (rows, headers) = try QIFStatementExtractor.parse(url: url)
-
-                let parsers = ImportViewModel.defaultParsers()
-                // Avoid PDF-only summary parsers
-                let nonPDFParsers = parsers.filter { !($0 is PDFSummaryParser) }
-                if let parser = nonPDFParsers.first(where: { $0.canParse(headers: headers) }) {
-                    AMLogging.log("ImportFlowView: selected non-PDF parser for QIF — \(type(of: parser))", component: "Import")
-                    // Set newAccountType as per current hint
-                    await MainActor.run {
-                        switch vm.userSelectedDocHint {
-                        case .creditCard: vm.newAccountType = .creditCard
-                        case .loan:       vm.newAccountType = .loan
-                        case .brokerage:  vm.newAccountType = .brokerage
-                        case .checking:   vm.newAccountType = .checking
-                        default:          break
-                        }
-                    }
-
-                    var staged = try parser.parse(rows: rows, headers: headers)
-                    staged.sourceFileName = url.lastPathComponent
-                    staged.suggestedAccountType = vm.newAccountType
-
-                    await MainActor.run {
-                        vm.staged = staged
-                        vm.mappingSession = nil
-                    }
-                    AMLogging.log("ImportFlowView: QIF parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
-                } else {
-                    await MainActor.run {
-                        // Fall back to mapping editor with extracted headers/rows
-                        vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
-                        vm.staged = nil
-                    }
-                    AMLogging.log("ImportFlowView: QIF parsed but no parser matched headers; opened mapping editor", component: "Import")
-                }
-            } catch {
-                await MainActor.run {
-                    let message = error.localizedDescription.isEmpty ? "We couldn’t process this QIF file." : error.localizedDescription
-                        vm.errorMessage = message
-                        showImportError = true
-                }
-                AMLogging.error("ImportFlowView: QIFStatementExtractor failed — \(error.localizedDescription)", component: "Import")
-            }
-        } else {
-            // existing non-PDF path} else {
-            await MainActor.run {
-                // Ensure type is set using the user’s hint before parsing
-                switch vm.userSelectedDocHint {
-                case .creditCard: vm.newAccountType = .creditCard
-                case .loan:       vm.newAccountType = .loan
-                case .brokerage:  vm.newAccountType = .brokerage
-                case .checking:   vm.newAccountType = .checking
-                default:          break
-                }
-                vm.lastPickedLocalURL = url
-                vm.isImporting = true
-            }
-            defer { DispatchQueue.main.async { vm.isImporting = false } }
-
-            await MainActor.run {
-                vm.handlePickedURL(url)
-            }
-        }
-    }
 }
-
 #Preview {
     ImportFlowView()
         .environmentObject(PurchaseManager.shared)

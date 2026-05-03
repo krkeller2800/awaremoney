@@ -101,7 +101,7 @@ struct AccountTransactionsListView: View {
                 }
             }
         }
-        .navigationTitle("Transactions")
+        .navigationTitle(account?.name ?? "Transactions")
         .navigationBarBackButtonHidden(!isIPad)
         .toolbar {
             if !isIPad {

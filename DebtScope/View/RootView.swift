@@ -65,19 +65,23 @@ struct RootView: View {
                 selectedTab = 0
                 lastNonSettingsTab = 0
                 AMLogging.always("Received import URL: \(url.lastPathComponent)", component: "RootView")
-                showImportFlow = true
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .quickStartImportRequested)) { note in
-            guard let info = note.userInfo else { return }
-            if let url = info["url"] as? URL {
-                // Forward hints to the shared import router
-                importRouter.pendingURL = url
-                if let t = info["type"] as? StatementType { importRouter.pendingType = t }
-                if let inst = info["institution"] as? String { importRouter.pendingInstitution = inst }
-                AMLogging.always("RootView: QuickStart routed URL: \(url.lastPathComponent) type=\(String(describing: importRouter.pendingType)) inst=\(importRouter.pendingInstitution ?? "nil")", component: "RootView")
-                selectedTab = 0
-                lastNonSettingsTab = 0
+                let ext = url.pathExtension.lowercased()
+                if ext == "pdf" {
+                    // Route to Quick Start; classify and notify
+                    Task {
+                        let classifier = StatementIntakeClassifier()
+                        let detection = await classifier.classify(url: url)
+                        NotificationCenter.default.post(name: .quickStartImportRequested, object: nil, userInfo: [
+                            "url": url,
+                            "type": detection.type as Any,
+                            "institution": detection.institution as Any
+                        ])
+                        await MainActor.run { importRouter.pendingURL = nil }
+                    }
+                    showImportFlow = false
+                } else {
+                    showImportFlow = true
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
