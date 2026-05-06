@@ -4,6 +4,12 @@ import Foundation
 
 /// An ObservableObject that routes incoming file URLs opened from outside the app.
 final class ImportOpenRouter: ObservableObject {
+    struct QuickStartImportRequest {
+        let url: URL
+        let type: StatementType?
+        let institution: String?
+    }
+
     /// Optional type hint supplied by an upstream intake flow (e.g., Quick Start)
     @Published var pendingType: StatementType? = nil
 
@@ -15,10 +21,14 @@ final class ImportOpenRouter: ObservableObject {
         pendingURL = nil
         pendingType = nil
         pendingInstitution = nil
+        quickStartPendingImport = nil
     }
 
     /// The URL of a file pending to be imported or processed.
     @Published var pendingURL: URL? = nil
+
+    /// Durable Quick Start import request used for Files/share-sheet intake routing.
+    @Published var quickStartPendingImport: QuickStartImportRequest? = nil
     
     /// Public initializer.
     public init() {}

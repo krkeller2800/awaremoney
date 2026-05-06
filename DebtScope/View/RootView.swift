@@ -26,12 +26,14 @@ struct RootView: View {
                         let stagedURL = ImportFileStaging.stageToCaches(url)
                         let classifier = StatementIntakeClassifier()
                         let detection = await classifier.classify(url: stagedURL)
-                        NotificationCenter.default.post(name: .quickStartImportRequested, object: nil, userInfo: [
-                            "url": stagedURL,
-                            "type": detection.type as Any,
-                            "institution": detection.institution as Any
-                        ])
-                        await MainActor.run { importRouter.pendingURL = nil }
+                        await MainActor.run {
+                            importRouter.quickStartPendingImport = .init(
+                                url: stagedURL,
+                                type: detection.type,
+                                institution: detection.institution
+                            )
+                            importRouter.pendingURL = nil
+                        }
                     }
                     showImportFlow = false
                 } else {

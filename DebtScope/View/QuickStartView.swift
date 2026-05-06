@@ -20,6 +20,7 @@ struct QuickStartView: View {
     @State private var coordinator: StatementImportCoordinator
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @EnvironmentObject private var importRouter: ImportOpenRouter
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selection: QuickStartTopic? = .debtPayoff
@@ -491,14 +492,10 @@ struct QuickStartView: View {
                 break
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .quickStartImportRequested)) { notification in
-            guard let userInfo = notification.userInfo,
-                  let url = userInfo["url"] as? URL else {
-                return
-            }
-            let type = userInfo["type"] as? StatementType
-            let institution = userInfo["institution"] as? String
-            queueImport(url: url, type: type, institution: institution)
+        .onChange(of: importRouter.quickStartPendingImport?.url, initial: false) { _, _ in
+            guard let request = importRouter.quickStartPendingImport else { return }
+            queueImport(url: request.url, type: request.type, institution: request.institution)
+            importRouter.quickStartPendingImport = nil
         }
     }
 
@@ -1170,10 +1167,6 @@ private struct QuickStartAssetsDetailView: View {
             AMLogging.log("QuickStartAssetsDetailView save failed: \(error)", component: "QuickStartView")
         }
     }
-}
-
-extension Notification.Name {
-    static let quickStartImportRequested = Notification.Name("QuickStartImportRequested")
 }
 
 private struct StatementReviewDetailView: View {
