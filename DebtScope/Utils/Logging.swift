@@ -1,5 +1,8 @@
 import Foundation
 import OSLog
+#if canImport(UIKit)
+import UIKit
+#endif
 
 extension Notification.Name {
     static let loggingCategoriesDidChange = Notification.Name("AMLoggingCategoriesDidChange")
@@ -174,3 +177,30 @@ enum AMLogging {
     }
 }
 
+enum AMRuntimeDiagnostics {
+    static var executionEnvironmentDescription: String {
+        let environment: String = {
+            #if targetEnvironment(simulator)
+            return "Simulator"
+            #else
+            return "Real Device"
+            #endif
+        }()
+
+        #if canImport(UIKit)
+        let device = UIDevice.current
+        let model = device.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let systemName = device.systemName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let systemVersion = device.systemVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if targetEnvironment(simulator)
+        let simulatorName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let simulatorDescriptor = simulatorName?.isEmpty == false ? simulatorName! : model
+        return "\(environment) (\(simulatorDescriptor); \(systemName) \(systemVersion))"
+        #else
+        return "\(environment) (\(model); \(systemName) \(systemVersion))"
+        #endif
+        #else
+        return environment
+        #endif
+    }
+}

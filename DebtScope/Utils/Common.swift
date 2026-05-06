@@ -262,6 +262,55 @@ public struct EditingAccessoryBar: View {
         .overlay(Divider(), alignment: .top)
     }
 }
+
+enum ImportFileStaging {
+    static func stageToCaches(_ sourceURL: URL) -> URL {
+        let fm = FileManager.default
+
+        do {
+            let caches = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let destinationURL = caches.appendingPathComponent(sourceURL.lastPathComponent)
+            let sourceStandardizedURL = sourceURL.standardizedFileURL
+            let destinationStandardizedURL = destinationURL.standardizedFileURL
+
+            if sourceStandardizedURL.path == destinationStandardizedURL.path {
+                return destinationStandardizedURL
+            }
+
+            try? fm.removeItem(at: destinationStandardizedURL)
+
+            let didStartSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartSecurityScope {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            do {
+                try fm.copyItem(at: sourceURL, to: destinationStandardizedURL)
+                return destinationStandardizedURL
+            } catch {
+                do {
+                    let data = try Data(contentsOf: sourceURL)
+                    try data.write(to: destinationStandardizedURL, options: .atomic)
+                    return destinationStandardizedURL
+                } catch {
+                    AMLogging.error(
+                        "ImportFileStaging: failed to stage file=\(sourceURL.lastPathComponent) copyError=\(error.localizedDescription) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                        component: "Import"
+                    )
+                    return sourceURL
+                }
+            }
+        } catch {
+            AMLogging.error(
+                "ImportFileStaging: caches resolution failed file=\(sourceURL.lastPathComponent) error=\(error.localizedDescription) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Import"
+            )
+            return sourceURL
+        }
+    }
+}
 extension UIDevice {
     static let type = UIDevice.current.localizedModel
 }

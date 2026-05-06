@@ -1,6 +1,15 @@
 import SwiftUI
 
 struct DetectionReviewSheet: View {
+    struct DetectedAccountSelection: Identifiable, Hashable {
+        let id: String
+        let label: String
+        let statementType: StatementType
+        let endingBalance: Decimal?
+        let isInactive: Bool
+        var shouldImport: Bool
+    }
+
     let detection: IntakeDetection
     let url: URL
     @Binding var selectedType: StatementType?
@@ -9,15 +18,24 @@ struct DetectionReviewSheet: View {
     @Binding var monthlyPaymentInput: String
     @Binding var aprPercentInput: String
     @Binding var balanceInput: String
+    let importedTypicalPayment: Decimal?
+    let importedAPRFraction: Decimal?
+    let importedAPRScale: Int?
+    let importedBalance: Decimal?
+    let importedBankBalanceSummaries: [ImportedBankBalanceSummary]
+    @Binding var detectedAccounts: [DetectedAccountSelection]
     let account: Account?
     let latestBalance: Decimal?
     @Binding var isQuickIngesting: Bool
-    let onSave: (IntakeDetection, URL) -> Void
+    let onSave: (IntakeDetection, URL, [DetectedAccountSelection]) -> Void
     let onDiscard: () -> Void
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     // Local payoff state
     @State private var computedPayoffDate: Date? = nil
     @State private var nonReducingPayment: Bool = false
+    @State private var showPDFSheet = false
 
     // Focus management
     @FocusState private var focusedField: FocusedField?
@@ -28,34 +46,79 @@ struct DetectionReviewSheet: View {
         case endingBalance
     }
 
+    struct ImportedBankBalanceSummary: Identifiable {
+        let id: String
+        let label: String
+        let beginningBalance: Decimal?
+        let endingBalance: Decimal?
+    }
+
+    private var isCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
+    private func splitColumnWidths(for availableWidth: CGFloat) -> (left: CGFloat, right: CGFloat)? {
+        guard !isCompactLayout && availableWidth >= 680 else { return nil }
+
+        let dividerWidth: CGFloat = 1
+        let preferredLeftRatio: CGFloat = availableWidth < 860 ? 0.5 : 0.42
+        let leftWidth = min(max(availableWidth * preferredLeftRatio, 300), 440)
+        let rightWidth = availableWidth - leftWidth - dividerWidth
+
+        guard rightWidth >= 240 else { return nil }
+        return (left: leftWidth, right: rightWidth)
+    }
+
     var body: some View {
         NavigationStack {
-            ZStack {
-                HStack(spacing: 0) {
-                    leftColumn
-                        .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
-                        .padding()
+            GeometryReader { geometry in
+                ZStack {
+                    if let splitWidths = splitColumnWidths(for: geometry.size.width) {
+                        HStack(spacing: 0) {
+                            ScrollView {
+                                leftColumn
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    .padding()
+                            }
+                            .frame(width: splitWidths.left, alignment: .topLeading)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
 
-                    Divider()
+                            Divider()
 
-                    PDFPreview(url: url)
-                        .frame(minWidth: 400, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
-                        .background(.quaternary.opacity(0.1))
-                }
+                            PDFPreview(url: url)
+                                .frame(width: splitWidths.right)
+                                .frame(maxHeight: .infinity)
+                                .background(.quaternary.opacity(0.1))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                leftColumn
+                                    .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                if isQuickIngesting {
-                    Color.black.opacity(0.25).ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .controlSize(.large)
-                        Text("Ingesting…")
-                            .font(.headline)
+                                Button("View PDF") { showPDFSheet = true }
+                                    .buttonStyle(.borderedProminent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding()
+                        }
                     }
-                    .padding(20)
-                    .background(.ultraThickMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(radius: 12)
+
+                    if isQuickIngesting {
+                        Color.black.opacity(0.25).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .controlSize(.large)
+                            Text("Ingesting…")
+                                .font(.headline)
+                        }
+                        .padding(20)
+                        .background(.ultraThickMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(radius: 12)
+                    }
                 }
             }
             .navigationTitle("Import Ready")
@@ -66,11 +129,24 @@ struct DetectionReviewSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveAction() }
+                        .disabled(isSaveDisabled)
                 }
             }
             .onAppear { prefillAndCompute() }
             .onChange(of: focusedField) { oldValue, newValue in
                 handleFocusChange(from: oldValue, to: newValue)
+            }
+            .sheet(isPresented: $showPDFSheet) {
+                NavigationStack {
+                    PDFPreview(url: url)
+                        .navigationTitle("View PDF")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showPDFSheet = false }
+                            }
+                        }
+                }
             }
         }
     }
@@ -143,18 +219,60 @@ struct DetectionReviewSheet: View {
                 }
             }
 
-            // Payoff estimate
-            if let acct = account, shouldShowPayoff(for: acct) {
-                payoffSection(account: acct)
+            if selectedType == .bank {
+                detectedAccountsSection
+                bankingBalancesSection
+            } else if shouldShowPayoff {
+                payoffSection(account: account)
             }
 
             Spacer()
         }
     }
 
+    private var isSaveDisabled: Bool {
+        !detectedAccounts.isEmpty && !detectedAccounts.contains(where: \.shouldImport)
+    }
+
+    @ViewBuilder
+    private var detectedAccountsSection: some View {
+        if !detectedAccounts.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Divider().padding(.top, 4)
+
+                Text("Detected Accounts")
+                    .font(.headline)
+
+                ForEach($detectedAccounts) { $selection in
+                    HStack(alignment: .center, spacing: 12) {
+                        Text(selection.label)
+                            .font(.subheadline.weight(.semibold))
+
+                        Spacer()
+
+                        if let endingBalance = selection.endingBalance {
+                            Text(formatCurrency(endingBalance))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Toggle("", isOn: $selection.shouldImport)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Text("Choose which detected account sections to import from this statement.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     // MARK: - Payoff Section
     @ViewBuilder
-    private func payoffSection(account: Account) -> some View {
+    private func payoffSection(account: Account?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider().padding(.top, 4)
 
@@ -215,7 +333,9 @@ struct DetectionReviewSheet: View {
             // Recalculate
             HStack {
                 Button("Recalculate") {
-                    computePayoff(using: account)
+                    if let account {
+                        computePayoff(using: account)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
@@ -225,7 +345,7 @@ struct DetectionReviewSheet: View {
             .padding(.top, 4)
 
             // Message
-            let paymentDecimal: Decimal? = parseDecimalInput(monthlyPaymentInput) ?? account.loanTerms?.paymentAmount
+            let paymentDecimal: Decimal? = parseDecimalInput(monthlyPaymentInput) ?? account?.loanTerms?.paymentAmount
             if let p = paymentDecimal, let date = computedPayoffDate {
                 Text("If you pay \(formatCurrency(p)) each month, this will be paid off on \(date.formatted(date: .abbreviated, time: .omitted)).")
                     .foregroundStyle(.secondary)
@@ -242,41 +362,99 @@ struct DetectionReviewSheet: View {
         }
     }
 
+    private var bankingBalancesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().padding(.top, 4)
+
+            Text("Banking balances")
+                .font(.headline)
+
+            if importedBankBalanceSummaries.isEmpty {
+                if let importedBalance {
+                    LabeledContent("Imported ending balance") {
+                        Text(formatCurrency(importedBalance.magnitude))
+                            .monospacedDigit()
+                    }
+                }
+            } else {
+                ForEach(importedBankBalanceSummaries) { summary in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(summary.label)
+                            .font(.subheadline.weight(.semibold))
+
+                        if let beginningBalance = summary.beginningBalance {
+                            LabeledContent("Beginning balance") {
+                                Text(formatCurrency(beginningBalance))
+                                    .monospacedDigit()
+                            }
+                        }
+
+                        if let endingBalance = summary.endingBalance {
+                            LabeledContent("Ending balance") {
+                                Text(formatCurrency(endingBalance))
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                }
+            }
+
+            if importedBankBalanceSummaries.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Ending balance")
+                    Spacer()
+                    TextField("Amount", text: $balanceInput)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 140)
+#if os(iOS) || os(visionOS)
+                        .keyboardType(.decimalPad)
+#endif
+                        .focused($focusedField, equals: .endingBalance)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            focusedField = .endingBalance
+                            selectAll(.endingBalance)
+                        })
+                }
+            }
+
+            Text("These balances come from the current imported statement.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Actions
     private func saveAction() {
         var det = detection
         det.type = selectedType
         det.institution = editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
-        onSave(det, url)
+        onSave(det, url, detectedAccounts)
     }
 
     private func prefillAndCompute() {
-        guard let acct = account else { return }
-
-        // Monthly payment from terms
-        if monthlyPaymentInput.isEmpty, let p = acct.loanTerms?.paymentAmount {
+        if monthlyPaymentInput.isEmpty, let p = importedTypicalPayment ?? account?.loanTerms?.paymentAmount {
             let nf = currencyFormatter()
             let num = NSDecimalNumber(decimal: p)
             if let s = nf.string(from: num) { monthlyPaymentInput = s }
         }
 
-        // APR % from terms
         if aprPercentInput.isEmpty {
-            let aprNormalized = normalizedAPR(from: acct.loanTerms?.apr)
+            let aprNormalized = importedAPRFraction ?? normalizedAPR(from: account?.loanTerms?.apr)
             if let apr = aprNormalized {
                 let nf = NumberFormatter()
                 nf.numberStyle = .decimal
                 nf.minimumFractionDigits = 2
-                nf.maximumFractionDigits = 2
+                nf.maximumFractionDigits = max(2, importedAPRScale ?? 2)
                 let percent = apr * 100
                 let num = NSDecimalNumber(decimal: percent)
                 if let s = nf.string(from: num) { aprPercentInput = s }
             }
         }
 
-        // Balance from latestBalance
         if balanceInput.isEmpty {
-            if let bal = latestBalance {
+            if selectedType == .bank, !importedBankBalanceSummaries.isEmpty {
+                balanceInput = ""
+            } else if let bal = importedBalance ?? (selectedType == .bank ? nil : latestBalance) {
                 let nf = currencyFormatter()
                 let absBal = abs(NSDecimalNumber(decimal: bal).doubleValue)
                 let num = NSNumber(value: absBal)
@@ -284,10 +462,24 @@ struct DetectionReviewSheet: View {
             }
         }
 
-        computePayoff(using: acct)
+        if let acct = account {
+            computePayoff(using: acct)
+        }
     }
 
     // MARK: - Helpers
+    private var shouldShowPayoff: Bool {
+        if let account {
+            return shouldShowPayoff(for: account)
+        }
+        switch selectedType {
+        case .creditCard?, .loan?:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func shouldShowPayoff(for account: Account) -> Bool {
         switch account.type {
         case .creditCard, .loan:
@@ -304,6 +496,14 @@ struct DetectionReviewSheet: View {
         case .brokerage:  return "Brokerage"
         case .loan:       return "Loan"
         }
+    }
+
+    private func detectedAccountStatusText(_ selection: DetectedAccountSelection) -> String {
+        let typeText = displayName(for: selection.statementType)
+        if selection.isInactive {
+            return "\(typeText) • Inactive"
+        }
+        return typeText
     }
 
     private func currencyCodeFromSettings() -> String? {
@@ -400,6 +600,7 @@ struct DetectionReviewSheet: View {
         @State var aprPercent: String = "19.99"
         @State var balance: String = "1,200.00"
         @State var isIngesting: Bool = false
+        @State var detectedAccounts: [DetectionReviewSheet.DetectedAccountSelection] = []
 
         var body: some View {
             DetectionReviewSheet(
@@ -411,10 +612,16 @@ struct DetectionReviewSheet: View {
                 monthlyPaymentInput: $monthlyPayment,
                 aprPercentInput: $aprPercent,
                 balanceInput: $balance,
+                importedTypicalPayment: nil,
+                importedAPRFraction: nil,
+                importedAPRScale: nil,
+                importedBalance: nil,
+                importedBankBalanceSummaries: [],
+                detectedAccounts: $detectedAccounts,
                 account: nil,
                 latestBalance: nil,
                 isQuickIngesting: $isIngesting,
-                onSave: { _, _ in },
+                onSave: { _, _, _ in },
                 onDiscard: {}
             )
             .frame(minWidth: 800, minHeight: 600)
@@ -423,4 +630,3 @@ struct DetectionReviewSheet: View {
     return DummySettings()
 }
 #endif
-

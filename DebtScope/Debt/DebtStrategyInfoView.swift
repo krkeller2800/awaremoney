@@ -16,16 +16,36 @@ public struct DebtStrategyInfoView: View {
         Group {
             if useDisclosureStyle {
                 if userCanToggle {
-                    DisclosureGroup(isExpanded: $expandedState) {
-                        content
-                    } label: {
-                        Label(title, systemImage: "info.circle")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button {
+                            withAnimation(.snappy) { expandedState.toggle() }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(title)
+                                Image(systemName: "chevron.right")
+                                    .rotationEffect(.degrees(expandedState ? 90 : 0))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(title)
+                        .accessibilityValue(expandedState ? "Expanded" : "Collapsed")
+                        .accessibilityAddTraits(.isButton)
+
+                        if expandedState {
+                            content
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
                     }
                 } else {
-                    DisclosureGroup(isExpanded: .constant(true)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.down")
+                                .foregroundStyle(.secondary)
+                            Text(title)
+                        }
                         content
-                    } label: {
-                        Label(title, systemImage: "info.circle")
                     }
                 }
             } else {

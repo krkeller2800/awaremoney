@@ -32,6 +32,12 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
         let file = url.lastPathComponent
         let lower = file.lowercased()
         let ext = url.pathExtension.lowercased()
+        let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
+
+        AMLogging.log(
+            "IntakeClassifier: start file=\(file) ext=\(ext) runtime=\(runtime)",
+            component: "Intake"
+        )
 
         // Extension hints
         if ext == "pdf" {
@@ -40,7 +46,10 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             var inst = guessInstitution(from: file)
             var notes: [String] = []
             var pdfHeader: (headerLines: [String], normalizedHeader: String)? = nil
-
+            AMLogging.log(
+                "IntakeClassifier(pdf): filename guesses type=\(String(describing: type)) inst=\(inst ?? "nil") runtime=\(runtime)",
+                component: "Intake"
+            )
             // Fallback: if institution or type not found from filename, try scanning PDF text
             if inst == nil || type == nil {
                 if pdfHeader == nil {
@@ -51,20 +60,66 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
                     #endif
                 }
             }
+            if let ctx = pdfHeader {
+                AMLogging.log(
+                    "IntakeClassifier(pdf): header extracted lines=\(ctx.headerLines.count) normalizedChars=\(ctx.normalizedHeader.count) runtime=\(runtime)",
+                    component: "Intake"
+                )
+            } else {
+                AMLogging.log(
+                    "IntakeClassifier(pdf): header extraction returned nil runtime=\(runtime)",
+                    component: "Intake"
+                )
+            }
             if inst == nil, let ctx = pdfHeader {
                 if let pdfInst = detectInstitutionInPDF(headerLines: ctx.headerLines, normalizedHeader: ctx.normalizedHeader) {
                     inst = pdfInst
                     notes.append("institution-detected-from-pdf-text")
+                    AMLogging.log(
+                        "IntakeClassifier(pdf): institution from header=\(pdfInst) runtime=\(runtime)",
+                        component: "Intake"
+                    )
+                }
+            }
+            if inst == nil, let fullText = PDFTextExtractor.extractText(from: url) {
+                let fullLines = fullText.components(separatedBy: .newlines)
+                let normalizedFullText = normalizedToken(fullText)
+                if let pdfInst = detectInstitutionInPDF(headerLines: fullLines, normalizedHeader: normalizedFullText) {
+                    inst = pdfInst
+                    notes.append("institution-detected-from-full-pdf-text")
+                    AMLogging.log(
+                        "IntakeClassifier(pdf): institution from full text=\(pdfInst) lines=\(fullLines.count) chars=\(fullText.count) runtime=\(runtime)",
+                        component: "Intake"
+                    )
                 }
             }
             if type == nil, let ctx = pdfHeader {
                 if let pdfType = detectTypeInPDF(headerLines: ctx.headerLines, normalizedHeader: ctx.normalizedHeader) {
                     type = pdfType
                     notes.append("type-detected-from-pdf-text")
+                    AMLogging.log(
+                        "IntakeClassifier(pdf): type from header=\(String(describing: pdfType)) runtime=\(runtime)",
+                        component: "Intake"
+                    )
+                }
+            }
+            if type == nil, let fullText = PDFTextExtractor.extractText(from: url) {
+                let fullLines = fullText.components(separatedBy: .newlines)
+                let normalizedFullText = normalizedToken(fullText)
+                if let pdfType = detectTypeInPDF(headerLines: fullLines, normalizedHeader: normalizedFullText) {
+                    type = pdfType
+                    notes.append("type-detected-from-full-pdf-text")
+                    AMLogging.log(
+                        "IntakeClassifier(pdf): type from full text=\(String(describing: pdfType)) lines=\(fullLines.count) chars=\(fullText.count) runtime=\(runtime)",
+                        component: "Intake"
+                    )
                 }
             }
 
-            AMLogging.log("IntakeClassifier(pdf): file=\(file) type=\(String(describing: type)) inst=\(inst ?? "nil")", component: "Intake")
+            AMLogging.log(
+                "IntakeClassifier(pdf): final file=\(file) type=\(String(describing: type)) inst=\(inst ?? "nil") notes=\(notes) runtime=\(runtime)",
+                component: "Intake"
+            )
             let confidence: Double
             if inst != nil {
                 // We found an institution (either from filename or PDF), bump confidence a bit
@@ -163,7 +218,10 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             ("citibank", "Citi"),
             ("citi", "Citi"),
             ("chase", "Chase"),
-            ("sofi", "SoFi")
+            ("sofi", "SoFi"),
+            ("communitychoice", "Community Choice"),
+            ("sloanservicing", "Sloan Servicing"),
+            ("sloan", "Sloan Servicing")
         ]
     }
 
@@ -181,10 +239,27 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             "investment",
             "mortgage",
             "loan",
-            "checking",
-            "savings",
             "visa",
             "mastercard"
+        ]
+    }
+
+    private func bankContextTokensNormalized() -> [String] {
+        return [
+            "account",
+            "accountsummary",
+            "balance",
+            "balancesummary",
+            "beginningbalance",
+            "checkingsummary",
+            "consolidatedbalancesummary",
+            "deposit",
+            "endingbalance",
+            "savingssummary",
+            "totalchecking",
+            "totalsavings",
+            "transactiondetail",
+            "withdrawal"
         ]
     }
 
@@ -204,14 +279,116 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
     private func strongInstitutionPhrasesNormalized() -> [(String, String)] {
             // Aggressively normalized (no spaces, dashes, underscores, commas, or periods; lowercase)
             // Use for exact-phrase strong signals in headers/contact blocks
-            return [
-                ("sofibankna", "SoFi"),
-                ("wwwsoficom", "SoFi"),
-                // Additions for Chase to help true positives
-                ("jpmorganchase", "Chase"),
-                ("wwwchasecom", "Chase")
-            ]
+        return [
+            ("sofibankna", "SoFi"),
+            ("soficom", "SoFi"),
+            ("wwwsoficom", "SoFi"),
+            ("communitychoice", "Community Choice"),
+            ("communitychoicecom", "Community Choice"),
+            ("sloanservicing", "Sloan Servicing"),
+            ("sloanservicingcom", "Sloan Servicing"),
+            // Additions for Chase to help true positives
+            ("jpmorganchase", "Chase"),
+            ("chasecom", "Chase"),
+            ("wwwchasecom", "Chase")
+        ]
+    }
+
+    private func domainSuffixTokens() -> [String] {
+        [
+            "com",
+            "net",
+            "org",
+            "bank",
+            "loan",
+            "mortgage",
+            "finance",
+            "financial",
+            "credit"
+        ]
+    }
+
+    private func ignoredDomainLabelsNormalized() -> Set<String> {
+        [
+            "account",
+            "accounts",
+            "app",
+            "consumer",
+            "customerservice",
+            "ebill",
+            "help",
+            "home",
+            "login",
+            "mail",
+            "my",
+            "online",
+            "payment",
+            "portal",
+            "secure",
+            "service",
+            "support",
+            "web",
+            "www",
+            "www2"
+        ]
+    }
+
+    private func displayNameFromDomainLabel(_ label: String) -> String {
+        label
+            .split(separator: "-")
+            .map { part in
+                let lower = part.lowercased()
+                guard let first = lower.first else { return "" }
+                return String(first).uppercased() + lower.dropFirst()
+            }
+            .joined(separator: " ")
+    }
+
+    private func detectInstitutionFromDomain(lines: [String]) -> String? {
+        let suffixPattern = domainSuffixTokens()
+            .map(NSRegularExpression.escapedPattern(for:))
+            .joined(separator: "|")
+        let pattern = "(?i)\\b(?:https?://)?(?:www\\d*\\.)?([a-z0-9-]{3,})\\.(" + suffixPattern + ")\\b"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        var counts: [String: Int] = [:]
+        var displayNames: [String: String] = [:]
+
+        for line in lines.prefix(120) {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            let matches = regex.matches(in: line, options: [], range: range)
+            if matches.isEmpty {
+                continue
+            }
+
+            for match in matches {
+                guard let labelRange = Range(match.range(at: 1), in: line) else { continue }
+
+                let label = String(line[labelRange])
+                let normalizedLabel = normalizedToken(label)
+                if ignoredDomainLabelsNormalized().contains(normalizedLabel) {
+                    continue
+                }
+
+                let display = knownInstitutions().first(where: {
+                    normalizedLabel.contains($0.0) || $0.0.contains(normalizedLabel)
+                })?.1 ?? displayNameFromDomainLabel(label)
+
+                counts[normalizedLabel, default: 0] += 1
+                displayNames[normalizedLabel] = display
+            }
         }
+
+        guard let best = counts.max(by: { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.key > rhs.key
+            }
+            return lhs.value < rhs.value
+        }) else {
+            return nil
+        }
+
+        return displayNames[best.key]
+    }
 
     private func creditCardSummaryTokensNormalized() -> [String] {
         // Common summary headers on credit card statements (normalized: no spaces/dashes/underscores, lowercase)
@@ -345,23 +522,34 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
     }
 
     private func isTypeContextPresent(needle: String, lines: [String]) -> Bool {
-        let titles = titleTokensNormalized()
+        let contextTokens: [String]
+        if needle == "checking" || needle == "savings" || needle == "depositaccount" {
+            contextTokens = bankContextTokensNormalized()
+        } else {
+            contextTokens = titleTokensNormalized()
+        }
         let maxHeaderLines = 120
         let limit = min(lines.count, maxHeaderLines)
         if limit > 0 {
             for i in 0..<limit {
                 let lnNorm = normalizedToken(lines[i])
                 if lnNorm.contains(needle) {
-                    // Same line contains a title token
-                    for token in titles { if lnNorm.contains(token) { return true } }
-                    // Or one of the next two lines contains a title token
+                    // Same line contains a context token
+                    for token in contextTokens where token != needle {
+                        if lnNorm.contains(token) { return true }
+                    }
+                    // Or one of the next two lines contains a context token
                     if i + 1 < lines.count {
                         let next1 = normalizedToken(lines[i+1])
-                        for token in titles { if next1.contains(token) { return true } }
+                        for token in contextTokens where token != needle {
+                            if next1.contains(token) { return true }
+                        }
                     }
                     if i + 2 < lines.count {
                         let next2 = normalizedToken(lines[i+2])
-                        for token in titles { if next2.contains(token) { return true } }
+                        for token in contextTokens where token != needle {
+                            if next2.contains(token) { return true }
+                        }
                     }
                 }
             }
@@ -524,7 +712,7 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
 
             for (needle, display) in knownInstitutions() {
                 // Require word boundary for ambiguous short tokens to avoid 'purchase' -> 'chase' and 'solicitation' -> 'citi'
-                let requiresWordBoundary = (needle == "chase" || needle == "citi")
+                let requiresWordBoundary = (needle == "chase" || needle == "citi" || needle == "sofi")
                 let appearsInNormalized = normalizedHeader.contains(needle)
                 let appearsAsWord = containsWord(needle, in: rawLowerHeader)
 
@@ -558,7 +746,10 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
                     }
                 }
             }
-            return bestDisplay
+            if let bestDisplay {
+                return bestDisplay
+            }
+            return detectInstitutionFromDomain(lines: headerLines)
         }
 
     private func knownTypeTokens() -> [(String, StatementType)] {
@@ -570,11 +761,6 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             ("cardaccount", .creditCard),
             ("visa", .creditCard),
             ("mastercard", .creditCard),
-
-            // Bank/deposit accounts (generic)
-            ("checking", .bank),
-            ("savings", .bank),
-            ("depositaccount", .bank),
 
             // Loans (generic)
             ("loan", .loan),
@@ -591,16 +777,78 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
         ]
     }
 
+    private func hasStrongBankSummaryContext(in normalizedAggressive: String) -> Bool {
+        if normalizedAggressive.contains("totalchecking") || normalizedAggressive.contains("totalsavings") {
+            return true
+        }
+        if normalizedAggressive.contains("checkingsummary") || normalizedAggressive.contains("savingssummary") {
+            return true
+        }
+        if normalizedAggressive.contains("consolidatedbalancesummary")
+            && (normalizedAggressive.contains("checking") || normalizedAggressive.contains("savings")) {
+            return true
+        }
+        if normalizedAggressive.contains("checking&savingsaccountbeginningbalance")
+            || normalizedAggressive.contains("checkingandsavingsaccountbeginningbalance") {
+            return true
+        }
+        return false
+    }
+
     private func detectTypeInPDF(headerLines: [String], normalizedHeader: String) -> StatementType? {
         for (needle, t) in knownTypeTokens() {
             if normalizedHeader.contains(needle) && isTypeContextPresent(needle: needle, lines: headerLines) {
+                AMLogging.log(
+                    "IntakeClassifier.detectTypeInPDF: matched token=\(needle) type=\(String(describing: t)) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                    component: "Intake"
+                )
                 return t
             }
         }
+        let normalizedAggressive = normalizedHeader
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let hasLoanSummary = normalizedAggressive.contains("totalloans")
+            || normalizedAggressive.contains("paymentof")
+            || normalizedAggressive.contains("endingbalance")
+        let hasLoanTerms = normalizedAggressive.contains("annualpercentagerate")
+            || normalizedAggressive.contains("interestrate")
+            || normalizedAggressive.contains("principal")
+            || normalizedAggressive.contains("interestpaidytd")
+        let hasStrongBankSummary = hasStrongBankSummaryContext(in: normalizedAggressive)
+        AMLogging.log(
+            "IntakeClassifier.detectTypeInPDF: loanSummary=\(hasLoanSummary) loanTerms=\(hasLoanTerms) strongBankSummary=\(hasStrongBankSummary) headerLines=\(headerLines.count) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            component: "Intake"
+        )
+        if hasStrongBankSummary {
+            AMLogging.log(
+                "IntakeClassifier.detectTypeInPDF: returning bank from strong summary context runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Intake"
+            )
+            return .bank
+        }
+        if hasLoanSummary && hasLoanTerms {
+            AMLogging.log(
+                "IntakeClassifier.detectTypeInPDF: returning loan from heuristic runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Intake"
+            )
+            return .loan
+        }
         // Weak CC signal: summary headers near titles in the header region
         if isCCSummaryContextPresent(lines: headerLines) {
+            AMLogging.log(
+                "IntakeClassifier.detectTypeInPDF: returning creditCard from summary context runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Intake"
+            )
             return .creditCard
         }
+        AMLogging.log(
+            "IntakeClassifier.detectTypeInPDF: no type match runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            component: "Intake"
+        )
         return nil
     }
     #else

@@ -10,6 +10,13 @@ import SwiftData
 import UIKit
 
 struct ReviewImportView: View {
+    private struct ImportedBankBalanceSummary: Identifiable {
+        let id: String
+        let label: String
+        let beginningBalance: Decimal?
+        let endingBalance: Decimal?
+    }
+
     var staged: StagedImport
     @ObservedObject var vm: ImportViewModel
     @Environment(\.modelContext) private var modelContext
@@ -471,6 +478,36 @@ struct ReviewImportView: View {
                     childIsEditing = value
                 }
                 .id("routingSectionTop")
+
+                if !importedBankBalanceSummaries.isEmpty {
+                    Section {
+                        ForEach(importedBankBalanceSummaries) { summary in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(summary.label)
+                                    .font(.subheadline.weight(.semibold))
+
+                                if let beginningBalance = summary.beginningBalance {
+                                    LabeledContent("Beginning balance") {
+                                        Text(currencyFormatter.string(from: NSDecimalNumber(decimal: beginningBalance)) ?? "\(beginningBalance)")
+                                            .monospacedDigit()
+                                    }
+                                }
+
+                                if let endingBalance = summary.endingBalance {
+                                    LabeledContent("Ending balance") {
+                                        Text(currencyFormatter.string(from: NSDecimalNumber(decimal: endingBalance)) ?? "\(endingBalance)")
+                                            .monospacedDigit()
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    } header: {
+                        Text("Statement Balances")
+                    } footer: {
+                        Text("These balances are grouped by account from the imported statement.")
+                    }
+                }
               
                 // Loan Terms — single place to edit Typical Payment and APR
                 if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
@@ -1087,9 +1124,20 @@ struct ReviewImportView: View {
             AMLogging.log("ReviewImportView: No institution prefill available", component: "ReviewImportView")
         }
 
-        // Default routing mode: if an existing account at the institution is present, start in Existing; otherwise Create New
+        // Default routing mode from routing plans, not just institution presence.
+        // If all clusters resolve to create-new, start in Create New even when the institution
+        // already has unrelated accounts.
         let chosenInst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !chosenInst.isEmpty {
+        let routingService = ImportRoutingService()
+        let routingResult = routingService.buildPlans(staged: staged, context: modelContext)
+        let allPlansCreateNew = !routingResult.plans.isEmpty && routingResult.plans.allSatisfy { plan in
+            if case .createNew = plan.candidate.action { return true }
+            return false
+        }
+        if allPlansCreateNew {
+            routingGlobalTargetMode = 1
+            AMLogging.log("ReviewImportView: Defaulted routing mode from plans — all clusters create new", component: "ReviewImportView")
+        } else if !chosenInst.isEmpty {
             let hasAtInst = accounts.contains { acct in
                 (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(chosenInst) == .orderedSame
             }
@@ -1269,6 +1317,72 @@ struct ReviewImportView: View {
         case .cash: return "Cash"
         case .property: return "Property"
         case .other: return "Other"
+        }
+    }
+
+    private var importedBankBalanceSummaries: [ImportedBankBalanceSummary] {
+        guard vm.newAccountType == .checking || vm.newAccountType == .savings else { return [] }
+        guard let balances = vm.staged?.balances.filter(\.include), !balances.isEmpty else { return [] }
+
+        let grouped = Dictionary(grouping: balances) { bankSummaryKey(for: $0.sourceAccountLabel) }
+        let orderedKeys = grouped.keys.sorted { lhs, rhs in
+            bankSummarySortOrder(for: lhs) < bankSummarySortOrder(for: rhs)
+        }
+
+        return orderedKeys.compactMap { key in
+            guard let groupedBalances = grouped[key], !groupedBalances.isEmpty else { return nil }
+            let sortedBalances = groupedBalances.sorted { lhs, rhs in
+                if lhs.asOfDate == rhs.asOfDate {
+                    return lhs.balance < rhs.balance
+                }
+                return lhs.asOfDate < rhs.asOfDate
+            }
+
+            let beginningBalance: Decimal? = sortedBalances.count > 1 ? sortedBalances.first?.balance : nil
+            let endingBalance = sortedBalances.last?.balance
+
+            return ImportedBankBalanceSummary(
+                id: key,
+                label: bankSummaryLabel(for: key),
+                beginningBalance: beginningBalance,
+                endingBalance: endingBalance
+            )
+        }
+    }
+
+    private func bankSummaryKey(for rawLabel: String?) -> String {
+        let trimmed = rawLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return "default" }
+
+        let lower = trimmed.lowercased()
+        if lower.contains("checking") { return "checking" }
+        if lower.contains("savings") { return "savings" }
+        return lower
+    }
+
+    private func bankSummaryLabel(for key: String) -> String {
+        switch key {
+        case "checking":
+            return "Checking"
+        case "savings":
+            return "Savings"
+        case "default":
+            return "Account"
+        default:
+            return key.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+        }
+    }
+
+    private func bankSummarySortOrder(for key: String) -> Int {
+        switch key {
+        case "checking":
+            return 0
+        case "savings":
+            return 1
+        case "default":
+            return 99
+        default:
+            return 50
         }
     }
     
@@ -1674,4 +1788,3 @@ private struct ChecklistRowButtonStyle: ButtonStyle {
             .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
     }
 }
-

@@ -12,6 +12,8 @@ private struct AccountValue: Identifiable {
 }
 
 struct NetWorthView: View {
+    var embeddedInNavigation: Bool = false
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @EnvironmentObject private var settings: SettingsStore
@@ -35,14 +37,25 @@ struct NetWorthView: View {
                     dashboardDetail
                 }
             } else {
-                NavigationStack {
-                    primaryList
-                        .navigationTitle("Net Worth")
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                Group {
+                    if embeddedInNavigation {
+                        primaryList
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                                }
                             }
+                    } else {
+                        NavigationStack {
+                            primaryList
+                                .navigationTitle("Net Worth")
+                                .toolbar {
+                                    ToolbarItem(placement: .topBarLeading) {
+                                        PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                                    }
+                                }
                         }
+                    }
                 }
 //                .sheet(isPresented: $showNetWorthChart) {
 //                    PortraitOnlyWrapper(content: NetWorthDashboardSheet())
@@ -165,7 +178,7 @@ struct NetWorthView: View {
             NetWorthKPIsView()
             HStack {
                 Spacer()
-                NetWorthChartView(showsDoneButton: showsDoneButton)
+                NetWorthChartView()
                     .frame(width: chartSize, height: chartSize)
                 Spacer()
             }
@@ -443,6 +456,8 @@ private struct NetWorthKPIsView: View {
 }
 
 private struct NetWorthDashboardSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -457,7 +472,7 @@ private struct NetWorthDashboardSheet: View {
                         NetWorthKPIsView()
                         HStack {
                             Spacer()
-                            NetWorthChartView(showsDoneButton: true)
+                            NetWorthChartView()
                                 .frame(width: chartSize, height: chartSize)
                             Spacer()
                         }
@@ -471,27 +486,26 @@ private struct NetWorthDashboardSheet: View {
             .scrollIndicators(.visible)
             .navigationTitle("Net Worth")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    PlanToolbarButton("Done") { dismiss() }
+                }
+            }
         }
     }
 }
 
-private final class PortraitNavigationController: UINavigationController {
+private final class PortraitHostingController<Content: View>: UIHostingController<Content> {
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            return .portrait
-        } else {
-            return .all
-        }
+        UIDevice.current.userInterfaceIdiom == .phone ? .portrait : .all
     }
+
     override var shouldAutorotate: Bool {
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            return false
-        } else {
-            return true
-        }
+        UIDevice.current.userInterfaceIdiom != .phone
     }
+
     override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
-        return .portrait
+        .portrait
     }
 }
 
@@ -499,14 +513,10 @@ private struct PortraitOnlyWrapper<Content: View>: UIViewControllerRepresentable
     let content: Content
 
     func makeUIViewController(context: Context) -> UIViewController {
-        let root = UIHostingController(rootView: content)
-        let nav = PortraitNavigationController(rootViewController: root)
-        nav.modalPresentationStyle = .fullScreen
-        return nav
+        let vc = PortraitHostingController(rootView: content)
+        vc.modalPresentationStyle = .fullScreen
+        return vc
     }
 
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        // No-op; content updates are handled by SwiftUI hosting
-    }
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }
-

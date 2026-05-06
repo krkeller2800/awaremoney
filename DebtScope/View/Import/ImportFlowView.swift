@@ -64,11 +64,17 @@ struct ImportFlowView: View {
     }
 
     private func handlePendingURLWithIntake(_ url: URL) {
+        let stagedURL = ImportFileStaging.stageToCaches(url)
         externalImportActive = true
-        pendingExternalURL = url
+        pendingExternalURL = stagedURL
         showPaywall = false
         Task {
-            let detection = await intakeClassifier.classify(url: url)
+            let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
+            AMLogging.log(
+                "ImportFlowView: begin intake file=\(stagedURL.lastPathComponent) runtime=\(runtime)",
+                component: "Import"
+            )
+            let detection = await intakeClassifier.classify(url: stagedURL)
             let mapped: ExternalDocKind? = {
                 switch detection.type {
                 case .some(.creditCard): return .creditCard
@@ -87,14 +93,14 @@ struct ImportFlowView: View {
                 }
             }
             if let kind = mapped {
-                AMLogging.always("ImportFlowView: Intake classified external URL '" + url.lastPathComponent + "' as \(String(describing: detection.type)) inst=\(detection.institution ?? "nil") conf=\(detection.confidence)", component: "Import")
+                AMLogging.always("ImportFlowView: Intake classified external URL '" + stagedURL.lastPathComponent + "' as \(String(describing: detection.type)) inst=\(detection.institution ?? "nil") conf=\(detection.confidence) runtime=\(runtime)", component: "Import")
                 // Proceed directly using the mapped kind
-                applyExternal(kind: kind, url: url)
+                applyExternal(kind: kind, url: stagedURL)
                 importRouter.pendingURL = nil
                 pendingExternalURL = nil
                 externalImportActive = false
             } else {
-                AMLogging.always("ImportFlowView: Intake could not determine statement type for '" + url.lastPathComponent + "' — presenting doc kind chooser", component: "Import")
+                AMLogging.always("ImportFlowView: Intake could not determine statement type for '" + stagedURL.lastPathComponent + "' — presenting doc kind chooser runtime=\(runtime)", component: "Import")
                 showDocKindSheet = true
             }
         }

@@ -10,10 +10,8 @@ struct NetWorthChartView: View {
         var id: String { rawValue }
     }
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
-    var showsDoneButton: Bool = true
 
     @State private var slices: [AccountSlice] = []
     @State private var totalAssetsValue: Decimal = 0
@@ -22,36 +20,25 @@ struct NetWorthChartView: View {
     @State private var initializedMode = false
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading) {
-                Picker("View", selection: $mode) {
-                    ForEach(ChartMode.allCases) { m in
-                        Text(m.rawValue).tag(m)
-                    }
+        VStack(alignment: .leading) {
+            Picker("View", selection: $mode) {
+                ForEach(ChartMode.allCases) { m in
+                    Text(m.rawValue).tag(m)
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
 
-                if slices.isEmpty {
-                    emptyState
-                } else {
-                    chart
-                }
+            if slices.isEmpty {
+                emptyState
+            } else {
+                chart
             }
-            .navigationTitle("Net Worth")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if showsDoneButton {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        PlanToolbarButton("Done") { dismiss() }
-                    }
-                }
-            }
-            .task { await determineInitialMode(); await load() }
-            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in Task { await load() } }
-            .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in Task { await load() } }
-            .onChange(of: mode) { Task { await load() } }
         }
+        .task { await determineInitialMode(); await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in Task { await load() } }
+        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in Task { await load() } }
+        .onChange(of: mode) { Task { await load() } }
     }
     
     private var emptyState: some View {
@@ -302,4 +289,3 @@ private struct AccountSlice: Identifiable {
     let type: Account.AccountType
     var doubleValue: Double { NSDecimalNumber(decimal: value).doubleValue }
 }
-

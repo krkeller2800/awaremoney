@@ -79,6 +79,9 @@ struct DebtProjectionChartView: View {
         VStack(alignment: .leading) {
             VStack(alignment: .leading) {
                 HStack {
+                    
+                    Spacer()
+                    
                     Button {
                         if let prev = previousAvailableYear(from: selectedYear, minYear: minSelectableYear) {
                             selectedYear = prev
@@ -89,13 +92,9 @@ struct DebtProjectionChartView: View {
                     .accessibilityLabel("Previous year")
                     .disabled(previousAvailableYear(from: selectedYear, minYear: minSelectableYear) == nil)
                     
-                    Spacer()
-                    
                     Text(String(selectedYear))
                         .font(.headline)
                         .accessibilityAddTraits(.isHeader)
-                    
-                    Spacer()
                     
                     Button {
                         selectedYear += 1
@@ -103,9 +102,13 @@ struct DebtProjectionChartView: View {
                         Image(systemName: "chevron.right")
                     }
                     .accessibilityLabel("Next year")
+                    
+                    Spacer()
+                    
                 }
                 .padding(.horizontal)
-                
+
+               
                 let displayBudget = max(Decimal(0), effectiveBudget(for: monthlyNet, strategy: selectedStrategy))
                 
                 Text("Budget: \(formatCurrencyDecimal(displayBudget)) • Strategy: \(strategyDisplayName(selectedStrategy))")
@@ -189,6 +192,7 @@ struct DebtProjectionChartView: View {
                             .padding()
                     }
                 }
+                .padding(.horizontal)
             }
             .background(
                 GeometryReader { g in
@@ -311,6 +315,13 @@ struct DebtProjectionChartView: View {
                         }
                     }
                 }
+            }
+            .chartPlotStyle { plotArea in
+                plotArea
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
+                    .padding(.leading, 8)
+                    .padding(.trailing, 8)
             }
             .chartLegend(.hidden)
             .padding(.horizontal)

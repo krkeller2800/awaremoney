@@ -5,12 +5,15 @@ import UniformTypeIdentifiers
 struct DebtPayoffDetailView: View {
     @ObservedObject var vm: ImportViewModel
     let coordinator: StatementImportCoordinator
+    @Binding var externalSelectedAccountID: UUID?
+    let onRouteImport: (StatementType?, UUID?) -> Void
 
     var importAction: () -> Void = {}
     var manualEntryAction: () -> Void = {}
     @Binding var pendingExternal: (url: URL, type: StatementType?, institution: String?)?
 
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
     @State private var showImporter = false
@@ -21,6 +24,7 @@ struct DebtPayoffDetailView: View {
     @State private var selectedAccountID: UUID? = nil
     @State private var lastImportedURL: URL? = nil
     @State private var detectionSheetModel: DetectionSheetModel? = nil
+    @State private var isPreparingDetectionReview = false
     @State private var bankSubtype: QuickIngestAccountType? = nil
     @State private var isQuickIngesting: Bool = false
     @State private var quickIngestError: Error? = nil
@@ -28,6 +32,9 @@ struct DebtPayoffDetailView: View {
     private struct EditingAccount: Identifiable { let id: UUID }
     @State private var editingAccount: EditingAccount? = nil
     @State private var pendingDelete: Account? = nil
+    @State private var importedPreview: ImportedStatementPreview? = nil
+    @State private var detectedAccounts: [DetectionReviewSheet.DetectedAccountSelection] = []
+    @State private var showStatementSheet = false
     // New state for payoff inputs and results
     @State private var ingestedAccount: Account? = nil          // Optional: use if you set this after ingest
     @State private var monthlyPaymentInput: String = ""
@@ -35,6 +42,30 @@ struct DebtPayoffDetailView: View {
     @State private var balanceInput: String = ""                // Current/ending balance
     @State private var computedPayoffDate: Date? = nil
     @State private var nonReducingPayment: Bool = false
+
+    private var manualAddButtonTitle: String {
+        UIDevice.type == "iPhone" ? "Manual" : "Add Manually"
+    }
+
+    private func statementType(for accountType: Account.AccountType) -> StatementType? {
+        switch accountType {
+        case .creditCard:
+            return .creditCard
+        case .loan:
+            return .loan
+        case .checking, .savings, .cash:
+            return .bank
+        case .brokerage:
+            return .brokerage
+        default:
+            return nil
+        }
+    }
+
+    private func routeImportedAccount(_ account: Account?) {
+        guard let account else { return }
+        onRouteImport(statementType(for: account.type), account.id)
+    }
 
     // Should we show payoff for this account?
     private func shouldShowPayoff(for account: Account) -> Bool {
@@ -71,6 +102,22 @@ struct DebtPayoffDetailView: View {
         let id = UUID()
         var detection: IntakeDetection
         var url: URL
+    }
+    private struct ImportedStatementPreview {
+        var institution: String?
+        var statementType: StatementType?
+        var balance: Decimal?
+        var typicalPayment: Decimal?
+        var aprFraction: Decimal?
+        var aprScale: Int?
+        var bankBalanceSummaries: [BankBalanceSummary] = []
+    }
+
+    private struct BankBalanceSummary: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let beginningBalance: Decimal?
+        let endingBalance: Decimal?
     }
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable {
@@ -110,8 +157,19 @@ struct DebtPayoffDetailView: View {
     // Resolve the account to use for payoff and prefill logic
     private func currentAccount() -> Account? {
         if let ing = ingestedAccount { return ing }
-        if let sel = selectedAccountID { return accounts.first(where: { $0.id == sel }) }
+        if let sel = selectedAccountID { return debtAccounts.first(where: { $0.id == sel }) }
         return nil
+    }
+
+    private var debtAccounts: [Account] {
+        accounts.filter {
+            switch $0.type {
+            case .creditCard, .loan:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private static let importTypes: [UTType] = {
@@ -126,7 +184,7 @@ struct DebtPayoffDetailView: View {
         HStack(spacing: 0) {
             // Left column: replaced with QAccountsListView
             QAccountsListView(
-                accounts: accounts,
+                accounts: debtAccounts,
                 selectedAccountID: $selectedAccountID,
                 onEdit: { account in
                     editingAccount = EditingAccount(id: account.id)
@@ -159,50 +217,122 @@ struct DebtPayoffDetailView: View {
         .frame(maxWidth: .infinity, minHeight: 300)
     }
 
-    // Stages a URL into the app's Caches directory so it remains readable across contexts
-    private func stageURLToCaches(_ sourceURL: URL) -> URL {
-        let fm = FileManager.default
-        do {
-            let caches = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let dest = caches.appendingPathComponent(sourceURL.lastPathComponent)
-
-            // If the source is already the same as our destination, just return it
-            // Avoid removing/copying when paths are identical (prevents accidental deletion)
-            let srcStd = sourceURL.standardizedFileURL
-            let destStd = dest.standardizedFileURL
-            if srcStd.path == destStd.path {
-                return destStd
-            }
-
-            // Replace any existing file at destination
-            try? fm.removeItem(at: destStd)
-
-            // Access the security-scoped resource if needed while we copy/read
-            let granted = sourceURL.startAccessingSecurityScopedResource()
-            defer { if granted { sourceURL.stopAccessingSecurityScopedResource() } }
-
-            // Try a direct file copy first
-            do {
-                try fm.copyItem(at: sourceURL, to: destStd)
-                return destStd
-            } catch {
-                // If copy fails (e.g., due to sandbox), fall back to reading/writing data
-                do {
-                    let data = try Data(contentsOf: sourceURL)
-                    try data.write(to: destStd, options: .atomic)
-                    return destStd
-                } catch {
-                    // Fall back to the original URL if all else fails
-                    return sourceURL
+    @ViewBuilder
+    private var compactDebtView: some View {
+        VStack(spacing: 12) {
+            QAccountsListView(
+                accounts: debtAccounts,
+                selectedAccountID: $selectedAccountID,
+                onEdit: { account in
+                    editingAccount = EditingAccount(id: account.id)
+                },
+                onDeleteConfirmed: { account in
+                    deleteAccount(account)
+                },
+                onSelectionChanged: { id in
+                    if let id { self.updateLastImportedURL(for: id) }
                 }
+            )
+            .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+
+            if currentAccount() != nil {
+                Button(statementActionTitle) {
+                    showStatementSheet = true
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-        } catch {
-            // Could not resolve caches directory; fall back to the original URL
-            return sourceURL
+        }
+        .padding(.horizontal)
+    }
+
+    private var statementActionTitle: String {
+        lastImportedURL != nil ? "View PDF" : "View Trans"
+    }
+
+    @ViewBuilder
+    private var contentArea: some View {
+        if horizontalSizeClass == .compact {
+            compactDebtView
+        } else {
+            columnsView
         }
     }
 
+    @ViewBuilder
+    private var statementSheetContent: some View {
+        if let url = lastImportedURL {
+            NavigationStack {
+                PDFPreview(url: url)
+                    .navigationTitle("View PDF")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showStatementSheet = false }
+                        }
+                    }
+            }
+        } else if let account = currentAccount() {
+            NavigationStack {
+                AccountTransactionsListView(account: account)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showStatementSheet = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detectionReviewSheetContent(model: DetectionSheetModel) -> some View {
+        let acct = currentAccount()
+        let latest = acct.flatMap { latestBalance(for: $0) }
+        let importedBankSummaries = (importedPreview?.bankBalanceSummaries ?? []).map { summary in
+            DetectionReviewSheet.ImportedBankBalanceSummary(
+                id: summary.id,
+                label: summary.label,
+                beginningBalance: summary.beginningBalance,
+                endingBalance: summary.endingBalance
+            )
+        }
+        DetectionReviewSheet(
+            detection: model.detection,
+            url: model.url,
+            selectedType: $selectedType,
+            editedInstitution: $editedInstitution,
+            bankSubtype: $bankSubtype,
+            monthlyPaymentInput: $monthlyPaymentInput,
+            aprPercentInput: $aprPercentInput,
+            balanceInput: $balanceInput,
+            importedTypicalPayment: importedPreview?.typicalPayment,
+            importedAPRFraction: importedPreview?.aprFraction,
+            importedAPRScale: importedPreview?.aprScale,
+            importedBalance: importedPreview?.balance,
+            importedBankBalanceSummaries: importedBankSummaries,
+            detectedAccounts: $detectedAccounts,
+            account: acct,
+            latestBalance: latest,
+            isQuickIngesting: $isQuickIngesting,
+            onSave: { det, incomingURL, selections in
+                detectedAccounts = selections
+                openFullImportReview(detection: det, url: incomingURL, selectedDetectedAccounts: selections)
+            },
+            onDiscard: {
+                isPreparingDetectionReview = false
+                detectionSheetModel = nil
+            }
+        )
+    }
+
+    // Stages a URL into the app's Caches directory so it remains readable across contexts
+    private func stageURLToCaches(_ sourceURL: URL) -> URL {
+        ImportFileStaging.stageToCaches(sourceURL)
+    }
+
     private func handleImport(url: URL) {
+        isPreparingDetectionReview = true
         Task {
             // Stage the picked file into the app's caches directory first so it remains readable
             let routedURL = stageURLToCaches(url)
@@ -210,12 +340,19 @@ struct DebtPayoffDetailView: View {
             // Classify the statement using the staged URL to avoid security-scope issues
             let classifier = StatementIntakeClassifier()
             let detection = await classifier.classify(url: routedURL)
-
+            let preview = await extractImportedPreview(from: routedURL, hint: detection.type)
             await MainActor.run {
                 // Pre-fill editable fields
                 self.lastDetection = detection
-                self.editedInstitution = detection.institution ?? ""
-                self.selectedType = detection.type
+                self.editedInstitution = detection.institution ?? preview?.institution ?? ""
+                self.selectedType = (preview?.bankBalanceSummaries.isEmpty == false) ? .bank : resolvedImportedStatementType(
+                    detectionType: detection.type,
+                    previewType: preview?.statementType
+                )
+                self.importedPreview = preview
+                self.detectedAccounts = buildDetectedAccounts(from: preview)
+                self.bankSubtype = nil
+                self.applyImportedPreviewToInputs(preview)
 
                 // Ensure the file importer is dismissed before presenting another sheet
                 self.showImporter = false
@@ -223,9 +360,491 @@ struct DebtPayoffDetailView: View {
                 // Present the review sheet after a short delay to avoid presentation collisions
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     self.detectionSheetModel = DetectionSheetModel(detection: detection, url: routedURL)
+                    self.isPreparingDetectionReview = false
                 }
             }
         }
+    }
+
+    @MainActor
+    private func applyImportedPreviewToInputs(_ preview: ImportedStatementPreview?) {
+        monthlyPaymentInput = ""
+        aprPercentInput = ""
+        balanceInput = ""
+        computedPayoffDate = nil
+        nonReducingPayment = false
+
+        guard let preview else { return }
+
+        if let typicalPayment = preview.typicalPayment {
+            monthlyPaymentInput = AppFormatters.currencyFormatter().string(from: NSDecimalNumber(decimal: typicalPayment)) ?? ""
+        }
+
+        if let apr = preview.aprFraction {
+            let nf = NumberFormatter()
+            nf.numberStyle = .decimal
+            nf.minimumFractionDigits = 2
+            nf.maximumFractionDigits = max(2, preview.aprScale ?? 2)
+            let percent = apr * 100
+            aprPercentInput = nf.string(from: NSDecimalNumber(decimal: percent)) ?? ""
+        }
+
+        if let balance = preview.balance {
+            balanceInput = AppFormatters.currencyFormatter().string(from: NSDecimalNumber(decimal: balance.magnitude)) ?? ""
+        }
+    }
+
+    private func extractImportedPreview(from url: URL, hint: StatementType?) async -> ImportedStatementPreview? {
+        let userOverride: StatementImporter.UserOverride? = {
+            switch hint {
+            case .some(.creditCard): return .creditCard
+            case .some(.loan): return .loan
+            case .some(.brokerage): return .brokerage
+            case .some(.bank): return .bank
+            case .none: return nil
+            }
+        }()
+
+        do {
+            let importer = StatementImporter()
+            let result = try importer.importStatement(from: url, prefer: .transactions, userOverride: userOverride)
+            var augmentedRows = result.rows
+            var fullText: String? = nil
+
+            if url.pathExtension.lowercased() == "pdf",
+               let extractedText = PDFTextExtractor.extractText(from: url) {
+                fullText = extractedText
+                if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: extractedText) {
+                    augmentedRows.append([interestSection])
+                }
+                if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: extractedText) {
+                    augmentedRows.append([balanceSection])
+                }
+                let accountSummaries = PDFTextExtractor.extractAccountSummarySections(from: extractedText)
+                for section in accountSummaries {
+                    augmentedRows.append([section])
+                }
+                augmentedRows.append([extractedText])
+            }
+
+            var staged: StagedImport
+            do {
+                staged = try PDFSummaryParser().parse(rows: augmentedRows, headers: result.headers)
+            } catch {
+                let parser = await MainActor.run {
+                    ImportViewModel.defaultParsers().first { $0.canParse(headers: result.headers) }
+                }
+                guard let parser else { throw error }
+                staged = try parser.parse(rows: augmentedRows, headers: result.headers)
+            }
+
+            if hint == .some(.creditCard) {
+                staged.balances = deduplicateStagedBalancesForCreditCardPreview(staged.balances)
+            } else {
+                staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDayPreview(staged.balances)
+            }
+
+            if hint != .some(.creditCard) && hint != .some(.loan) {
+                for index in staged.balances.indices where staged.balances[index].balance < 0 {
+                    staged.balances[index].balance = -staged.balances[index].balance
+                }
+            }
+
+            if hint == .some(.creditCard),
+               let fullText = PDFTextExtractor.extractText(from: url),
+               let (apr, scale) = PDFTextExtractor.extractPreferredAPR(from: fullText) {
+                for index in staged.balances.indices where staged.balances[index].interestRateAPR == nil || apr < (staged.balances[index].interestRateAPR ?? apr) {
+                    staged.balances[index].interestRateAPR = apr
+                    staged.balances[index].interestRateScale = scale
+                }
+            }
+
+            let latestBalance = staged.balances.sorted { $0.asOfDate > $1.asOfDate }.first
+            let typicalPayment = staged.balances.compactMap(\.typicalPaymentAmount).first(where: { $0 > 0 })
+            let aprFraction = latestBalance?.interestRateAPR ?? staged.balances.compactMap(\.interestRateAPR).first
+            let aprScale = latestBalance?.interestRateScale ?? staged.balances.compactMap(\.interestRateScale).first
+            let combinedText = ([fullText] + augmentedRows.flatMap { $0 }.map(Optional.some))
+                .compactMap { $0 }
+                .joined(separator: "\n")
+            let fallbackInstitution = inferredInstitutionFromParsedText(combinedText)
+            let fallbackType = inferredStatementTypeFromParsedText(
+                combinedText,
+                balances: staged.balances
+            )
+            let bankBalanceSummaries = mergeBankBalanceSummaries(
+                extractConsolidatedBankBalances(from: url) ?? [],
+                extractAccountSectionBankBalances(from: url) ?? []
+            )
+
+            return ImportedStatementPreview(
+                institution: fallbackInstitution,
+                statementType: fallbackType,
+                balance: latestBalance?.balance.magnitude,
+                typicalPayment: typicalPayment,
+                aprFraction: aprFraction,
+                aprScale: aprScale,
+                bankBalanceSummaries: bankBalanceSummaries
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func buildDetectedAccounts(from preview: ImportedStatementPreview?) -> [DetectionReviewSheet.DetectedAccountSelection] {
+        guard let preview else { return [] }
+        return preview.bankBalanceSummaries.map { summary in
+            let detectedType: StatementType = summary.id == "loan" ? .loan : .bank
+            let endingBalance = summary.endingBalance?.magnitude
+            let beginning = summary.beginningBalance?.magnitude ?? .zero
+            let ending = endingBalance ?? .zero
+            let isInactive = beginning == .zero && ending == .zero
+            return DetectionReviewSheet.DetectedAccountSelection(
+                id: summary.id,
+                label: summary.label,
+                statementType: detectedType,
+                endingBalance: endingBalance,
+                isInactive: isInactive,
+                shouldImport: !isInactive
+            )
+        }
+    }
+
+    private func mergeBankBalanceSummaries(_ collections: [BankBalanceSummary]...) -> [BankBalanceSummary] {
+        var merged: [String: BankBalanceSummary] = [:]
+        for collection in collections {
+            for summary in collection {
+                let key = normalizedBankSummaryLabel(summary.id)
+                let existing = merged[key]
+                merged[key] = BankBalanceSummary(
+                    id: key,
+                    label: displayLabel(for: key),
+                    beginningBalance: existing?.beginningBalance ?? summary.beginningBalance,
+                    endingBalance: existing?.endingBalance ?? summary.endingBalance
+                )
+            }
+        }
+        return merged.keys.sorted { bankSummarySortOrder(for: $0) < bankSummarySortOrder(for: $1) }
+            .compactMap { merged[$0] }
+    }
+
+    private func extractConsolidatedBankBalances(from url: URL) -> [BankBalanceSummary]? {
+        guard let rawText = PDFTextExtractor.extractText(from: url), !rawText.isEmpty else { return nil }
+        let text = rawText
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "﹩", with: "$")
+            .replacingOccurrences(of: "＄", with: "$")
+
+        func parseAmount(_ value: String) -> Decimal? {
+            let cleaned = value
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "−", with: "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Decimal(string: cleaned)?.magnitude
+        }
+
+        var summaries: [BankBalanceSummary] = []
+        for (needle, key) in [("savings", "savings"), ("checking", "checking"), ("loans", "loan"), ("loan", "loan"), ("certificates", "certificate")] {
+            let pattern = #"(?im)total\s+\#(needle)\s*:\s*(\$?\s*[-−]?\s*[0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}|\$?\s*[-−]?\s*[0-9]+\.[0-9]{2})"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+                  match.numberOfRanges >= 2,
+                  let amountRange = Range(match.range(at: 1), in: text),
+                  let endingBalance = parseAmount(String(text[amountRange])) else {
+                continue
+            }
+            summaries.append(BankBalanceSummary(id: key, label: displayLabel(for: key), beginningBalance: nil, endingBalance: endingBalance))
+        }
+        return summaries.isEmpty ? nil : summaries
+    }
+
+    private func extractAccountSectionBankBalances(from url: URL) -> [BankBalanceSummary]? {
+        guard let fullText = PDFTextExtractor.extractText(from: url) else { return nil }
+        let sections = PDFTextExtractor.extractAccountSummarySections(from: fullText)
+        guard !sections.isEmpty else { return nil }
+
+        let amountToken = #"(\\$?\\s*[\\-−]?\\s*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2}|\\$?\\s*[\\-−]?\\s*[0-9]+\\.[0-9]{2})"#
+        let amountRegex = try? NSRegularExpression(pattern: amountToken, options: [])
+
+        func parseAmount(_ value: String) -> Decimal? {
+            var cleaned = value
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "﹩", with: "")
+                .replacingOccurrences(of: "＄", with: "")
+                .replacingOccurrences(of: "−", with: "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            var isParenNegative = false
+            if cleaned.hasPrefix("("), cleaned.hasSuffix(")") {
+                isParenNegative = true
+                cleaned = String(cleaned.dropFirst().dropLast())
+            }
+            guard var amount = Decimal(string: cleaned) else { return nil }
+            if isParenNegative { amount *= -1 }
+            return amount.magnitude
+        }
+
+        func firstAmount(in line: String) -> Decimal? {
+            guard let amountRegex else { return nil }
+            let ns = line as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            guard let match = amountRegex.firstMatch(in: line, options: [], range: range),
+                  match.numberOfRanges >= 2 else { return nil }
+            let amountRange = match.range(at: 1)
+            guard amountRange.location != NSNotFound else { return nil }
+            return parseAmount(ns.substring(with: amountRange))
+        }
+
+        var summaries: [String: BankBalanceSummary] = [:]
+        for section in sections {
+            let lowerSection = section.lowercased()
+            let key: String
+            if lowerSection.contains("checking") {
+                key = "checking"
+            } else if lowerSection.contains("savings") || lowerSection.contains("money market") || lowerSection.contains("mmda") {
+                key = "savings"
+            } else if lowerSection.contains("loan") || lowerSection.contains("annual percentage rate") || lowerSection.contains("payment due") || lowerSection.contains("principal") {
+                key = "loan"
+            } else {
+                continue
+            }
+
+            let lines = section.components(separatedBy: CharacterSet.newlines)
+            var beginningBalance: Decimal?
+            var endingBalance: Decimal?
+
+            for (index, line) in lines.enumerated() {
+                let lowerLine = line.lowercased()
+                if beginningBalance == nil, lowerLine.contains("beginning balance") || lowerLine.contains("balance forward") {
+                    beginningBalance = firstAmount(in: line)
+                    if beginningBalance == nil, index + 1 < lines.count {
+                        beginningBalance = firstAmount(in: lines[index + 1])
+                    }
+                }
+                if endingBalance == nil, lowerLine.contains("ending balance") || lowerLine.contains("current balance") {
+                    endingBalance = firstAmount(in: line)
+                    if endingBalance == nil, index + 1 < lines.count {
+                        endingBalance = firstAmount(in: lines[index + 1])
+                    }
+                }
+            }
+
+            if beginningBalance != nil || endingBalance != nil {
+                summaries[key] = BankBalanceSummary(
+                    id: key,
+                    label: displayLabel(for: key),
+                    beginningBalance: beginningBalance,
+                    endingBalance: endingBalance
+                )
+            }
+        }
+
+        let ordered = ["checking", "savings", "loan", "certificate"].compactMap { summaries[$0] }
+        return ordered.isEmpty ? nil : ordered
+    }
+
+    private func displayLabel(for rawLabel: String) -> String {
+        switch rawLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "checking": return "Checking"
+        case "savings": return "Savings"
+        case "loan": return "Loan"
+        case "certificate": return "Certificate"
+        default:
+            return rawLabel.split(separator: " ").map { $0.capitalized }.joined(separator: " ")
+        }
+    }
+
+    private func normalizedBankSummaryLabel(_ rawLabel: String?) -> String {
+        let raw = (rawLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if raw.contains("checking") || raw.contains("draft") || raw.contains("dda") { return "checking" }
+        if raw.contains("savings") || raw.contains("money market") || raw.contains("mmda") || raw.contains("share") { return "savings" }
+        if raw.contains("loan") || raw.contains("mortgage") || raw.contains("flair") { return "loan" }
+        if raw.contains("certificate") || raw.contains("cd") { return "certificate" }
+        return raw
+    }
+
+    private func bankSummarySortOrder(for key: String) -> Int {
+        switch key {
+        case "checking": return 0
+        case "savings": return 1
+        case "loan": return 2
+        case "certificate": return 3
+        default: return 99
+        }
+    }
+
+    private func deduplicateStagedBalancesPreferringNonZeroSameDayPreview(_ snaps: [StagedBalance]) -> [StagedBalance] {
+        if snaps.isEmpty { return snaps }
+        var chosen: [String: StagedBalance] = [:]
+        var order: [String] = []
+        let calendar = Calendar.current
+        for snap in snaps {
+            let label = (snap.sourceAccountLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let dayStart = calendar.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = "\(label)|\(Int(dayStart))"
+            if let existing = chosen[key] {
+                if existing.balance == .zero && snap.balance != .zero {
+                    chosen[key] = snap
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        return order.compactMap { chosen[$0] }
+    }
+
+    private func deduplicateStagedBalancesForCreditCardPreview(_ snaps: [StagedBalance]) -> [StagedBalance] {
+        if snaps.isEmpty { return snaps }
+        var chosen: [Int: StagedBalance] = [:]
+        var order: [Int] = []
+        let calendar = Calendar.current
+        for snap in snaps {
+            let dayStart = calendar.startOfDay(for: snap.asOfDate).timeIntervalSince1970
+            let key = Int(dayStart)
+            if let existing = chosen[key] {
+                if existing.balance == .zero && snap.balance != .zero {
+                    chosen[key] = snap
+                } else if existing.balance != .zero && snap.balance != .zero && existing.balance >= 0 && snap.balance < 0 {
+                    chosen[key] = snap
+                }
+            } else {
+                chosen[key] = snap
+                order.append(key)
+            }
+        }
+        return order.compactMap { chosen[$0] }
+    }
+
+    private func inferredInstitutionFromParsedText(_ text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("communitychoice.com") || lower.contains("community choice") {
+            return "Community Choice"
+        }
+        if lower.contains("sloanservicing.com") || lower.contains("sloan servicing") {
+            return "Sloan Servicing"
+        }
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?i)\\b(?:https?://)?(?:www\\d*\\.)?([a-z0-9-]{3,})\\.(com|net|org|bank|loan|mortgage|finance|financial|credit)\\b"
+        ) else {
+            return nil
+        }
+        var counts: [String: Int] = [:]
+        var displayNames: [String: String] = [:]
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, options: [], range: range)
+        guard !matches.isEmpty else {
+            return nil
+        }
+        let ignored = Set([
+            "account", "accounts", "app", "consumer", "customerservice", "ebill",
+            "help", "home", "login", "mail", "my", "online", "payment", "portal",
+            "secure", "service", "support", "web", "www", "www2"
+        ])
+        for match in matches {
+            guard let labelRange = Range(match.range(at: 1), in: text) else { continue }
+            let lowerLabel = String(text[labelRange]).lowercased()
+            guard !ignored.contains(lowerLabel) else { continue }
+
+            counts[lowerLabel, default: 0] += 1
+            displayNames[lowerLabel] = lowerLabel
+                .split(separator: "-")
+                .map { part in
+                    let token = String(part)
+                    guard let first = token.first else { return "" }
+                    return String(first).uppercased() + token.dropFirst()
+                }
+                .joined(separator: " ")
+        }
+
+        guard let best = counts.max(by: { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.key > rhs.key
+            }
+            return lhs.value < rhs.value
+        }) else {
+            return nil
+        }
+
+        return displayNames[best.key]
+    }
+
+    private func inferredStatementTypeFromParsedText(_ text: String, balances: [StagedBalance]) -> StatementType? {
+        let labels = balances.compactMap { $0.sourceAccountLabel?.lowercased() }
+        let hasLoanLabel = labels.contains(where: { $0.contains("loan") })
+        let hasCreditCardLabel = labels.contains(where: { $0.contains("credit") || $0.contains("card") })
+        let hasBankLabel = labels.contains(where: { $0.contains("checking") || $0.contains("savings") })
+        if hasLoanLabel {
+            AMLogging.log(
+                "DebtPayoff inferredType: returning loan from label labels=\(labels) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Import"
+            )
+            return .loan
+        }
+        if hasCreditCardLabel {
+            AMLogging.log(
+                "DebtPayoff inferredType: returning creditCard from label labels=\(labels) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Import"
+            )
+            return .creditCard
+        }
+        if hasBankLabel {
+            AMLogging.log(
+                "DebtPayoff inferredType: returning bank from label labels=\(labels) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Import"
+            )
+            return .bank
+        }
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let hasLoanSummary = normalized.contains("totalloans")
+            || normalized.contains("paymentof")
+            || normalized.contains("paymentdue")
+            || normalized.contains("endingbalance")
+        let hasLoanTerms = normalized.contains("annualpercentagerate")
+            || normalized.contains("interestrate")
+            || normalized.contains("principal")
+            || normalized.contains("interestpaidytd")
+        AMLogging.log(
+            "DebtPayoff inferredType: labels=\(labels) loanSummary=\(hasLoanSummary) loanTerms=\(hasLoanTerms) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            component: "Import"
+        )
+        if hasLoanSummary && hasLoanTerms {
+            AMLogging.log(
+                "DebtPayoff inferredType: returning loan from text heuristic runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Import"
+            )
+            return .loan
+        }
+        AMLogging.log(
+            "DebtPayoff inferredType: no type inferred runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            component: "Import"
+        )
+        return nil
+    }
+
+    private func resolvedImportedStatementType(
+        detectionType: StatementType?,
+        previewType: StatementType?,
+        pendingType: StatementType? = nil
+    ) -> StatementType? {
+        if detectionType == .bank {
+            if pendingType == .loan || pendingType == .creditCard {
+                return pendingType
+            }
+            if previewType == .loan || previewType == .creditCard {
+                return previewType
+            }
+        }
+        return detectionType ?? previewType ?? pendingType
     }
 
     private func latestBalance(for account: Account) -> Decimal? {
@@ -407,9 +1026,313 @@ struct DebtPayoffDetailView: View {
         }
     }
 
+    @MainActor
+    private func openFullImportReview(
+        detection: IntakeDetection,
+        url: URL,
+        selectedDetectedAccounts: [DetectionReviewSheet.DetectedAccountSelection] = []
+    ) {
+        var det = detection
+        det.type = selectedType
+        det.institution = editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
+        lastDetection = det
+
+        let fallbackInstitution = det.institution?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackAccountType = resolvedFallbackAccountType(from: selectedDetectedAccounts)
+            ?? det.type?.toQuickIngestAccountType(bankSubtype: bankSubtype)?.toAccountType()
+        let fallbackBalance = MoneyParsing.parseDecimalInput(balanceInput)
+        let fallbackTypicalPayment = MoneyParsing.parseDecimalInput(monthlyPaymentInput)
+        let fallbackAPR = MoneyParsing.parsePercentInput(aprPercentInput)
+        let fallbackAPRScale = inferredAPRScale(from: aprPercentInput)
+
+        let routedURL = stageURLToCaches(url)
+        self.lastImportedURL = routedURL
+        Task { @MainActor in
+            if let fallbackAccountType {
+                vm.newAccountType = fallbackAccountType
+            }
+            vm.userInstitutionName = fallbackInstitution ?? ""
+            await coordinator.importURL(routedURL, hint: det.type, modelContext: modelContext, settings: settings)
+            seedImportReviewFallbacks(
+                institution: fallbackInstitution,
+                accountType: fallbackAccountType,
+                balance: fallbackBalance,
+                typicalPayment: fallbackTypicalPayment,
+                aprFraction: fallbackAPR,
+                aprScale: fallbackAPRScale
+            )
+            applyDetectedAccountSelections(selectedDetectedAccounts)
+        }
+        detectionSheetModel = nil
+    }
+
+    @MainActor
+    private func openFullImportReview(for model: DetectionSheetModel) {
+        openFullImportReview(detection: model.detection, url: model.url)
+    }
+
+    private func normalizedDetectedAccountKey(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func resolvedFallbackAccountType(
+        from selections: [DetectionReviewSheet.DetectedAccountSelection]
+    ) -> Account.AccountType? {
+        let importedSelections = selections.filter(\.shouldImport)
+        guard importedSelections.count == 1, let selection = importedSelections.first else { return nil }
+        let key = normalizedDetectedAccountKey(selection.id)
+        switch key {
+        case "loan":
+            return .loan
+        case "savings", "certificate":
+            return .savings
+        case "checking":
+            return .checking
+        case "cash":
+            return .cash
+        default:
+            switch selection.statementType {
+            case .loan: return .loan
+            case .creditCard: return .creditCard
+            case .bank: return .checking
+            case .brokerage: return .brokerage
+            }
+        }
+    }
+
+    @MainActor
+    private func applyDetectedAccountSelections(_ selections: [DetectionReviewSheet.DetectedAccountSelection]) {
+        guard !selections.isEmpty, var staged = vm.staged else { return }
+
+        let importedSelections = selections.filter(\.shouldImport)
+        let importedKeys = Set(importedSelections.map { normalizedDetectedAccountKey($0.id) })
+        guard !importedKeys.isEmpty else { return }
+
+        staged.balances = staged.balances.filter { balance in
+            importedKeys.contains(normalizedBankSummaryLabel(balance.sourceAccountLabel))
+        }
+        staged.transactions = staged.transactions.filter { transaction in
+            importedKeys.contains(normalizedBankSummaryLabel(transaction.sourceAccountLabel))
+        }
+
+        if importedSelections.count == 1, let onlySelection = importedSelections.first {
+            let onlyKey = normalizedDetectedAccountKey(onlySelection.id)
+            for index in staged.balances.indices {
+                let currentKey = normalizedBankSummaryLabel(staged.balances[index].sourceAccountLabel)
+                if currentKey == "default" || staged.balances[index].sourceAccountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    staged.balances[index].sourceAccountLabel = onlyKey
+                }
+                staged.balances[index].include = true
+            }
+            for index in staged.transactions.indices {
+                let currentKey = normalizedBankSummaryLabel(staged.transactions[index].sourceAccountLabel)
+                if currentKey == "default" || staged.transactions[index].sourceAccountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    staged.transactions[index].sourceAccountLabel = onlyKey
+                }
+                staged.transactions[index].include = true
+            }
+        } else {
+            for index in staged.balances.indices {
+                staged.balances[index].include = true
+            }
+            for index in staged.transactions.indices {
+                staged.transactions[index].include = true
+            }
+        }
+
+        let existingBalanceKeys = Set(staged.balances.map { normalizedBankSummaryLabel($0.sourceAccountLabel) })
+        for selection in importedSelections {
+            let key = normalizedDetectedAccountKey(selection.id)
+            guard !existingBalanceKeys.contains(key),
+                  let summary = importedPreview?.bankBalanceSummaries.first(where: { normalizedDetectedAccountKey($0.id) == key }),
+                  let endingBalance = summary.endingBalance else {
+                continue
+            }
+
+            staged.balances.append(
+                StagedBalance(
+                    asOfDate: Date(),
+                    balance: endingBalance,
+                    interestRateAPR: importedPreview?.aprFraction,
+                    interestRateScale: importedPreview?.aprScale,
+                    typicalPaymentAmount: importedPreview?.typicalPayment,
+                    include: true,
+                    sourceAccountLabel: key
+                )
+            )
+        }
+
+        if let resolvedType = resolvedFallbackAccountType(from: importedSelections) {
+            staged.suggestedAccountType = resolvedType
+            vm.newAccountType = resolvedType
+        }
+
+        vm.staged = staged
+    }
+
+    @MainActor
+    private func applyQuickIngestResult(_ result: QuickIngestResult, stagedURL: URL) {
+        ingestedAccount = result.account
+        selectedAccountID = result.account.id
+        externalSelectedAccountID = result.account.id
+        lastImportedURL = stagedURL
+
+        if let payment = result.typicalPayment {
+            monthlyPaymentInput = AppFormatters.currencyFormatter().string(from: NSDecimalNumber(decimal: payment)) ?? monthlyPaymentInput
+        }
+
+        if let apr = result.aprFraction {
+            let nf = NumberFormatter()
+            nf.numberStyle = .decimal
+            nf.minimumFractionDigits = 2
+            nf.maximumFractionDigits = max(2, result.aprScale ?? 2)
+            let percent = apr * 100
+            aprPercentInput = nf.string(from: NSDecimalNumber(decimal: percent)) ?? aprPercentInput
+        }
+
+        let absBalance = result.balance.magnitude
+        balanceInput = AppFormatters.currencyFormatter().string(from: NSDecimalNumber(decimal: absBalance)) ?? balanceInput
+
+        computePayoff(using: result.account)
+        routeImportedAccount(result.account)
+    }
+
+    @MainActor
+    private func seedImportReviewFallbacks(
+        institution: String?,
+        accountType: Account.AccountType?,
+        balance: Decimal?,
+        typicalPayment: Decimal?,
+        aprFraction: Decimal?,
+        aprScale: Int?
+    ) {
+        guard var staged = vm.staged else { return }
+
+        let normalizedInstitution = institution?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedInstitution, !normalizedInstitution.isEmpty {
+            vm.userInstitutionName = normalizedInstitution
+            if staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                staged.inferredInstitutionName = normalizedInstitution
+            }
+        }
+
+        if let accountType {
+            staged.suggestedAccountType = accountType
+            vm.newAccountType = accountType
+        }
+
+        let hasSeedableBalance = balance.map { $0 != .zero } ?? false
+        let targetIndex: Int?
+        if let existingIndex = staged.balances.indices.max(by: { staged.balances[$0].asOfDate < staged.balances[$1].asOfDate }) {
+            targetIndex = existingIndex
+        } else if hasSeedableBalance {
+            let label = normalizedSourceLabel(for: accountType)
+            staged.balances.append(
+                StagedBalance(
+                    asOfDate: Date(),
+                    balance: balance ?? .zero,
+                    interestRateAPR: aprFraction,
+                    interestRateScale: aprScale,
+                    typicalPaymentAmount: typicalPayment,
+                    include: true,
+                    sourceAccountLabel: label
+                )
+            )
+            targetIndex = staged.balances.indices.last
+        } else {
+            targetIndex = nil
+        }
+
+        if let targetIndex {
+            if hasSeedableBalance, staged.balances[targetIndex].balance == .zero {
+                staged.balances[targetIndex].balance = balance ?? .zero
+            }
+            if staged.balances[targetIndex].interestRateAPR == nil, let aprFraction {
+                staged.balances[targetIndex].interestRateAPR = aprFraction
+                staged.balances[targetIndex].interestRateScale = aprScale
+            }
+            if staged.balances[targetIndex].typicalPaymentAmount == nil, let typicalPayment, typicalPayment > 0 {
+                staged.balances[targetIndex].typicalPaymentAmount = typicalPayment
+            }
+            if staged.balances[targetIndex].sourceAccountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+               let label = normalizedSourceLabel(for: accountType) {
+                staged.balances[targetIndex].sourceAccountLabel = label
+            }
+        }
+
+        vm.staged = staged
+    }
+
+    private func normalizedSourceLabel(for accountType: Account.AccountType?) -> String? {
+        guard let accountType else { return nil }
+
+        switch accountType {
+        case .creditCard:
+            return "creditCard"
+        case .loan:
+            return "loan"
+        case .checking:
+            return "checking"
+        case .savings:
+            return "savings"
+        case .cash:
+            return "default"
+        case .brokerage:
+            return "brokerage"
+        case .property:
+            return "default"
+        case .other:
+            return nil
+        }
+    }
+
+    private func inferredAPRScale(from raw: String) -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let separator = Locale.current.decimalSeparator,
+              let range = trimmed.range(of: separator) else {
+            return nil
+        }
+
+        let suffix = trimmed[range.upperBound...]
+        let digits = suffix.filter(\.isNumber)
+        return digits.isEmpty ? 0 : digits.count
+    }
+
+    private func performQuickIngest(using detection: IntakeDetection, url: URL) {
+        let stagedURL = stageURLToCaches(url)
+        let hints = QuickIngestHints(
+            institution: detection.institution?.trimmingCharacters(in: .whitespacesAndNewlines),
+            accountType: detection.type?.toQuickIngestAccountType(bankSubtype: bankSubtype)
+        )
+
+        isQuickIngesting = true
+        quickIngestError = nil
+
+        Task {
+            do {
+                let result = try await QuickIngestor().ingest(url: stagedURL, hints: hints, context: modelContext)
+                await MainActor.run {
+                    isQuickIngesting = false
+                    applyQuickIngestResult(result, stagedURL: stagedURL)
+                    detectionSheetModel = nil
+                }
+            } catch {
+                await MainActor.run {
+                    isQuickIngesting = false
+                    quickIngestError = error
+                }
+            }
+        }
+    }
+
     // Binding that shows the sheet whenever vm.staged or vm.mappingSession is non-nil and clears state on dismissal
     private var isImportSheetPresented: Binding<Bool> {
-        Binding(get: { vm.staged != nil || vm.mappingSession != nil }, set: { presented in
+        Binding(get: {
+            !isPreparingDetectionReview &&
+            detectionSheetModel == nil &&
+            (vm.staged != nil || vm.mappingSession != nil)
+        }, set: { presented in
             if !presented {
                 // Seed preview with the last picked local URL if available
                 if let url = vm.lastPickedLocalURL {
@@ -422,17 +1345,23 @@ struct DebtPayoffDetailView: View {
                 if let id = selectedAccountID {
                     self.updateLastImportedURL(for: id)
                 }
+                if let id = vm.selectedAccountID {
+                    externalSelectedAccountID = id
+                    let account = accounts.first(where: { $0.id == id })
+                    routeImportedAccount(account)
+                }
             }
         })
     }
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Get started by adding your credit accounts")
-                .foregroundStyle(.secondary)
+            if debtAccounts.isEmpty {
+                Text("Get started by adding your credit accounts")
+                    .foregroundStyle(.secondary)
+            }
 
-            // Two-column content area
-            columnsView
+            contentArea
 
             Divider().padding(.top, 4)
 
@@ -442,18 +1371,35 @@ struct DebtPayoffDetailView: View {
         .padding(.top, 32)
         .background(.background)
         .onAppear {
+            if let externalSelectedAccountID {
+                selectedAccountID = externalSelectedAccountID
+            }
             if selectedAccountID == nil {
-                selectedAccountID = accounts.first?.id
+                selectedAccountID = debtAccounts.first?.id
             }
             if let id = selectedAccountID {
+                externalSelectedAccountID = id
                 self.updateLastImportedURL(for: id)
             }
         }
         .onChange(of: accounts) { _, newValue in
+            let updatedDebtAccounts = newValue.filter {
+                switch $0.type {
+                case .creditCard, .loan:
+                    return true
+                default:
+                    return false
+                }
+            }
+            if let externalSelectedAccountID,
+               updatedDebtAccounts.contains(where: { $0.id == externalSelectedAccountID }),
+               selectedAccountID != externalSelectedAccountID {
+                selectedAccountID = externalSelectedAccountID
+            }
             if selectedAccountID == nil {
-                selectedAccountID = newValue.first?.id
-            } else if let selID = selectedAccountID, !newValue.contains(where: { $0.id == selID }) {
-                selectedAccountID = newValue.first?.id
+                selectedAccountID = updatedDebtAccounts.first?.id
+            } else if let selID = selectedAccountID, !updatedDebtAccounts.contains(where: { $0.id == selID }) {
+                selectedAccountID = updatedDebtAccounts.first?.id
             }
             Task { @MainActor in
                 if let id = selectedAccountID {
@@ -464,6 +1410,9 @@ struct DebtPayoffDetailView: View {
             }
         }
         .onChange(of: selectedAccountID) { _, id in
+            if externalSelectedAccountID != id {
+                externalSelectedAccountID = id
+            }
             Task { @MainActor in
                 if let id {
                     self.updateLastImportedURL(for: id)
@@ -472,12 +1421,15 @@ struct DebtPayoffDetailView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Import") { showImporter = true }
+        .onChange(of: externalSelectedAccountID) { _, id in
+            guard selectedAccountID != id else { return }
+            if let id, accounts.contains(where: { $0.id == id }) {
+                selectedAccountID = id
             }
+        }
+        .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Add Manually") {
+                Button(manualAddButtonTitle) {
                     // Reset all inputs before presenting the manual add sheet
                     selectedType = nil               // Picker shows "Choose…"
                     editedInstitution = ""           // Clear institution text field
@@ -507,15 +1459,7 @@ struct DebtPayoffDetailView: View {
         .alert("Quick Ingest Failed", isPresented: Binding(get: { quickIngestError != nil }, set: { if !$0 { quickIngestError = nil } })) {
             Button("Open Review") {
                 if let model = detectionSheetModel {
-                    var det = model.detection
-                    det.type = selectedType
-                    det.institution = editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
-                    lastDetection = det
-                    let routedURL = stageURLToCaches(model.url)
-                    Task { @MainActor in
-                        await coordinator.importURL(routedURL, hint: det.type, modelContext: modelContext, settings: settings)
-                    }
-                    detectionSheetModel = nil
+                    openFullImportReview(for: model)
                 } else {
                     /* no model; no-op */
                 }
@@ -535,7 +1479,7 @@ struct DebtPayoffDetailView: View {
                         }
                     }
             }
-            .presentationSizing(.page)
+            .applySheetSizing()
         }
 #else
         .sheet(item: $editingAccount) { item in
@@ -552,64 +1496,12 @@ struct DebtPayoffDetailView: View {
 #endif
 #if os(iOS) || os(visionOS)
         .sheet(item: $detectionSheetModel) { model in
-            let acct = currentAccount()
-            let latest = acct.flatMap { latestBalance(for: $0) }
-            DetectionReviewSheet(
-                detection: model.detection,
-                url: model.url,
-                selectedType: $selectedType,
-                editedInstitution: $editedInstitution,
-                bankSubtype: $bankSubtype,
-                monthlyPaymentInput: $monthlyPaymentInput,
-                aprPercentInput: $aprPercentInput,
-                balanceInput: $balanceInput,
-                account: acct,
-                latestBalance: latest,
-                isQuickIngesting: $isQuickIngesting,
-                onSave: { det, incomingURL in
-                    lastDetection = det
-                    let routedURL = stageURLToCaches(incomingURL)
-                    Task { @MainActor in
-                        await coordinator.importURL(routedURL, hint: det.type, modelContext: modelContext, settings: settings)
-                    }
-                    self.lastImportedURL = routedURL
-                    detectionSheetModel = nil
-                },
-                onDiscard: {
-                    detectionSheetModel = nil
-                }
-            )
-            .presentationSizing(.page)
+            detectionReviewSheetContent(model: model)
+                .applySheetSizing()
         }
 #else
         .sheet(item: $detectionSheetModel) { model in
-            let acct = currentAccount()
-            let latest = acct.flatMap { latestBalance(for: $0) }
-            DetectionReviewSheet(
-                detection: model.detection,
-                url: model.url,
-                selectedType: $selectedType,
-                editedInstitution: $editedInstitution,
-                bankSubtype: $bankSubtype,
-                monthlyPaymentInput: $monthlyPaymentInput,
-                aprPercentInput: $aprPercentInput,
-                balanceInput: $balanceInput,
-                account: acct,
-                latestBalance: latest,
-                isQuickIngesting: $isQuickIngesting,
-                onSave: { det, incomingURL in
-                    lastDetection = det
-                    let routedURL = stageURLToCaches(incomingURL)
-                    Task { @MainActor in
-                        await coordinator.importURL(routedURL, hint: det.type, modelContext: modelContext, settings: settings)
-                    }
-                    self.lastImportedURL = routedURL
-                    detectionSheetModel = nil
-                },
-                onDiscard: {
-                    detectionSheetModel = nil
-                }
-            )
+            detectionReviewSheetContent(model: model)
         }
 #endif
         .sheet(isPresented: $showManualAddSheet) {
@@ -624,26 +1516,49 @@ struct DebtPayoffDetailView: View {
                 onSaved: { account in
                     showManualAddSheet = false
                     selectedAccountID = account.id
+                    externalSelectedAccountID = account.id
                     self.updateLastImportedURL(for: account.id)
+                    routeImportedAccount(account)
                 }
             )
             .environment(\.modelContext, modelContext)
             .environmentObject(settings)
-            .presentationSizing(.page)
+            .applySheetSizing()
         }
         .sheet(isPresented: isImportSheetPresented) {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
         }
+        .sheet(isPresented: $showStatementSheet) {
+            statementSheetContent
+        }
         .onChange(of: pendingExternal?.url, initial: false) { _, _ in
             guard let pending = pendingExternal else { return }
+            isPreparingDetectionReview = true
             Task {
                 let stagedURL = stageURLToCaches(pending.url)
+                let classifier = StatementIntakeClassifier()
+                let detection = await classifier.classify(url: stagedURL)
+                let preview = await extractImportedPreview(from: stagedURL, hint: detection.type ?? pending.type)
                 await MainActor.run {
-                    self.editedInstitution = pending.institution ?? ""
-                    self.selectedType = pending.type
-                    let detection = IntakeDetection(type: self.selectedType, institution: self.editedInstitution, confidence: 0.6)
-                    self.detectionSheetModel = DetectionSheetModel(detection: detection, url: stagedURL)
+                    self.lastDetection = detection
+                    self.editedInstitution = detection.institution ?? preview?.institution ?? pending.institution ?? ""
+                    self.selectedType = (preview?.bankBalanceSummaries.isEmpty == false) ? .bank : resolvedImportedStatementType(
+                        detectionType: detection.type,
+                        previewType: preview?.statementType,
+                        pendingType: pending.type
+                    )
+                    self.importedPreview = preview
+                    self.detectedAccounts = buildDetectedAccounts(from: preview)
+                    self.bankSubtype = nil
+                    self.applyImportedPreviewToInputs(preview)
+                    let seededDetection = IntakeDetection(
+                        type: self.selectedType,
+                        institution: self.editedInstitution,
+                        confidence: detection.confidence
+                    )
+                    self.detectionSheetModel = DetectionSheetModel(detection: seededDetection, url: stagedURL)
+                    self.isPreparingDetectionReview = false
                     self.pendingExternal = nil
                 }
             }

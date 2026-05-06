@@ -362,4 +362,3 @@ struct DebtScopeApp: App {
         return nil
     }
 }
-

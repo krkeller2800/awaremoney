@@ -1256,17 +1256,16 @@ final class ImportViewModel: ObservableObject {
                             let guessedType = self.guessAccountType(from: stagedImport.sourceFileName, headers: headers, sampleRows: sampleForGuess)
                             AMLogging.log("Guess result: \(String(describing: guessedType?.rawValue))", component: "ImportViewModel")
 
-                            // Force the suggested type to match the user's selection when provided; never override the user's tap
+                            // Respect an explicit user hint first. Otherwise prefer parser/guess output over the VM default.
                             if let userHint = self.userSelectedDocHint {
                                 stagedImport.suggestedAccountType = userHint
                                 self.newAccountType = userHint
                                 AMLogging.log("Forcing suggested account type to user-selected hint: \(userHint.rawValue)", component: "ImportViewModel")
-                            } else if let currentSuggested = stagedImport.suggestedAccountType, currentSuggested != self.newAccountType {
-                                // If the user has already chosen a type in the UI, prefer it over any parser/guess suggestion
-                                AMLogging.log("Overriding suggested account type '\(currentSuggested.rawValue)' with current selection '\(self.newAccountType.rawValue)'", component: "ImportViewModel")
-                                stagedImport.suggestedAccountType = self.newAccountType
+                            } else if stagedImport.suggestedAccountType == nil, let guessedType {
+                                stagedImport.suggestedAccountType = guessedType
+                                AMLogging.log("Applying guessed account type: \(guessedType.rawValue)", component: "ImportViewModel")
                             } else if stagedImport.suggestedAccountType == nil {
-                                // Default the suggestion to the current selection so the batch reflects what the user chose
+                                // Only fall back to the VM selection when neither the parser nor the guesser produced anything.
                                 stagedImport.suggestedAccountType = self.newAccountType
                                 AMLogging.log("Defaulting suggested account type to current selection '\(self.newAccountType.rawValue)'", component: "ImportViewModel")
                             }
@@ -2258,7 +2257,41 @@ final class ImportViewModel: ObservableObject {
             return .brokerage
         }
 
-        // 1.5) Bank signals (checking/savings, beginning/ending balances, deposits/withdrawals)
+        // 1.5) Loan signals should win over mixed deposit summaries on combined credit-union statements.
+        let normalizedHeaderBlob = lowerHeaders
+            .joined(separator: " ")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let normalizedSampleBlob = sampleRows
+            .flatMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let normalizedLoanBlob = normalizedHeaderBlob + normalizedSampleBlob
+        let hasLoanSummarySignals = normalizedLoanBlob.contains("totalloans")
+            || normalizedLoanBlob.contains("paymentof")
+            || normalizedLoanBlob.contains("paymentdue")
+            || normalizedLoanBlob.contains("amountdue")
+            || normalizedLoanBlob.contains("loanpayment")
+        let hasLoanTermSignals = normalizedLoanBlob.contains("annualpercentagerate")
+            || normalizedLoanBlob.contains("interestrate")
+            || normalizedLoanBlob.contains("principal")
+            || normalizedLoanBlob.contains("interestpaidytd")
+            || normalizedLoanBlob.contains("outstandingprincipal")
+        AMLogging.log("GuessAccountType: hasLoanSummarySignals=\(hasLoanSummarySignals), hasLoanTermSignals=\(hasLoanTermSignals)", component: "ImportViewModel")
+        if hasLoanSummarySignals && hasLoanTermSignals {
+            AMLogging.log("GuessAccountType: returning .loan due to loan signals", component: "ImportViewModel")
+            return .loan
+        }
+
+        // 1.6) Bank signals (checking/savings, beginning/ending balances, deposits/withdrawals)
         let bankHeaderSignals = ["checking", "savings", "beginning balance", "ending balance", "deposits", "withdrawals", "account"]
         let hasBankHeader = lowerHeaders.contains { h in bankHeaderSignals.contains { sig in h == sig || h.contains(sig) } }
         let bankRowSignals = ["checking account", "savings account", "beginning balance", "ending balance", "deposits", "withdrawals"]
@@ -2834,4 +2867,3 @@ private extension Array {
         return indices.contains(index) ? self[index] : nil
     }
 }
-

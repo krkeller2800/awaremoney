@@ -53,6 +53,7 @@ fileprivate func removeSSAToken(from s: String) -> String {
 struct IncomeAndBillsView: View {
     var showsLocalModePicker: Bool = true
     var externalPhoneMode: PhoneMode? = nil
+    var embeddedInNavigation: Bool = false
 
     @State private var selectedIncomeID: UUID? = nil
     @State private var selectedBillID: UUID? = nil
@@ -350,100 +351,125 @@ struct IncomeAndBillsView: View {
     // MARK: - iPhone
     @ViewBuilder
     private var iPhoneBody: some View {
-        NavigationStack {
-            List {
-                if showsLocalModePicker && externalPhoneMode == nil {
-                    Section {
-                        Picker("View", selection: $phoneMode) {
-                            Text("Income").tag(PhoneMode.income)
-                            Text("Bills").tag(PhoneMode.bills)
-                            Text("Summary").tag(PhoneMode.summary)
-                        }
-                        .pickerStyle(.segmented)
-                    }
+        Group {
+            if embeddedInNavigation {
+                iPhoneContent
+            } else {
+                NavigationStack {
+                    iPhoneContent
                 }
+            }
+        }
+    }
 
-                switch effectivePhoneMode {
-                case .income:
-                    if incomes.isEmpty {
-                        ContentUnavailableView("No income yet", systemImage: "list.bullet", description: Text("Add your income to compute your debt budget."))
-                    } else {
-                        Section("Income") {
-                            ForEach(incomes) { item in
-                                NavigationLink(destination: EditCashFlowItemView(
-                                    item: item,
-                                    onSave: {
-                                        try? modelContext.save()
-                                    },
-                                    onDelete: {
-                                        modelContext.delete(item)
-                                        try? modelContext.save()
-                                    }
-                                )) {
-                                    row(for: item)
-                                }
-                            }
-                            .onDelete { indexSet in
-                                delete(items: indexSet.map { incomes[$0] })
-                            }
-                            if incomes.isEmpty {
-                                Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
+    private var iPhoneContent: some View {
+        List {
+            if showsLocalModePicker && externalPhoneMode == nil {
+                Section {
+                    Picker("View", selection: $phoneMode) {
+                        Text("Income").tag(PhoneMode.income)
+                        Text("Bills").tag(PhoneMode.bills)
+                        Text("Summary").tag(PhoneMode.summary)
                     }
-                case .bills:
-                    if bills.isEmpty {
-                        ContentUnavailableView("No bills yet", systemImage: "list.bullet", description: Text("Add your recurring bills to compute your debt budget."))
-                    } else {
-                        Section("Bills") {
-                            ForEach(bills) { item in
-                                NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
-                                    row(for: item)
-                                }
-                            }
-                            .onDelete { indexSet in
-                                delete(items: indexSet.map { bills[$0] })
-                            }
-                            if bills.isEmpty {
-                                Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                case .summary:
-                    summarySection
+                    .pickerStyle(.segmented)
                 }
             }
-            .navigationTitle("Income & Bills")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    if effectivePhoneMode != .summary {
-                        Button {
-                            if effectivePhoneMode == .income {
-                                addKind = .income
-                                showAddSheet = true
-                            } else if effectivePhoneMode == .bills {
-                                let newItem = CashFlowItem(
-                                    kind: .bill,
-                                    name: "",
-                                    amount: 0,
-                                    frequency: .monthly,
-                                    dayOfMonth: nil,
-                                    firstPaymentDate: nil,
-                                    notes: nil,
-                                    ssaWednesday: nil
-                                )
-                                modelContext.insert(newItem)
-                                try? modelContext.save()
-                                activeSheet = .edit(item: newItem)
+
+            switch effectivePhoneMode {
+            case .income:
+                if incomes.isEmpty {
+                    ContentUnavailableView("No income yet", systemImage: "list.bullet", description: Text("Add your income to compute your debt budget."))
+                } else {
+                    Section("Income") {
+                        ForEach(incomes) { item in
+                            NavigationLink(destination: EditCashFlowItemView(
+                                item: item,
+                                onSave: {
+                                    try? modelContext.save()
+                                },
+                                onDelete: {
+                                    modelContext.delete(item)
+                                    try? modelContext.save()
+                                }
+                            )) {
+                                row(for: item)
                             }
-                        } label: {
-                            Label("Add", systemImage: "plus")
+                        }
+                        .onDelete { indexSet in
+                            delete(items: indexSet.map { incomes[$0] })
+                        }
+                        if incomes.isEmpty {
+                            Text("No income added yet").font(.footnote).foregroundStyle(.secondary)
                         }
                     }
                 }
+            case .bills:
+                if bills.isEmpty {
+                    ContentUnavailableView("No bills yet", systemImage: "list.bullet", description: Text("Add your recurring bills to compute your debt budget."))
+                } else {
+                    Section("Bills") {
+                        ForEach(bills) { item in
+                            NavigationLink(destination: CashFlowItemEditorView(item: item).environmentObject(settings)) {
+                                row(for: item)
+                            }
+                        }
+                        .onDelete { indexSet in
+                            delete(items: indexSet.map { bills[$0] })
+                        }
+                        if bills.isEmpty {
+                            Text("No bills added yet").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            case .summary:
+                summarySection
             }
-            .sheet(isPresented: $showAddSheet) {
-                AddCashFlowItemView(initialKind: addKind) { newItem in
+        }
+        .navigationTitle("Income & Bills")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if effectivePhoneMode != .summary {
+                    Button {
+                        if effectivePhoneMode == .income {
+                            addKind = .income
+                            showAddSheet = true
+                        } else if effectivePhoneMode == .bills {
+                            let newItem = CashFlowItem(
+                                kind: .bill,
+                                name: "",
+                                amount: 0,
+                                frequency: .monthly,
+                                dayOfMonth: nil,
+                                firstPaymentDate: nil,
+                                notes: nil,
+                                ssaWednesday: nil
+                            )
+                            modelContext.insert(newItem)
+                            try? modelContext.save()
+                            activeSheet = .edit(item: newItem)
+                        }
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showAddSheet) {
+            AddCashFlowItemView(initialKind: addKind) { newItem in
+                modelContext.insert(newItem)
+                try? modelContext.save()
+                if newItem.kind == .bill {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        activeSheet = .edit(item: newItem)
+                    }
+                }
+            }
+            .environmentObject(settings)
+        }
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .add(let kind):
+                AddCashFlowItemView(initialKind: kind, dismissAfterAdd: true) { newItem in
                     modelContext.insert(newItem)
                     try? modelContext.save()
                     if newItem.kind == .bill {
@@ -452,47 +478,32 @@ struct IncomeAndBillsView: View {
                         }
                     }
                 }
+                .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
                 .environmentObject(settings)
-            }
-            .sheet(item: $activeSheet) { sheet in
-                switch sheet {
-                case .add(let kind):
-                    AddCashFlowItemView(initialKind: kind, dismissAfterAdd: true) { newItem in
-                        modelContext.insert(newItem)
-                        try? modelContext.save()
-                        if newItem.kind == .bill {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                activeSheet = .edit(item: newItem)
-                            }
-                        }
-                    }
-                    .navigationTitle(kind == .income ? "Add Income" : "Add Bill")
-                    .environmentObject(settings)
-                case .edit(let item):
-                    if item.kind == .bill {
-                        BillEditorSheet(item: item)
-                            .environmentObject(settings)
-                    } else {
-                        EditCashFlowItemView(
-                            item: item,
-                            onSave: {
-                                try? modelContext.save()
-                                activeSheet = nil
-                            },
-                            onDelete: {
-                                modelContext.delete(item)
-                                try? modelContext.save()
-                                activeSheet = nil
-                            }
-                        )
+            case .edit(let item):
+                if item.kind == .bill {
+                    BillEditorSheet(item: item)
                         .environmentObject(settings)
-                    }
+                } else {
+                    EditCashFlowItemView(
+                        item: item,
+                        onSave: {
+                            try? modelContext.save()
+                            activeSheet = nil
+                        },
+                        onDelete: {
+                            modelContext.delete(item)
+                            try? modelContext.save()
+                            activeSheet = nil
+                        }
+                    )
+                    .environmentObject(settings)
                 }
             }
-            .onAppear {
-                if let ext = externalPhoneMode, ext != phoneMode {
-                    phoneMode = ext
-                }
+        }
+        .onAppear {
+            if let ext = externalPhoneMode, ext != phoneMode {
+                phoneMode = ext
             }
         }
     }
@@ -1807,4 +1818,3 @@ private struct SelectAllTextField: UIViewRepresentable {
     }
 }
 #endif
-
