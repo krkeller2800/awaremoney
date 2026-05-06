@@ -471,7 +471,9 @@ struct DebtPayoffDetailView: View {
                 combinedText,
                 balances: staged.balances
             )
+            let stagedBankSummaries = buildBankBalanceSummaries(from: staged.balances)
             let bankBalanceSummaries = mergeBankBalanceSummaries(
+                stagedBankSummaries,
                 extractConsolidatedBankBalances(from: url) ?? [],
                 extractAccountSectionBankBalances(from: url) ?? []
             )
@@ -488,6 +490,32 @@ struct DebtPayoffDetailView: View {
         } catch {
             return nil
         }
+    }
+
+    private func buildBankBalanceSummaries(from balances: [StagedBalance]) -> [BankBalanceSummary] {
+        let includedBalances = balances.filter(\.include)
+        guard !includedBalances.isEmpty else { return [] }
+
+        let grouped = Dictionary(grouping: includedBalances) { balance in
+            normalizedBankSummaryLabel(balance.sourceAccountLabel)
+        }
+
+        return grouped.keys.sorted { bankSummarySortOrder(for: $0) < bankSummarySortOrder(for: $1) }
+            .compactMap { key in
+                guard isSupportedBankPreviewKey(key), let rows = grouped[key], !rows.isEmpty else { return nil }
+                let sorted = rows.sorted { lhs, rhs in
+                    if lhs.asOfDate == rhs.asOfDate {
+                        return lhs.balance < rhs.balance
+                    }
+                    return lhs.asOfDate < rhs.asOfDate
+                }
+                return BankBalanceSummary(
+                    id: key,
+                    label: displayLabel(for: key),
+                    beginningBalance: sorted.count > 1 ? sorted.first?.balance.magnitude : nil,
+                    endingBalance: sorted.last?.balance.magnitude
+                )
+            }
     }
 
     private func buildDetectedAccounts(from preview: ImportedStatementPreview?) -> [DetectionReviewSheet.DetectedAccountSelection] {
@@ -518,7 +546,7 @@ struct DebtPayoffDetailView: View {
                 merged[key] = BankBalanceSummary(
                     id: key,
                     label: displayLabel(for: key),
-                    beginningBalance: existing?.beginningBalance ?? summary.beginningBalance,
+                    beginningBalance: summary.beginningBalance ?? existing?.beginningBalance,
                     endingBalance: existing?.endingBalance ?? summary.endingBalance
                 )
             }
@@ -587,15 +615,35 @@ struct DebtPayoffDetailView: View {
             return amount.magnitude
         }
 
-        func firstAmount(in line: String) -> Decimal? {
+        func preferredAmount(in line: String) -> Decimal? {
             guard let amountRegex else { return nil }
             let ns = line as NSString
             let range = NSRange(location: 0, length: ns.length)
-            guard let match = amountRegex.firstMatch(in: line, options: [], range: range),
-                  match.numberOfRanges >= 2 else { return nil }
-            let amountRange = match.range(at: 1)
-            guard amountRange.location != NSNotFound else { return nil }
-            return parseAmount(ns.substring(with: amountRange))
+            let matches = amountRegex.matches(in: line, options: [], range: range)
+            guard !matches.isEmpty else { return nil }
+
+            let currencyLike = matches.compactMap { match -> Decimal? in
+                guard match.numberOfRanges >= 2 else { return nil }
+                let amountRange = match.range(at: 1)
+                guard amountRange.location != NSNotFound else { return nil }
+                let token = ns.substring(with: amountRange)
+                guard token.contains("$") || token.contains(",") || token.contains(".") else { return nil }
+                return parseAmount(token)
+            }
+            if let amount = currencyLike.last {
+                return amount
+            }
+
+            for match in matches.reversed() {
+                guard match.numberOfRanges >= 2 else { continue }
+                let amountRange = match.range(at: 1)
+                guard amountRange.location != NSNotFound,
+                      let amount = parseAmount(ns.substring(with: amountRange)) else {
+                    continue
+                }
+                return amount
+            }
+            return nil
         }
 
         var summaries: [String: BankBalanceSummary] = [:]
@@ -619,15 +667,15 @@ struct DebtPayoffDetailView: View {
             for (index, line) in lines.enumerated() {
                 let lowerLine = line.lowercased()
                 if beginningBalance == nil, lowerLine.contains("beginning balance") || lowerLine.contains("balance forward") {
-                    beginningBalance = firstAmount(in: line)
+                    beginningBalance = preferredAmount(in: line)
                     if beginningBalance == nil, index + 1 < lines.count {
-                        beginningBalance = firstAmount(in: lines[index + 1])
+                        beginningBalance = preferredAmount(in: lines[index + 1])
                     }
                 }
                 if endingBalance == nil, lowerLine.contains("ending balance") || lowerLine.contains("current balance") {
-                    endingBalance = firstAmount(in: line)
+                    endingBalance = preferredAmount(in: line)
                     if endingBalance == nil, index + 1 < lines.count {
-                        endingBalance = firstAmount(in: lines[index + 1])
+                        endingBalance = preferredAmount(in: lines[index + 1])
                     }
                 }
             }
@@ -664,6 +712,15 @@ struct DebtPayoffDetailView: View {
         if raw.contains("loan") || raw.contains("mortgage") || raw.contains("flair") { return "loan" }
         if raw.contains("certificate") || raw.contains("cd") { return "certificate" }
         return raw
+    }
+
+    private func isSupportedBankPreviewKey(_ rawKey: String) -> Bool {
+        switch normalizedBankSummaryLabel(rawKey) {
+        case "checking", "savings", "loan", "certificate", "default":
+            return true
+        default:
+            return false
+        }
     }
 
     private func bankSummarySortOrder(for key: String) -> Int {

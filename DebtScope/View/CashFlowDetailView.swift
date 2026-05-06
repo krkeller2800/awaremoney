@@ -433,7 +433,7 @@ struct CashFlowDetailView: View {
                 let merged = mergeBankBalanceSummaries(bankBalanceSummaries, consolidated, accountSections, sectioned)
                     .filter { isSupportedBankPreviewKey($0.id) }
                 AMLogging.log(
-                    "CashFlow preview bank summaries: staged=\(bankBalanceSummaries.map { "\($0.id)=\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) consolidated=\(consolidated.map { "\($0.id)=\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) accountSections=\(accountSections.map { "\($0.id)=\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) sectioned=\(sectioned.map { "\($0.id)=\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) merged=\(merged.map { "\($0.id)=\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" })",
+                    "CashFlow preview bank summaries: staged=\(bankBalanceSummaries.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) consolidated=\(consolidated.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) accountSections=\(accountSections.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) sectioned=\(sectioned.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" }) merged=\(merged.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" })",
                     component: "Import"
                 )
                 if !merged.isEmpty {
@@ -490,7 +490,8 @@ struct CashFlowDetailView: View {
                 merged[key] = BankBalanceSummary(
                     id: key,
                     label: displayLabel(for: key),
-                    beginningBalance: existing?.beginningBalance ?? summary.beginningBalance,
+                    // Let stronger PDF-derived summary passes replace staged beginning balances.
+                    beginningBalance: summary.beginningBalance ?? existing?.beginningBalance,
                     // Keep the first discovered ending balance authoritative. Later section parsers
                     // can still enrich missing fields, but should not overwrite summary totals.
                     endingBalance: existing?.endingBalance ?? summary.endingBalance
@@ -642,26 +643,87 @@ struct CashFlowDetailView: View {
             return amount.magnitude
         }
 
-        func firstAmount(near lineIndex: Int) -> Decimal? {
+        func preferredAmount(in line: String) -> Decimal? {
             guard let amountRegex else { return nil }
+            let ns = line as NSString
+            let range = NSRange(location: 0, length: ns.length)
+            let matches = amountRegex.matches(in: line, options: [], range: range)
+            guard !matches.isEmpty else { return nil }
+
+            let currencyLike = matches.compactMap { match -> Decimal? in
+                guard match.numberOfRanges >= 2 else { return nil }
+                let amountRange = match.range(at: 1)
+                guard amountRange.location != NSNotFound else { return nil }
+                let token = ns.substring(with: amountRange)
+                guard token.contains("$") || token.contains(",") || token.contains(".") else { return nil }
+                return parseAmount(token)
+            }
+            if let amount = currencyLike.last {
+                return amount
+            }
+
+            for match in matches.reversed() {
+                guard match.numberOfRanges >= 2 else { continue }
+                let amountRange = match.range(at: 1)
+                guard amountRange.location != NSNotFound,
+                      let amount = parseAmount(ns.substring(with: amountRange)) else {
+                    continue
+                }
+                return amount
+            }
+            return nil
+        }
+
+        func firstAmount(near lineIndex: Int) -> Decimal? {
             let searchEnd = min(lines.count, lineIndex + 2)
             for idx in lineIndex..<searchEnd {
-                let ns = lines[idx] as NSString
-                let range = NSRange(location: 0, length: ns.length)
-                if let match = amountRegex.firstMatch(in: lines[idx], options: [], range: range),
-                   match.numberOfRanges >= 2 {
-                    let amountRange = match.range(at: 1)
-                    if amountRange.location != NSNotFound {
-                        return parseAmount(ns.substring(with: amountRange))
-                    }
+                if let amount = preferredAmount(in: lines[idx]) {
+                    return amount
                 }
+            }
+            return nil
+        }
+
+        func preferredStartIndex(for label: String) -> Int? {
+            let strongHeaders: [String]
+            switch label {
+            case "checking":
+                strongHeaders = [
+                    "checking summary",
+                    "chase total checking"
+                ]
+            case "savings":
+                strongHeaders = [
+                    "savings summary",
+                    "chase savings"
+                ]
+            default:
+                strongHeaders = []
+            }
+
+            for header in strongHeaders {
+                if let index = lowerLines.firstIndex(where: { $0.contains(header) }) {
+                    AMLogging.log(
+                        "CashFlow sectioned anchor label=\(label) mode=strong index=\(index) line=\(lines[index])",
+                        component: "Import"
+                    )
+                    return index
+                }
+            }
+
+            if let fallbackIndex = lowerLines.firstIndex(where: { $0.contains(label) }) {
+                AMLogging.log(
+                    "CashFlow sectioned anchor label=\(label) mode=fallback index=\(fallbackIndex) line=\(lines[fallbackIndex])",
+                    component: "Import"
+                )
+                return fallbackIndex
             }
             return nil
         }
 
         var summaries: [BankBalanceSummary] = []
         for label in ["checking", "savings"] {
-            guard let startIndex = lowerLines.firstIndex(where: { $0.contains(label) }) else { continue }
+            guard let startIndex = preferredStartIndex(for: label) else { continue }
             let searchEnd = min(lines.count, startIndex + 40)
             var beginningBalance: Decimal?
             var endingBalance: Decimal?
@@ -687,6 +749,11 @@ struct CashFlowDetailView: View {
                 )
             }
         }
+
+        AMLogging.log(
+            "CashFlow sectioned summaries=\(summaries.map { "\($0.id)=begin:\($0.beginningBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil"),end:\($0.endingBalance.map { NSDecimalNumber(decimal: $0).stringValue } ?? "nil")" })",
+            component: "Import"
+        )
 
         return summaries.isEmpty ? nil : summaries
     }

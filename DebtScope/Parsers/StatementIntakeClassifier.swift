@@ -784,10 +784,6 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
         if normalizedAggressive.contains("checkingsummary") || normalizedAggressive.contains("savingssummary") {
             return true
         }
-        if normalizedAggressive.contains("consolidatedbalancesummary")
-            && (normalizedAggressive.contains("checking") || normalizedAggressive.contains("savings")) {
-            return true
-        }
         if normalizedAggressive.contains("checking&savingsaccountbeginningbalance")
             || normalizedAggressive.contains("checkingandsavingsaccountbeginningbalance") {
             return true
@@ -811,16 +807,17 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: "_", with: "")
-        let hasLoanSummary = normalizedAggressive.contains("totalloans")
-            || normalizedAggressive.contains("paymentof")
-            || normalizedAggressive.contains("endingbalance")
-        let hasLoanTerms = normalizedAggressive.contains("annualpercentagerate")
-            || normalizedAggressive.contains("interestrate")
+        let hasLoanCore = normalizedAggressive.contains("totalloans")
             || normalizedAggressive.contains("principal")
             || normalizedAggressive.contains("interestpaidytd")
+        let hasLoanPaymentStructure = normalizedAggressive.contains("paymentof")
+            || normalizedAggressive.contains("paymentdue")
+            || normalizedAggressive.contains("balanceforward")
+        let hasLoanAPR = normalizedAggressive.contains("annualpercentagerate")
+            || normalizedAggressive.contains("interestrate")
         let hasStrongBankSummary = hasStrongBankSummaryContext(in: normalizedAggressive)
         AMLogging.log(
-            "IntakeClassifier.detectTypeInPDF: loanSummary=\(hasLoanSummary) loanTerms=\(hasLoanTerms) strongBankSummary=\(hasStrongBankSummary) headerLines=\(headerLines.count) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            "IntakeClassifier.detectTypeInPDF: loanCore=\(hasLoanCore) loanPaymentStructure=\(hasLoanPaymentStructure) loanAPR=\(hasLoanAPR) strongBankSummary=\(hasStrongBankSummary) headerLines=\(headerLines.count) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
             component: "Intake"
         )
         if hasStrongBankSummary {
@@ -830,7 +827,7 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             )
             return .bank
         }
-        if hasLoanSummary && hasLoanTerms {
+        if hasLoanCore && (hasLoanAPR || hasLoanPaymentStructure) {
             AMLogging.log(
                 "IntakeClassifier.detectTypeInPDF: returning loan from heuristic runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
                 component: "Intake"
