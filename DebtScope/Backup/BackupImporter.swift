@@ -265,6 +265,18 @@ enum BackupImporter {
                 existing.ssaWednesday = dto.ssaWednesday
                 existing.account = dto.accountID.flatMap { accountMap[$0] }
                 existing.createdAt = dto.createdAt
+                if let reserveBalance = dto.reserveBalance {
+                    existing.reserveBalance = reserveBalance
+                }
+                if let reserveCycleStart = dto.reserveCycleStart {
+                    existing.reserveCycleStart = reserveCycleStart
+                }
+                if let reserveLastSeededCycleStart = dto.reserveLastSeededCycleStart {
+                    existing.reserveLastSeededCycleStart = reserveLastSeededCycleStart
+                }
+                if let reserveAutoEnabled = dto.reserveAutoEnabled {
+                    existing.reserveAutoEnabled = reserveAutoEnabled
+                }
                 summary.cashFlowsUpdated += 1
             } else {
                 let item = CashFlowItem(
@@ -278,7 +290,11 @@ enum BackupImporter {
                     notes: dto.notes,
                     ssaWednesday: dto.ssaWednesday,
                     account: dto.accountID.flatMap { accountMap[$0] },
-                    createdAt: dto.createdAt
+                    createdAt: dto.createdAt,
+                    reserveBalance: dto.reserveBalance ?? 0,
+                    reserveCycleStart: dto.reserveCycleStart,
+                    reserveLastSeededCycleStart: dto.reserveLastSeededCycleStart,
+                    reserveAutoEnabled: dto.reserveAutoEnabled ?? false
                 )
                 context.insert(item)
                 cashMap[dto.id] = item

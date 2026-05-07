@@ -30,7 +30,7 @@ struct NetWorthView: View {
                         .navigationTitle("Net Worth")
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                                PlanToolbarButton("+ Asset", titleFont: .title3, fixedWidth: 90) { showAddAssetSheet = true }
                             }
                         }
                 } detail: {
@@ -41,8 +41,8 @@ struct NetWorthView: View {
                     if embeddedInNavigation {
                         primaryList
                             .toolbar {
-                                ToolbarItem(placement: .topBarLeading) {
-                                    PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                                ToolbarItem(placement: .topBarTrailing) {
+                                    PlanToolbarButton("+ Asset", titleFont: .title3, fixedWidth: 90) { showAddAssetSheet = true }
                                 }
                             }
                     } else {
@@ -50,8 +50,8 @@ struct NetWorthView: View {
                             primaryList
                                 .navigationTitle("Net Worth")
                                 .toolbar {
-                                    ToolbarItem(placement: .topBarLeading) {
-                                        PlanToolbarButton("+ Asset", titleFont: .caption, fixedWidth: 70) { showAddAssetSheet = true }
+                                    ToolbarItem(placement: .topBarTrailing) {
+                                        PlanToolbarButton("+ Asset", titleFont: .title3, fixedWidth: 90) { showAddAssetSheet = true }
                                     }
                                 }
                         }

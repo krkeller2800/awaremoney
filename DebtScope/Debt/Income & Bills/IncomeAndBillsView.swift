@@ -1618,7 +1618,6 @@ private struct EditCashFlowItemView: View {
 
 private struct BillEditorSheet: View {
     let item: CashFlowItem
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: SettingsStore
 
     var body: some View {
@@ -1627,11 +1626,6 @@ private struct BillEditorSheet: View {
                 .environmentObject(settings)
                 .navigationTitle("Edit Bill")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { dismiss() }
-                    }
-                }
         }
     }
 }

@@ -12,7 +12,6 @@ struct SettingsView: View {
     @State private var showResetAlert = false
     @State private var showResetResultAlert = false
     @State private var resetResultMessage: String? = nil
-    @State private var showBackupSheet = false
     @State private var showPaywall = false
 
     // A small curated list of common currencies; can expand later.
@@ -62,9 +61,6 @@ struct SettingsView: View {
                 }
 
                 Section("Data & Privacy") {
-                    Button("Backup & Restore…") {
-                        showBackupSheet = true
-                    }
                     Button(role: .destructive) {
                         showResetAlert = true
                     } label: {
@@ -118,9 +114,6 @@ struct SettingsView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
-            .sheet(isPresented: $showBackupSheet) {
-                BackupRestoreView().environmentObject(settings)
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView()
@@ -209,4 +202,3 @@ private extension Notification.Name {
     SettingsView()
         .environmentObject(SettingsStore())
 }
-

@@ -28,6 +28,7 @@ struct QuickStartView: View {
     @State private var showImporter = false
     @State private var showAbout = false
     @State private var showSettings = false
+    @State private var showBackupRestore = false
     @State private var showHelp = false
     @State private var showDebug = false
     @State private var quickStartPending: (url: URL, type: StatementType?, institution: String?)? = nil
@@ -321,6 +322,12 @@ struct QuickStartView: View {
     private var utilitySection: some View {
         Section("Utility") {
             Button {
+                showBackupRestore = true
+            } label: {
+                Label("Backup & Restore", systemImage: "externaldrive")
+            }
+
+            Button {
                 showSettings = true
             } label: {
                 Label("Settings", systemImage: "gearshape")
@@ -473,6 +480,10 @@ struct QuickStartView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $showBackupRestore) {
+            BackupRestoreView()
+                .environmentObject(settings)
+        }
         .fullScreenCover(isPresented: $showHelp) {
             NavigationStack { HelpVideosView() }
                 .ignoresSafeArea()
@@ -501,6 +512,7 @@ struct QuickStartView: View {
 
     private var utilityItems: [(title: String, systemImage: String)] {
         var items: [(title: String, systemImage: String)] = [
+            ("Backup & Restore", "externaldrive"),
             ("Settings", "gearshape"),
             ("Help", "questionmark.circle")
         ]
@@ -514,6 +526,8 @@ struct QuickStartView: View {
 
     private func handleUtilityTap(title: String) {
         switch title {
+        case "Backup & Restore":
+            showBackupRestore = true
         case "Settings":
             showSettings = true
         case "Help":

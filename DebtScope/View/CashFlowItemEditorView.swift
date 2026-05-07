@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+#if os(iOS)
+import UIKit
+#endif
 
 public struct CashFlowItemEditorView: View {
     let item: CashFlowItem
@@ -21,24 +24,32 @@ public struct CashFlowItemEditorView: View {
     @State private var initialized = false
 
     @FocusState private var focusedField: FocusField?
+    @State private var nameIsFirstResponder: Bool = false
     @State private var amountIsFirstResponder: Bool = false
-
+    @State private var notesIsFirstResponder: Bool = false
     @State private var reserveAmountIsFirstResponder: Bool = false
     @State private var showRebaseConfirm: Bool = false
+    @State private var showFrequencyPicker: Bool = false
+    @State private var showDayOfMonthPicker: Bool = false
+    @State private var showFirstPaymentDatePicker: Bool = false
 
     @State private var originalSchedule: ScheduleSignature? = nil
     @State private var lastPromptedSchedule: ScheduleSignature? = nil
 
     // Editing state and keyboard navigation
-    private var isEditing: Bool { amountIsFirstResponder || reserveAmountIsFirstResponder || (focusedField != nil) }
+    private var isEditing: Bool {
+        nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || reserveAmountIsFirstResponder || (focusedField != nil)
+    }
     private var showBottomAccessoryBar: Bool {
         return isEditing
     }
 
     private var currentFocusField: FocusField? {
-        if let f = focusedField { return f }
+        if nameIsFirstResponder { return .name }
         if amountIsFirstResponder { return .amount }
+        if notesIsFirstResponder { return .notes }
         if reserveAmountIsFirstResponder { return .reserveAmount }
+        if let f = focusedField { return f }
         return nil
     }
 
@@ -55,7 +66,9 @@ public struct CashFlowItemEditorView: View {
     private func commitAndDismissKeyboard() {
         applyChanges()
         // Clear focus and dismiss keyboard
+        nameIsFirstResponder = false
         amountIsFirstResponder = false
+        notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
         focusedField = nil
         #if canImport(UIKit)
@@ -69,7 +82,9 @@ public struct CashFlowItemEditorView: View {
     }
 
     private func dismissKeyboardOnly() {
+        nameIsFirstResponder = false
         amountIsFirstResponder = false
+        notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
         focusedField = nil
         #if canImport(UIKit)
@@ -119,28 +134,36 @@ public struct CashFlowItemEditorView: View {
         func activate(_ field: FocusField) {
             switch field {
             case .name:
-                self.focusedField = .name
                 DispatchQueue.main.async {
+                    self.nameIsFirstResponder = true
                     self.amountIsFirstResponder = false
+                    self.notesIsFirstResponder = false
                     self.reserveAmountIsFirstResponder = false
+                    self.focusedField = .name
                 }
             case .amount:
-                self.focusedField = .amount
                 DispatchQueue.main.async {
-                    self.reserveAmountIsFirstResponder = false
+                    self.nameIsFirstResponder = false
                     self.amountIsFirstResponder = true
+                    self.notesIsFirstResponder = false
+                    self.reserveAmountIsFirstResponder = false
+                    self.focusedField = .amount
                 }
             case .notes:
-                self.focusedField = .notes
                 DispatchQueue.main.async {
+                    self.nameIsFirstResponder = false
                     self.amountIsFirstResponder = false
+                    self.notesIsFirstResponder = true
                     self.reserveAmountIsFirstResponder = false
+                    self.focusedField = .notes
                 }
             case .reserveAmount:
-                self.focusedField = .reserveAmount
                 DispatchQueue.main.async {
+                    self.nameIsFirstResponder = false
                     self.amountIsFirstResponder = false
+                    self.notesIsFirstResponder = false
                     self.reserveAmountIsFirstResponder = true
+                    self.focusedField = .reserveAmount
                 }
             }
         }
@@ -156,7 +179,9 @@ public struct CashFlowItemEditorView: View {
 
     private func commitAndDismiss() {
         applyChanges()
+        nameIsFirstResponder = false
         amountIsFirstResponder = false
+        notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
         focusedField = nil
         #if canImport(UIKit)
@@ -230,16 +255,38 @@ public struct CashFlowItemEditorView: View {
                     get: { dayOfMonth },
                     set: { dayOfMonth = $0; applyChanges(); detectScheduleChangeAndPromptIfNeeded() }
                 )
-                Picker("Day of Month", selection: binding) {
-                    Text("None").tag(nil as Int?)
-                    ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                HStack {
+                    Picker("Day of Month", selection: binding) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                    }
+                    Spacer(minLength: 8)
+                    Button(action: {
+                        dismissKeyboardOnly()
+                        showDayOfMonthPicker = true
+                    }) {
+                        Image(systemName: "pencil").imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
             default:
                 let dateBinding = Binding<Date>(
                     get: { firstPaymentDate ?? Date() },
                     set: { firstPaymentDate = $0; applyChanges(); detectScheduleChangeAndPromptIfNeeded() }
                 )
-                DatePicker("First Payment Date", selection: dateBinding, displayedComponents: .date)
+                HStack {
+                    DatePicker("First Payment Date", selection: dateBinding, displayedComponents: .date)
+                    Spacer(minLength: 8)
+                    Button(action: {
+                        dismissKeyboardOnly()
+                        showFirstPaymentDatePicker = true
+                    }) {
+                        Image(systemName: "pencil").imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -413,12 +460,29 @@ public struct CashFlowItemEditorView: View {
         Form {
             Section("Details") {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    TextField("Name", text: $name)
-                        .onChange(of: name) { applyChanges() }
-                        .focused($focusedField, equals: .name)
+                    HStack(spacing: 6) {
+                        BillSelectAllTextField(
+                            text: $name,
+                            placeholder: "Name",
+                            isFirstResponder: $nameIsFirstResponder,
+                            returnKeyType: .next,
+                            onPrev: { moveFocus(-1) },
+                            onNext: { moveFocus(1) },
+                            onDone: { commitAndDismissKeyboard() },
+                            onTextChange: { applyChanges() }
+                        )
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .submitLabel(.next)
-                        .onSubmit { moveFocus(1) }
+                        Button(action: {
+                            focusedField = .name
+                            nameIsFirstResponder = true
+                        }) {
+                            Image(systemName: "pencil")
+                                .imageScale(.small)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Edit name")
+                    }
                     #if os(iOS)
                     HStack(spacing: 6) {
                         CurrencyAmountField(
@@ -462,15 +526,26 @@ public struct CashFlowItemEditorView: View {
                     }
                     #endif
                 }
-                Picker("Frequency", selection: $frequency) {
-                    Text("Monthly").tag(PaymentFrequency.monthly)
-                    Text("Twice per month").tag(PaymentFrequency.semimonthly)
-                    Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
-                    Text("Weekly").tag(PaymentFrequency.weekly)
-                    Text("Yearly").tag(PaymentFrequency.yearly)
-                    Text("Quarterly").tag(PaymentFrequency.quarterly)
-                    Text("Semiannual").tag(PaymentFrequency.semiAnnual)
-                    Text("One-time").tag(PaymentFrequency.oneTime)
+                HStack {
+                    Picker("Frequency", selection: $frequency) {
+                        Text("Monthly").tag(PaymentFrequency.monthly)
+                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                        Text("Weekly").tag(PaymentFrequency.weekly)
+                        Text("Yearly").tag(PaymentFrequency.yearly)
+                        Text("Quarterly").tag(PaymentFrequency.quarterly)
+                        Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                        Text("One-time").tag(PaymentFrequency.oneTime)
+                    }
+                    Spacer(minLength: 8)
+                    Button(action: {
+                        dismissKeyboardOnly()
+                        showFrequencyPicker = true
+                    }) {
+                        Image(systemName: "pencil").imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
                 .onChange(of: frequency) { _, newValue in
                     if item.kind == .income {
@@ -508,11 +583,28 @@ public struct CashFlowItemEditorView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                TextField("Notes", text: $notes)
-                    .onChange(of: notes) { applyChanges() }
-                    .focused($focusedField, equals: .notes)
-                    .submitLabel(.done)
-                    .onSubmit { commitAndDismissKeyboard() }
+                HStack(spacing: 6) {
+                    BillSelectAllTextField(
+                        text: $notes,
+                        placeholder: "Notes",
+                        isFirstResponder: $notesIsFirstResponder,
+                        returnKeyType: .done,
+                        onPrev: { moveFocus(-1) },
+                        onNext: { moveFocus(1) },
+                        onDone: { commitAndDismissKeyboard() },
+                        onTextChange: { applyChanges() }
+                    )
+                    Button(action: {
+                        focusedField = .notes
+                        notesIsFirstResponder = true
+                    }) {
+                        Image(systemName: "pencil")
+                            .imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Edit notes")
+                }
             }
             ReserveSummarySectionInline()
             ReserveAutomationSection()
@@ -529,14 +621,32 @@ public struct CashFlowItemEditorView: View {
             self.originalSchedule = self.currentScheduleSignature()
         }
         .toolbar {
-            ToolbarItem(placement: .destructiveAction) {
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ToolbarItem(placement: .cancellationAction) {
+                    PlanToolbarButton("Cancel", fixedWidth: 70) { dismiss() }
+                }
+            }
+            #endif
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    applyChanges()
+                    dismissKeyboardOnly()
+                    dismiss()
+                } label: {
+                    PlanMenuLabel(title: "Save", titleFont: .callout)
+                }
+                .buttonStyle(.plain)
+            }
+            ToolbarItem(placement: .topBarLeading) {
                 Button(role: .destructive) {
                     modelContext.delete(item)
                     try? modelContext.save()
                     dismiss()
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Image(systemName: "trash")
                 }
+                .buttonStyle(.plain)
             }
         }
         .alert("Mark this year paid?", isPresented: $showRebaseConfirm) {
@@ -566,11 +676,62 @@ public struct CashFlowItemEditorView: View {
         .onChange(of: focusedField) { _, _ in
             selectAllInFirstResponder()
         }
+        .onChange(of: nameIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .name }
+        }
         .onChange(of: amountIsFirstResponder) { _, isFirst in
             if isFirst { focusedField = .amount }
         }
+        .onChange(of: notesIsFirstResponder) { _, isFirst in
+            if isFirst { focusedField = .notes }
+        }
         .onChange(of: reserveAmountIsFirstResponder) { _, isFirst in
             if isFirst { focusedField = .reserveAmount }
+        }
+        .sheet(isPresented: $showFrequencyPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Frequency", selection: $frequency) {
+                        Text("Monthly").tag(PaymentFrequency.monthly)
+                        Text("Twice per month").tag(PaymentFrequency.semimonthly)
+                        Text("Every 2 weeks").tag(PaymentFrequency.biweekly)
+                        Text("Weekly").tag(PaymentFrequency.weekly)
+                        Text("Yearly").tag(PaymentFrequency.yearly)
+                        Text("Quarterly").tag(PaymentFrequency.quarterly)
+                        Text("Semiannual").tag(PaymentFrequency.semiAnnual)
+                        Text("One-time").tag(PaymentFrequency.oneTime)
+                    }
+                }
+                .navigationTitle("Frequency")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFrequencyPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showDayOfMonthPicker) {
+            NavigationStack {
+                Form {
+                    Picker("Day of Month", selection: Binding<Int?>(
+                        get: { dayOfMonth },
+                        set: { dayOfMonth = $0; applyChanges(); detectScheduleChangeAndPromptIfNeeded() }
+                    )) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
+                    }
+                }
+                .navigationTitle("Day of Month")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDayOfMonthPicker = false } } }
+            }
+        }
+        .sheet(isPresented: $showFirstPaymentDatePicker) {
+            NavigationStack {
+                Form {
+                    DatePicker("First Payment Date", selection: Binding<Date>(
+                        get: { firstPaymentDate ?? Date() },
+                        set: { firstPaymentDate = $0; applyChanges(); detectScheduleChangeAndPromptIfNeeded() }
+                    ), displayedComponents: .date)
+                }
+                .navigationTitle("First Payment Date")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showFirstPaymentDatePicker = false } } }
+            }
         }
     }
 
@@ -714,8 +875,74 @@ fileprivate func parseDecimalAmount(from text: String) -> Decimal? {
     return Decimal(string: normalized)
 }
 
-#if os(iOS)
-import UIKit
+private struct BillSelectAllTextField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    @Binding var isFirstResponder: Bool
+    var returnKeyType: UIReturnKeyType = .default
+    var onPrev: (() -> Void)? = nil
+    var onNext: (() -> Void)? = nil
+    var onDone: (() -> Void)? = nil
+    var onTextChange: (() -> Void)? = nil
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField(frame: .zero)
+        tf.placeholder = placeholder
+        tf.text = text
+        tf.returnKeyType = returnKeyType
+        tf.delegate = context.coordinator
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        tf.borderStyle = .none
+        return tf
+    }
+
+    func updateUIView(_ uiView: UITextField, context: Context) {
+        uiView.placeholder = placeholder
+        uiView.returnKeyType = returnKeyType
+        if uiView.text != text && !uiView.isFirstResponder {
+            uiView.text = text
+        }
+        if isFirstResponder && !uiView.isFirstResponder {
+            uiView.becomeFirstResponder()
+        } else if !isFirstResponder && uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: BillSelectAllTextField
+
+        init(_ parent: BillSelectAllTextField) {
+            self.parent = parent
+        }
+
+        @objc func editingChanged(_ textField: UITextField) {
+            parent.text = textField.text ?? ""
+            parent.onTextChange?()
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            DispatchQueue.main.async { textField.selectAll(nil) }
+            parent.isFirstResponder = true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            parent.isFirstResponder = false
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            switch parent.returnKeyType {
+            case .next:
+                parent.onNext?()
+            default:
+                parent.onDone?()
+            }
+            return false
+        }
+    }
+}
 
 private struct SelectAllAmountField: UIViewRepresentable {
     @Binding var text: String
@@ -771,10 +998,6 @@ private struct SelectAllAmountField: UIViewRepresentable {
         }
     }
 }
-#endif
-
-#if os(iOS)
-import UIKit
 
 private struct CurrencyAmountField: UIViewRepresentable {
     @Binding var value: Decimal
@@ -889,9 +1112,7 @@ private struct CurrencyAmountField: UIViewRepresentable {
         }
     }
 }
-#endif
 
 #Preview {
     Text("Editor preview requires a CashFlowItem instance")
 }
-

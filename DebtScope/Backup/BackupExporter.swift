@@ -114,6 +114,10 @@ struct CashFlowItemDTO: Codable {
     let ssaWednesday: Int?
     let accountID: UUID?
     let createdAt: Date
+    let reserveBalance: Decimal?
+    let reserveCycleStart: Date?
+    let reserveLastSeededCycleStart: Date?
+    let reserveAutoEnabled: Bool?
 }
 
 struct AssetLiabilityLinkDTO: Codable {
@@ -343,7 +347,11 @@ enum BackupExporter {
                 notes: c.notes,
                 ssaWednesday: c.ssaWednesday,
                 accountID: c.account.map { surrogateID(for: $0) },
-                createdAt: c.createdAt
+                createdAt: c.createdAt,
+                reserveBalance: c.reserveBalance,
+                reserveCycleStart: c.reserveCycleStart,
+                reserveLastSeededCycleStart: c.reserveLastSeededCycleStart,
+                reserveAutoEnabled: c.reserveAutoEnabled
             )
         }
 
@@ -374,7 +382,7 @@ enum BackupExporter {
         )
 
         let payload = DataBackup(
-            version: 1,
+            version: 2,
             generatedAt: Date(),
             settings: settingsDTO,
             accounts: accountDTOs,
@@ -494,4 +502,3 @@ import SwiftUI
         return rootWrapper
     }
 }
-
