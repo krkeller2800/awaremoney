@@ -25,12 +25,14 @@ fileprivate struct Debt: Identifiable, Hashable {
 }
 
 struct DebtSummaryView: View {
+    var embeddedInNavigation: Bool = false
+
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [Account] = []
-    @State private var showPlanSheet = false
+    @State private var embeddedPlannerIsEditing = false
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
@@ -107,6 +109,11 @@ struct DebtSummaryView: View {
     }
     
     private func sanitizedDefaultSpread(_ v: Int) -> Int { [3,6,12].contains(v) ? v : 12 }
+
+    private func usesProjectedBalances(mode: PlanMode, date: Date?) -> Bool {
+        guard mode == .projectedAtDate, let date else { return false }
+        return normalizeToMonth(date) > normalizeToMonth(Date())
+    }
     
     private func tempBaselineSource() -> IncomeScheduler.BaselineSource {
         if baselineBudgetSourceRaw == "fixed" {
@@ -139,22 +146,20 @@ struct DebtSummaryView: View {
         let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
         let availableThisMonth = schedule[startMonth] ?? 0
 
+        let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
+
         // Compute balances (projected when needed) and minimums for debts that have a positive balance
         let filteredAccounts = accounts.filter { acct in
             let baseBal = absDecimal(latestBalance(acct))
-            let bal: Decimal = {
-                if tempPlanMode == .projectedAtDate {
-                    return absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
-                } else {
-                    return baseBal
-                }
-            }()
+            let bal = shouldProjectBalances
+                ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
+                : baseBal
             return bal > 0
         }
 
         let minimumsTotal: Decimal = filteredAccounts.reduce(0) { acc, acct in
             let baseBal = absDecimal(latestBalance(acct))
-            let bal: Decimal = (tempPlanMode == .projectedAtDate)
+            let bal = shouldProjectBalances
                 ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
                 : baseBal
             return acc + monthlyPayment(for: acct, balance: bal)
@@ -164,13 +169,12 @@ struct DebtSummaryView: View {
         return (availableThisMonth, minimumsTotal, shortfall)
     }
 
-    var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                let compact = isCompactLayout(proxy.size)
-                let isPortrait = proxy.size.height > proxy.size.width
+    private var bodyContent: some View {
+        GeometryReader { proxy in
+            let compact = isCompactLayout(proxy.size)
+            let isPortrait = proxy.size.height > proxy.size.width
 //                let toolbarCompact = !((hSizeClass == .regular) && proxy.size.width >= 844)
-                ScrollView(.vertical) {
+            ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
                         // Portrait hint for iPhone
                         if isPhone && isPortrait {
@@ -186,7 +190,7 @@ struct DebtSummaryView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.bottom, compact ? 6 : 8)
                         }
-                        
+
                         if isPortrait && proxy.size.width < 844 {
                             let paddingH: CGFloat = compact ? 6 : 12
                             let contentWidth: CGFloat = 844 - 2 * paddingH
@@ -196,37 +200,38 @@ struct DebtSummaryView: View {
                                     .frame(width: 844, alignment: .topLeading)
                             }
                         } else {
-                            let paddingH: CGFloat = compact ? 6 : 12
-                            let contentWidth: CGFloat = proxy.size.width - 2 * paddingH
-                            summaryStack(compact: compact, availableWidth: contentWidth)
-                                .padding(.horizontal, paddingH)
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                            let outerPadding: CGFloat = embeddedInNavigation ? (compact ? 18 : 28) : (compact ? 6 : 12)
+                            let maxContentWidth: CGFloat = compact ? 900 : 980
+                            let contentWidth: CGFloat = min(maxContentWidth, proxy.size.width - 2 * outerPadding)
+                            HStack {
+                                Spacer(minLength: outerPadding)
+                                summaryStack(compact: compact, availableWidth: contentWidth)
+                                    .frame(width: contentWidth, alignment: .topLeading)
+                                Spacer(minLength: outerPadding)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .top)
                     .padding(.vertical, 8)
                 }
-                .navigationTitle("Debt Summary")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        VStack(spacing: 0) {
-                            Text("Debt Summary")
-                                .font(.headline)
-                            Text(planSubtitleText)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .layoutPriority(1)
-                        }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Debt Summary")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 0) {
+                        Text("Debt Summary")
+                            .font(.headline)
+                        Text(planSubtitleText)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(1)
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        PlanToolbarButton("Strategy", fixedWidth: 90) {
-                            showPlanSheet = true
-                        } 
-                    }
+                }
+                if !embeddedInNavigation {
                     ToolbarItem(placement: .topBarLeading) {
                         PlanToolbarButton("Done", fixedWidth: 60) {
                             dismiss()
@@ -234,34 +239,33 @@ struct DebtSummaryView: View {
                         .accessibilityIdentifier("debtSummaryDoneButton")
                     }
                 }
-                .task { recomputeAppliedState() }
-                    .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
-                        recomputeAppliedState()
-                    }
-                    .onChange(of: baselineBudgetSourceRaw) { _, _ in recomputeAppliedState() }
-                    .onChange(of: useFixedDebtBudget) { _, _ in recomputeAppliedState() }
-                    .onChange(of: debtBudgetOverrideAmount) { _, _ in recomputeAppliedState() }
-                    .onChange(of: debtPlanStartModeRaw) { _, _ in recomputeAppliedState() }
-                    .onChange(of: debtPlanStartDateEpoch) { _, _ in recomputeAppliedState() }
-                
-                .task { await load() }
-                
-                .sheet(isPresented: $showPlanSheet) {
-                    DebtPlanSheetView()
-                        .environment(\.modelContext, modelContext)
-                        .environmentObject(settings)
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
-                    recomputeAppliedState()
-                }
-                .onChange(of: baselineBudgetSourceRaw) { _, _ in recomputeAppliedState() }
-                .onChange(of: useFixedDebtBudget) { _, _ in recomputeAppliedState() }
-                .onChange(of: debtBudgetOverrideAmount) { _, _ in recomputeAppliedState() }
-                .onChange(of: debtPlanStartModeRaw) { _, _ in recomputeAppliedState() }
-                .onChange(of: debtPlanStartDateEpoch) { _, _ in recomputeAppliedState() }
-//                .onChange(of: showPlanSheet) { _, newValue in
-//                    AMLogging.log("showPlanSheet changed: \(newValue)", component: "DebtSummaryView")
-//                }
+            }
+            .task { recomputeAppliedState() }
+            .task { await load() }
+            .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
+                recomputeAppliedState()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .debtSummaryEmbeddedPlannerEditingChanged)) { note in
+                guard embeddedInNavigation, let isEditing = note.object as? Bool else { return }
+                embeddedPlannerIsEditing = isEditing
+            }
+            .onChange(of: baselineBudgetSourceRaw) { _, _ in recomputeAppliedState() }
+            .onChange(of: useFixedDebtBudget) { _, _ in recomputeAppliedState() }
+            .onChange(of: debtBudgetOverrideAmount) { _, _ in recomputeAppliedState() }
+            .onChange(of: debtPlanStartModeRaw) { _, _ in recomputeAppliedState() }
+            .onChange(of: debtPlanStartDateEpoch) { _, _ in recomputeAppliedState() }
+
+        }
+    }
+
+
+    @ViewBuilder
+    var body: some View {
+        if embeddedInNavigation {
+            bodyContent
+        } else {
+            NavigationStack {
+                bodyContent
             }
         }
     }
@@ -284,8 +288,8 @@ struct DebtSummaryView: View {
         let usable = max(0, totalWidth - totalSpacing)
         // Baseline widths taken from existing fixed widths to preserve proportions
         let base: [CGFloat] = compact
-            ? [100, 60, 100, 100, 100, 110, 110]
-            : [160, 90, 120, 120, 120, 140, 130]
+            ? [84, 60, 100, 100, 100, 110, 110]
+            : [132, 90, 120, 120, 120, 140, 130]
         let sum = base.reduce(0, +)
         let factor: CGFloat = sum > 0 ? (usable / sum) : 1
         func w(_ i: Int) -> CGFloat { max(0, base[i] * factor) }
@@ -302,28 +306,63 @@ struct DebtSummaryView: View {
 
     // MARK: - View Builders
 
-    private func payoffOrderString() -> String? {
-        guard let plan = currentPlan, !plan.payoffOrder.isEmpty else { return nil }
-        let names = plan.payoffOrder.compactMap { id in accounts.first(where: { $0.id == id })?.name }
-        let order = names.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "  •  ")
-        return "Payoff order: " + order
+    private var inlineStrategyBinding: Binding<PayoffStrategy> {
+        Binding(
+            get: { appliedStrategy },
+            set: { newValue in
+                switch newValue {
+                case .minimumsOnly:
+                    settings.defaultPayoffStrategyRaw = "minimumsOnly"
+                case .snowball:
+                    settings.defaultPayoffStrategyRaw = "snowball"
+                case .avalanche:
+                    settings.defaultPayoffStrategyRaw = "avalanche"
+                }
+                recomputeAppliedState()
+                NotificationCenter.default.post(name: .planSettingsDidChange, object: nil)
+            }
+        )
     }
 
     private func summaryStack(compact: Bool, availableWidth: CGFloat) -> some View {
         let widths = columnWidths(for: availableWidth, compact: compact)
         return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-            if let s = payoffOrderString() {
-                Text(s)
-                    .font(compact ? .caption2 : .caption)
-                    .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Picker("Strategy", selection: inlineStrategyBinding) {
+                    Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
+                    Text("Snowball").tag(PayoffStrategy.snowball)
+                    Text("Avalanche").tag(PayoffStrategy.avalanche)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: min(availableWidth, compact ? 420 : 520))
+                Spacer()
             }
             headerRow(compact: compact, widths: widths)
             Divider()
-            ForEach(accounts, id: \.id) { acct in
+            ForEach(sortedAccountsByPayoffDate(), id: \.id) { acct in
                 row(for: acct, compact: compact, widths: widths)
                 Divider()
             }
             totalRow(compact: compact, widths: widths)
+            VStack(alignment: .leading, spacing: compact ? 8 : 10) {
+                Text("Plan Settings")
+                    .font(compact ? .headline : .title3.weight(.semibold))
+                    .padding(.horizontal, compact ? 12 : 16)
+                    .padding(.top, compact ? 10 : 14)
+
+                DebtPlanSheetView(embeddedInNavigation: true)
+                    .environment(\.modelContext, modelContext)
+                    .environmentObject(settings)
+                    .frame(maxWidth: .infinity)
+            }
+            .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.14))
+            )
+            .padding(.top, compact ? 10 : 14)
+            .id("planSettingsPanel")
         }
     }
 
@@ -442,7 +481,7 @@ struct DebtSummaryView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
-            Text("After Payment")
+            Text("Total Interest")
                 .frame(width: widths.afterPayment, alignment: .trailing)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
@@ -460,13 +499,9 @@ struct DebtSummaryView: View {
 
     private func row(for account: Account, compact: Bool, widths: ColumnWidths) -> some View {
         let baseBal = absDecimal(latestBalance(account))
-        let usedBal: Decimal = {
-            if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
-                return absProjectedOrBase(for: account, planDate: plan, base: baseBal)
-            } else {
-                return baseBal
-            }
-        }()
+        let usedBal = usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate)
+            ? absProjectedOrBase(for: account, planDate: appliedStartMonth(), base: baseBal)
+            : baseBal
         let apr = account.loanTerms?.apr
         let planMonth = currentPlan?.months.first
         let payment = planMonth?.payments[account.id] ?? monthlyPayment(for: account, balance: usedBal)
@@ -478,26 +513,16 @@ struct DebtSummaryView: View {
             }
         }()
 
-        let payoff: Date? = {
-            if let planDate = currentPlan?.payoffDates[account.id] {
-                return planDate
-            }
-            let asOfDate = (appliedPlanMode == .projectedAtDate) ? (appliedPlanDate ?? Date()) : Date()
-            return PayoffCalculator.payoffDate(for: account, asOf: asOfDate)
-        }()
+        let payoff = projectedPayoffDate(for: account)
+        let totalInterestToPayoff = totalInterestUntilPayoff(for: account, startingBalance: usedBal, fallbackPayment: payment)
 
         return HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
-            VStack(alignment: .leading, spacing: compact ? 1 : 2) {
-                Text(account.name)
-                    .font(compact ? .subheadline : .headline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .truncationMode(.tail)
-                Text(account.type == .loan ? "Loan" : "Credit Card")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: widths.account, alignment: .leading)
+            Text(account.name)
+                .font(compact ? .subheadline : .headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.tail)
+                .frame(width: widths.account, alignment: .leading)
 
             Text(formatAPR(apr, scale: account.loanTerms?.aprScale, compact: compact))
                 .font(compact ? .footnote : .body)
@@ -524,7 +549,7 @@ struct DebtSummaryView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
 
-            Text(formatAmount(step.afterPaymentBalance))
+            Text(formatAmount(totalInterestToPayoff))
                 .font(compact ? .footnote : .body)
                 .frame(width: widths.afterPayment, alignment: .trailing)
                 .lineLimit(1)
@@ -541,6 +566,68 @@ struct DebtSummaryView: View {
             .frame(width: widths.payoff, alignment: .trailing)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
+        }
+    }
+
+    private func projectedPayoffDate(for account: Account) -> Date? {
+        if let planDate = currentPlan?.payoffDates[account.id] {
+            return planDate
+        }
+        let asOfDate = usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate) ? appliedStartMonth() : Date()
+        return PayoffCalculator.payoffDate(for: account, asOf: asOfDate)
+    }
+
+    private func totalInterestUntilPayoff(for account: Account, startingBalance: Decimal, fallbackPayment: Decimal) -> Decimal? {
+        let preStartInterest = projectedPreStartInterest(for: account)
+
+        if let plan = currentPlan {
+            let interestByMonth = plan.months.compactMap { $0.interest[account.id] }
+            if !interestByMonth.isEmpty {
+                return (preStartInterest + interestByMonth.reduce(0, +)).rounded(2)
+            }
+        }
+
+        guard startingBalance > 0 else { return preStartInterest.rounded(2) }
+
+        var balance = startingBalance
+        var totalInterest = preStartInterest
+        var remainingMonths = 600
+
+        while balance > 0, remainingMonths > 0 {
+            let step = monthStep(for: account, balance: balance, payment: fallbackPayment)
+            totalInterest += step.interest
+            if step.afterPaymentBalance >= balance {
+                break
+            }
+            balance = step.afterPaymentBalance
+            remainingMonths -= 1
+        }
+
+        return totalInterest.rounded(2)
+    }
+
+    private func projectedPreStartInterest(for account: Account) -> Decimal {
+        guard usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate) else { return 0 }
+        let startMonth = appliedStartMonth()
+
+        do {
+            let projection = try PayoffCalculator.project(for: account, asOf: startMonth)
+            return projection.points.reduce(Decimal(0)) { total, point in
+                normalizeToMonth(point.date) < startMonth ? total + point.interestPaid : total
+            }.rounded(2)
+        } catch {
+            return 0
+        }
+    }
+
+    private func sortedAccountsByPayoffDate() -> [Account] {
+        accounts.sorted { lhs, rhs in
+            let lhsDate = projectedPayoffDate(for: lhs) ?? .distantFuture
+            let rhsDate = projectedPayoffDate(for: rhs) ?? .distantFuture
+            if lhsDate == rhsDate {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhsDate < rhsDate
         }
     }
 
@@ -570,7 +657,7 @@ struct DebtSummaryView: View {
                 .frame(width: widths.interest, alignment: .trailing)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-            Text(formatAmount(totals.afterPayment))
+            Text(formatAmount(totals.totalInterestToPayoff))
                 .font(compact ? .footnote : .body)
                 .frame(width: widths.afterPayment, alignment: .trailing)
                 .lineLimit(1)
@@ -607,10 +694,12 @@ struct DebtSummaryView: View {
         // Determine start month based on applied settings
         let startMonth = appliedStartMonth()
 
+        let shouldProjectBalances = usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate)
+
         // Build debts from current accounts using applied start mode/date
         let filteredAccounts = accounts.filter { acct in
             let baseBal = absDecimal(latestBalance(acct))
-            let bal: Decimal = (appliedPlanMode == .projectedAtDate)
+            let bal = shouldProjectBalances
                 ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
                 : baseBal
             return bal > 0
@@ -618,7 +707,7 @@ struct DebtSummaryView: View {
 
         let debts: [DebtInput] = filteredAccounts.map { acct in
             let baseBal = absDecimal(latestBalance(acct))
-            let bal: Decimal = (appliedPlanMode == .projectedAtDate)
+            let bal = shouldProjectBalances
                 ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
                 : baseBal
             let minPay = monthlyPayment(for: acct, balance: bal)
@@ -797,38 +886,33 @@ struct DebtSummaryView: View {
         return base
     }
 
-    private func totalsForAccounts(_ accts: [Account]) -> (balance: Decimal, payment: Decimal, interest: Decimal, afterPayment: Decimal) {
+    private func totalsForAccounts(_ accts: [Account]) -> (balance: Decimal, payment: Decimal, interest: Decimal, totalInterestToPayoff: Decimal) {
         var totalBalance: Decimal = 0
         var totalPayment: Decimal = 0
         var totalInterest: Decimal = 0
-        var totalAfter: Decimal = 0
+        var totalInterestToPayoff: Decimal = 0
         
         let planMonth = currentPlan?.months.first
 
         for acct in accts {
             let base = absDecimal(latestBalance(acct))
-            let bal: Decimal = {
-                if let plan = appliedPlanDate, appliedPlanMode == .projectedAtDate {
-                    return absProjectedOrBase(for: acct, planDate: plan, base: base)
-                } else {
-                    return base
-                }
-            }()
+            let bal = usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate)
+                ? absProjectedOrBase(for: acct, planDate: appliedStartMonth(), base: base)
+                : base
             totalBalance += bal
             
             let pay: Decimal = planMonth?.payments[acct.id] ?? monthlyPayment(for: acct, balance: bal)
             totalPayment += pay
+            totalInterestToPayoff += totalInterestUntilPayoff(for: acct, startingBalance: bal, fallbackPayment: pay) ?? 0
             
-            if let m = planMonth, let i = m.interest[acct.id], let after = m.balances[acct.id] {
+            if let m = planMonth, let i = m.interest[acct.id] {
                 totalInterest += i
-                totalAfter += after
             } else {
                 let step = monthStep(for: acct, balance: bal, payment: pay)
                 totalInterest += step.interest
-                totalAfter += step.afterPaymentBalance
             }
         }
-        return (totalBalance, totalPayment, totalInterest, totalAfter)
+        return (totalBalance, totalPayment, totalInterest, totalInterestToPayoff)
     }
     
     private func parseCurrencyInput(_ input: String) -> Decimal? {
@@ -897,6 +981,8 @@ struct DebtSummaryView: View {
 }
 
 struct DebtPlanSheetView: View {
+    var embeddedInNavigation: Bool = false
+
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.dismiss) private var dismiss
@@ -933,11 +1019,38 @@ struct DebtPlanSheetView: View {
     @FocusState private var focusedField: FocusField?
     private enum FocusField: Hashable { case monthlyBudget }
     private var isEditing: Bool { focusedField != nil }
+    private var shouldShowPlanLandscapeHint: Bool {
+        #if os(iOS)
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return false }
+        let bounds = UIScreen.main.bounds
+        return bounds.height > bounds.width
+        #else
+        return false
+        #endif
+    }
 
     // Accounts for feasibility and plan building
     @State private var accounts: [Account] = []
 
     private func sanitizedDefaultSpread(_ v: Int) -> Int { [3,6,12].contains(v) ? v : 12 }
+
+    private func usesProjectedBalances(mode: PlanMode, date: Date?) -> Bool {
+        guard mode == .projectedAtDate, let date else { return false }
+        return normalizeToMonth(date) > normalizeToMonth(Date())
+    }
+
+    private var embeddedPlannerHeight: CGFloat {
+        guard embeddedInNavigation else { return 0 }
+
+        var height: CGFloat = 1800
+        if tempStrategy != .minimumsOnly {
+            height += 220
+        }
+        if showBudgetingHint {
+            height += 220
+        }
+        return height
+    }
 
     private var baselineSource: IncomeScheduler.BaselineSource {
         if tempBaselineBudgetSourceRaw == "fixed",
@@ -955,6 +1068,52 @@ struct DebtPlanSheetView: View {
             if let d = parseCurrencyInput(trimmed), d > 0 { return .fixedAmount(d) }
         }
         return .recurringNet
+    }
+
+    private var monthSymbols: [String] {
+        DateFormatter().monthSymbols
+    }
+
+    private var shortMonthSymbols: [String] {
+        DateFormatter().shortMonthSymbols
+    }
+
+    private var selectedPlanMonthTitle: String {
+        let index = max(0, min(selectedPlanMonth - 1, shortMonthSymbols.count - 1))
+        return shortMonthSymbols[index]
+    }
+
+    private var availablePlanYears: [Int] {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        return Array((currentYear - 1)...(currentYear + 10))
+    }
+
+    private var selectedPlanMonth: Int {
+        get { Calendar.current.component(.month, from: tempPlanDate) }
+        set {
+            updatePlanMonthYear(month: newValue, year: selectedPlanYear)
+        }
+    }
+
+    private var selectedPlanYear: Int {
+        get { Calendar.current.component(.year, from: tempPlanDate) }
+        set {
+            updatePlanMonthYear(month: selectedPlanMonth, year: newValue)
+        }
+    }
+
+    private func updatePlanMonthYear(month: Int, year: Int) {
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = 1
+        let newDate = Calendar.current.date(from: components) ?? tempPlanDate
+        tempPlanDate = newDate
+        let currentMonth = normalizeToMonth(Date())
+        tempPlanMode = Calendar.current.isDate(newDate, equalTo: currentMonth, toGranularity: .month)
+            ? .currentInputs
+            : .projectedAtDate
+        autoApplyEmbeddedPlanIfPossible()
     }
 
     private func allCashFlowItems() -> [CashFlowItem] {
@@ -977,70 +1136,362 @@ struct DebtPlanSheetView: View {
         let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
         let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
         let availableThisMonth = schedule[startMonth] ?? 0
-        let filteredAccounts = accounts.filter { absDecimal(latestBalance($0)) > 0 }
+        let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
+        let filteredAccounts = accounts.filter { acct in
+            let baseBal = absDecimal(latestBalance(acct))
+            let bal = shouldProjectBalances
+                ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
+                : baseBal
+            return bal > 0
+        }
         let minimumsTotal: Decimal = filteredAccounts.reduce(0) { acc, acct in
             let baseBal = absDecimal(latestBalance(acct))
-            let bal: Decimal = (tempPlanMode == .projectedAtDate) ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal) : baseBal
+            let bal = shouldProjectBalances
+                ? absProjectedOrBase(for: acct, planDate: startMonth, base: baseBal)
+                : baseBal
             return acc + monthlyPayment(for: acct, balance: bal)
         }
         let shortfall = max(0, (minimumsTotal - availableThisMonth))
         return (availableThisMonth, minimumsTotal, shortfall)
     }
 
-    var body: some View {
-        NavigationStack {
-            GeometryReader { geo in
-                let showLandscapeHint = UIDevice.current.userInterfaceIdiom == .phone && geo.size.height > geo.size.width
-                ScrollViewReader { proxy in
-                    List {
+    private var monthYearPickerGroup: some View {
+        HStack(spacing: 5) {
+            Text("Month / Year: ")
+
+            Menu {
+                ForEach(Array(monthSymbols.enumerated()), id: \.offset) { index, month in
+                    Button(month) {
+                        updatePlanMonthYear(month: index + 1, year: selectedPlanYear)
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(selectedPlanMonthTitle)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .menuOrder(.fixed)
+
+            Text("/")
+                .foregroundStyle(.secondary)
+
+            Menu {
+                ForEach(availablePlanYears, id: \.self) { year in
+                    Button(String(year)) {
+                        updatePlanMonthYear(month: selectedPlanMonth, year: year)
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(String(selectedPlanYear))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.secondary)
+            }
+            .menuOrder(.fixed)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var startModePicker: some View {
+        Picker("Start mode", selection: $tempPlanMode) {
+            Text("Now").tag(PlanMode.currentInputs)
+            Text("Planned").tag(PlanMode.projectedAtDate)
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: tempPlanMode) { _, newValue in
+            if newValue == .currentInputs { tempPlanDate = Date() }
+            autoApplyEmbeddedPlanIfPossible()
+        }
+    }
+
+    private func embeddedSection<Content: View, Footer: View>(
+        _ title: String? = nil,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder footer: () -> Footer
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            footer()
+                .font(.footnote)
+                .foregroundStyle(.primary.opacity(0.75))
+                .padding(.horizontal, 16)
+        }
+    }
+
+    private func embeddedSection<Content: View>(
+        _ title: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        embeddedSection(title, content: content) { EmptyView() }
+    }
+
+    @ViewBuilder
+    private var embeddedPlanEditorContent: some View {
+        let showLandscapeHint = shouldShowPlanLandscapeHint
+        VStack(alignment: .leading, spacing: 16) {
+            embeddedSection {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        monthYearPickerGroup
+                        Spacer(minLength: 12)
+                        startModePicker
+                            .frame(width: 180)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        monthYearPickerGroup
+                        startModePicker
+                    }
+                }
+            } footer: {
+                Text("Choose the month your strategy starts. Plans always begin on the first day of the selected month.")
+            }
+            .id("planEditorTop")
+
+            embeddedSection("Payoff Plan") {
+                LabeledContent("Base Budget") {
+                    TextField("$0.00", text: $tempMonthlyBudget)
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.numbersAndPunctuation)
+                        .focused($focusedField, equals: .monthlyBudget)
+                        .selectAllOnFocus()
+                        .submitLabel(.done)
+                        .onSubmit { commitAndDismissKeyboard() }
+                        .onChange(of: tempMonthlyBudget) { _, _ in
+                            autoApplyEmbeddedPlanIfPossible()
+                        }
+                }
+                .id("monthlyBudgetField")
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Your total monthly budget for debt payments. Leave empty if you use Minimums Only strategy or Reoccurring Net.")
+                    Text("Changes apply immediately as you edit this plan.")
+                        .foregroundStyle(.secondary)
+                    if let error = budgetValidationError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
+            }
+
+            embeddedSection("Budget Source & Spreads") {
+                Picker("Baseline source", selection: $tempBaselineBudgetSourceRaw) {
+                    Text("Recurring Net").tag("recurringNet")
+                    Text("Fixed amount").tag("fixed")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: tempBaselineBudgetSourceRaw) { _, _ in
+                    autoApplyEmbeddedPlanIfPossible()
+                }
+
+                DisclosureGroup(isExpanded: $showBudgetingHint) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Recurring Net")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text("Uses your ongoing income and expenses to compute a monthly budget that can vary by month. It's adjusted for one-time incomes/bills spread across several months. Debt payments adjust based on what's available each month.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                        Text("Fixed Amount")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text("Uses a single, constant monthly budget for debt payoff. It's adjusted for one-time incomes/bills spread across several months. If the fixed amount is too low to cover minimums, the plan will fail until you increase it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        Text("Budgeting hint")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Toggle("Include non-monthly incomes/bills", isOn: $tempIncludeNonMonthlyIncomeSpreads)
+                    .onChange(of: tempIncludeNonMonthlyIncomeSpreads) { _, _ in
+                        autoApplyEmbeddedPlanIfPossible()
+                    }
+                Picker("Default spread for one-time income", selection: $tempOneTimeIncomeDefaultSpreadMonths) {
+                    Text("3 months").tag(3)
+                    Text("6 months").tag(6)
+                    Text("12 months").tag(12)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: tempOneTimeIncomeDefaultSpreadMonths) { _, _ in
+                    autoApplyEmbeddedPlanIfPossible()
+                }
+            } footer: {
+                Text("The above spread applies to non-monthly incomes/bills (e.g., yearly) set to 'Default' when created. If set to something other than 'Default', they will not be affected.")
+            }
+
+            embeddedSection("Budget to Paydown Debt Over Time") {
+                let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
+                BudgetTimelinePreviewView(startMonth: startMonth, schedule: schedule)
+                    .environmentObject(settings)
+                    .id("embedded-sched-\(includeNonMonthlyIncomeSpreads)-\(oneTimeIncomeDefaultSpreadMonths)-\(baselineBudgetSourceRaw)-\(startMonth.timeIntervalSince1970)")
+            }
+
+            embeddedSection("Explain my plan") {
+                let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
+                DisclosureGroup {
+                    let items = allCashFlowItems()
+                    let rawExplainContributions = IncomeScheduler.contributionsByMonth(items: items, start: startMonth, months: 12, oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths))
+                    let explainContributions: [Date: [ExplainPlanView.ContributionRow]] = Dictionary(uniqueKeysWithValues: rawExplainContributions.map { (date, rows) in (date, rows.map { r in ExplainPlanView.ContributionRow(name: r.name, amount: r.amount) }) })
+                    let rawBillContributions = IncomeScheduler.billContributionsByMonth(items: items, start: startMonth, months: 12, defaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths))
+                    let explainBillContributions: [Date: [ExplainPlanView.ContributionRow]] = Dictionary(uniqueKeysWithValues: rawBillContributions.map { (date, rows) in (date, rows.map { r in ExplainPlanView.ContributionRow(name: r.name, amount: r.amount) }) })
+                    ExplainPlanView(startMonth: startMonth, contributions: explainContributions, billContributions: explainBillContributions, monthlyBudgetByMonth: schedule)
+                        .environmentObject(settings)
+                } label: {
+                    if showLandscapeHint {
+                        HStack {
+                            Text("Plan by Month")
+                            Label("Rotate for better view", systemImage: "rotate.left")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    } else {
+                        Text("Plan by Month")
+                    }
+                }
+            } footer: {
+                Text("Shows which variable incomes/bills contribute to which months. Spreads begin the month after a pay date; remainders apply to the last month.")
+            }
+
+            if tempStrategy != .minimumsOnly {
+                embeddedSection("Feasibility") {
+                    let feas = feasibilityForTempPlan()
+                    let isInfeasible = feas.shortfall > 0
+                    let planSummary: String = {
+                        if tempPlanMode == .projectedAtDate {
+                            return "Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted)) • \(tempStrategyDisplay)\(tempBudgetText)"
+                        } else {
+                            return "Start now • \(tempStrategyDisplay)\(tempBudgetText)"
+                        }
+                    }()
+                    LabeledContent("Current Plan") { Text(planSummary).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7) }
+                    if isInfeasible {
+                        Text("Budget is not enough to cover minimum payments this month.").font(.callout).bold().foregroundStyle(.red)
+                    } else {
+                        Text("Budget covers minimum payments this month.").font(.callout).bold()
+                    }
+                    LabeledContent("Avail for debt (this month)") { Text(formatAmount(feas.available)) }
+                    LabeledContent("Minimums due (this month)") { Text(formatAmount(feas.minimums)) }
+                    if isInfeasible {
+                        LabeledContent("Shortfall") { Text(formatAmount(feas.shortfall)).foregroundStyle(.red) }
+                        Button("Switch to Minimums Only") { tempStrategy = .minimumsOnly }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                    }
+                }
+                .id("feasibility-section")
+            }
+
+            embeddedSection("Income & Bills") {
+                NavigationLink("Manage Income & Bills") { IncomeAndBillsView() }
+                LabeledContent("Monthly Income") { Text(formatAmount(computedMonthlyIncome)) }
+                LabeledContent("Monthly Bills") { Text(formatAmount(computedMonthlyBills)) }
+                if reserveSeedingThisMonthTotal() > 0 {
+                    LabeledContent("Reserve Seed (This Month)") { Text(formatAmount(reserveSeedingThisMonthTotal())) }
+                }
+                LabeledContent("Net for Debt") { Text(formatAmount(computedMonthlyIncome - computedMonthlyBills)) }
+                Button("Use Net as Budget") {
+                    let net = computedMonthlyIncome - computedMonthlyBills
+                    if net > 0 {
+                        tempMonthlyBudget = formatAmount(net)
+                        autoApplyEmbeddedPlanIfPossible()
+                    }
+                }
+                .disabled((computedMonthlyIncome - computedMonthlyBills) <= 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .onChange(of: focusedField) { _, newValue in
+            NotificationCenter.default.post(
+                name: .debtSummaryEmbeddedPlannerEditingChanged,
+                object: newValue != nil
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var planEditorContent: some View {
+        let showLandscapeHint = shouldShowPlanLandscapeHint
+        ScrollViewReader { proxy in
+                List {
                         Section {
-                            DatePicker("Start date", selection: $tempPlanDate, displayedComponents: .date)
-                                .datePickerStyle(.compact)
-                                .onChange(of: tempPlanDate) { _, newValue in
-                                    let isToday = Calendar.current.isDate(newValue, inSameDayAs: Date())
-                                    tempPlanMode = isToday ? .currentInputs : .projectedAtDate
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 12) {
+                                    monthYearPickerGroup
+                                    Spacer(minLength: 12)
+                                    startModePicker
+                                        .frame(width: 180)
                                 }
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    monthYearPickerGroup
+                                    startModePicker
+                                }
+                            }
                         } footer: {
-                            Text("Choose the date your strategy starts. The selected start date will appear above the summary headers.")
+                            Text("Choose the month your strategy starts. Plans always begin on the first day of the selected month.")
                                 .font(.footnote)
                                 .foregroundStyle(.primary.opacity(0.75))
                         }
-                        Section("Mode") {
-                            Picker("Start mode", selection: $tempPlanMode) {
-                                Text("Start now").tag(PlanMode.currentInputs)
-                                Text("Start on date").tag(PlanMode.projectedAtDate)
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: tempPlanMode) { _, newValue in
-                                if newValue == .currentInputs { tempPlanDate = Date() }
-                            }
-                        }
-                        Section("Strategy") {
-                            Picker("Strategy", selection: $tempStrategy) {
-                                Text("Minimums Only").tag(PayoffStrategy.minimumsOnly)
-                                Text("Snowball").tag(PayoffStrategy.snowball)
-                                Text("Avalanche").tag(PayoffStrategy.avalanche)
-                            }
-                            .pickerStyle(.segmented)
-                            DebtStrategyInfoView()
-                        }
+                        .id("planEditorTop")
                         Section {
                             LabeledContent("Base Budget") {
                                 TextField("$0.00", text: $tempMonthlyBudget)
                                     .multilineTextAlignment(.trailing)
-                                    .keyboardType(.decimalPad)
+                                    .keyboardType(.numbersAndPunctuation)
                                     .focused($focusedField, equals: .monthlyBudget)
+                                    .selectAllOnFocus()
                                     .submitLabel(.done)
                                     .onSubmit { commitAndDismissKeyboard() }
-                                    .highPriorityGesture(TapGesture().onEnded { focusedField = .monthlyBudget; selectAllInFirstResponder() })
+                                    .onChange(of: tempMonthlyBudget) { _, _ in
+                                        autoApplyEmbeddedPlanIfPossible()
+                                    }
                             }
+                            .id("monthlyBudgetField")
                         } header: {
                             Text("Payoff Plan")
                         } footer: {
-                            Group {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text("Your total monthly budget for debt payments. Leave empty if you use Minimums Only strategy or Reoccurring Net.")
                                     .font(.footnote)
                                     .foregroundStyle(.primary.opacity(0.75))
+                                if embeddedInNavigation {
+                                    Text("Changes apply immediately as you edit this plan.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                                 if let error = budgetValidationError {
                                     Text(error).font(.footnote).foregroundStyle(.red)
                                 }
@@ -1053,6 +1504,9 @@ struct DebtPlanSheetView: View {
                                 Text("Fixed amount").tag("fixed")
                             }
                             .pickerStyle(.segmented)
+                            .onChange(of: tempBaselineBudgetSourceRaw) { _, _ in
+                                autoApplyEmbeddedPlanIfPossible()
+                            }
                             // Budgeting hint disclosure
                             DisclosureGroup(isExpanded: $showBudgetingHint) {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -1084,12 +1538,18 @@ struct DebtPlanSheetView: View {
                             }
 
                             Toggle("Include non-monthly incomes/bills", isOn: $tempIncludeNonMonthlyIncomeSpreads)
+                                .onChange(of: tempIncludeNonMonthlyIncomeSpreads) { _, _ in
+                                    autoApplyEmbeddedPlanIfPossible()
+                                }
                             Picker("Default spread for one-time income", selection: $tempOneTimeIncomeDefaultSpreadMonths) {
                                 Text("3 months").tag(3)
                                 Text("6 months").tag(6)
                                 Text("12 months").tag(12)
                             }
                             .pickerStyle(.segmented)
+                            .onChange(of: tempOneTimeIncomeDefaultSpreadMonths) { _, _ in
+                                autoApplyEmbeddedPlanIfPossible()
+                            }
                         } header: {
                             Text("Budget Source & Spreads")
                         } footer: {
@@ -1179,202 +1639,127 @@ struct DebtPlanSheetView: View {
                             LabeledContent("Net for Debt") { Text(formatAmount(computedMonthlyIncome - computedMonthlyBills)) }
                             Button("Use Net as Budget") {
                                 let net = computedMonthlyIncome - computedMonthlyBills
-                                if net > 0 { tempMonthlyBudget = formatAmount(net) }
+                                if net > 0 {
+                                    tempMonthlyBudget = formatAmount(net)
+                                    autoApplyEmbeddedPlanIfPossible()
+                                }
                             }
                             .disabled((computedMonthlyIncome - computedMonthlyBills) <= 0)
                         }
-                    }
-                    .safeAreaInset(edge: .top) {
-                        let feas = feasibilityForTempPlan()
-                        let isInfeasible = (tempStrategy != .minimumsOnly) && (feas.shortfall > 0)
-                        if isInfeasible {
-                            HStack {
-                                Spacer()
-                                Button {
-                                    withAnimation(.snappy) { proxy.scrollTo("feasibility-section", anchor: .top) }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                        Text("Shortfall: \(formatAmount(feas.shortfall)) • View details")
-                                    }
-                                    .font(.caption)
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(.thinMaterial, in: Capsule())
-                                .overlay(Capsule().stroke(Color.red.opacity(0.3)))
-                                .foregroundStyle(.red)
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 12)
-                            .background(.bar)
-                            .overlay(Divider(), alignment: .bottom)
-                        } else { EmptyView() }
-                    }
-                }
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Strategy start")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                // Prefill strategy from settings
-                switch settings.defaultPayoffStrategyRaw {
-                case "snowball": tempStrategy = .snowball
-                case "avalanche": tempStrategy = .avalanche
-                default: tempStrategy = .minimumsOnly
-                }
-                // Prefill budget with Net for Debt if enabled
-                if settings.useNetForDebtBudgetDefault {
-                    let net = computedMonthlyIncome - computedMonthlyBills
-                    if net > 0 { tempMonthlyBudget = formatAmount(net) }
-                }
-                let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
-                
-                // Prefill from saved fixed amount whenever available,
-                // regardless of the useFixedDebtBudget flag state.
-                if debtBudgetOverrideAmount > 0 {
-                    let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
-                    tempMonthlyBudget = formatAmount(saved)
-                }
 
-                if debtPlanStartModeRaw == "projectedAtDate" {
-                    tempPlanMode = .projectedAtDate
-                    if debtPlanStartDateEpoch > 0 {
-                        tempPlanDate = Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+                        if embeddedInNavigation {
+                            Section {
+                                Color.clear
+                                    .frame(height: 146)
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
+                }
+                .scrollDisabled(embeddedInNavigation)
+                .frame(height: embeddedInNavigation ? embeddedPlannerHeight : nil)
+                .safeAreaInset(edge: .top) {
+                    let feas = feasibilityForTempPlan()
+                    let isInfeasible = (tempStrategy != .minimumsOnly) && (feas.shortfall > 0)
+                    if isInfeasible {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.snappy) { proxy.scrollTo("feasibility-section", anchor: .top) }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                    Text("Shortfall: \(formatAmount(feas.shortfall)) • View details")
+                                }
+                                .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.thinMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.red.opacity(0.3)))
+                            .foregroundStyle(.red)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.bar)
+                        .overlay(Divider(), alignment: .bottom)
+                    } else {
+                        EmptyView()
                     }
-                } else {
-                    tempPlanMode = .currentInputs
                 }
-                // NEW: Seed local plan settings from persisted values
-                tempBaselineBudgetSourceRaw = baselineBudgetSourceRaw
-                // If a fixed budget is currently in effect, force the sheet to show "Fixed amount"
-                // and prefill the saved amount so validations use the correct value when launched
-                // from PlanBanner.
-                if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
-                    tempBaselineBudgetSourceRaw = "fixed"
-                    let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
-                    tempMonthlyBudget = formatAmount(saved)
+                .onChange(of: focusedField) { _, newValue in
+                    if embeddedInNavigation {
+                        NotificationCenter.default.post(
+                            name: .debtSummaryEmbeddedPlannerEditingChanged,
+                            object: newValue != nil
+                        )
+                    }
+
+
                 }
-                tempIncludeNonMonthlyIncomeSpreads = includeNonMonthlyIncomeSpreads
-                tempOneTimeIncomeDefaultSpreadMonths = oneTimeIncomeDefaultSpreadMonths
             }
-            .toolbar {
+    }
+
+    var body: some View {
+        Group {
+            if embeddedInNavigation {
+                embeddedPlanEditorContent
+            } else {
+                NavigationStack {
+                    planEditorContent
+                        .navigationTitle("Strategy start")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .onAppear {
+            // Prefill strategy from settings
+            switch settings.defaultPayoffStrategyRaw {
+            case "snowball": tempStrategy = .snowball
+            case "avalanche": tempStrategy = .avalanche
+            default: tempStrategy = .minimumsOnly
+            }
+            // Prefill budget with Net for Debt if enabled
+            if settings.useNetForDebtBudgetDefault {
+                let net = computedMonthlyIncome - computedMonthlyBills
+                if net > 0 { tempMonthlyBudget = formatAmount(net) }
+            }
+            let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
+
+            // Prefill from saved fixed amount whenever available,
+            // regardless of the useFixedDebtBudget flag state.
+            if debtBudgetOverrideAmount > 0 {
+                let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                tempMonthlyBudget = formatAmount(saved)
+            }
+
+            if debtPlanStartModeRaw == "projectedAtDate" {
+                tempPlanMode = .projectedAtDate
+                if debtPlanStartDateEpoch > 0 {
+                    tempPlanDate = Date(timeIntervalSince1970: debtPlanStartDateEpoch)
+                }
+            } else {
+                tempPlanMode = .currentInputs
+            }
+            tempBaselineBudgetSourceRaw = baselineBudgetSourceRaw
+            if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
+                tempBaselineBudgetSourceRaw = "fixed"
+                let saved = NSDecimalNumber(value: debtBudgetOverrideAmount).decimalValue
+                tempMonthlyBudget = formatAmount(saved)
+            }
+            tempIncludeNonMonthlyIncomeSpreads = includeNonMonthlyIncomeSpreads
+            tempOneTimeIncomeDefaultSpreadMonths = oneTimeIncomeDefaultSpreadMonths
+        }
+        .toolbar {
+            if !embeddedInNavigation {
                 ToolbarItem(placement: .confirmationAction) {
                     let feas = feasibilityForTempPlan()
                     let isInfeasible = (tempStrategy != .minimumsOnly) && (feas.shortfall > 0)
                     PlanToolbarButton("Set Plan") {
-                        let feasCheck = feasibilityForTempPlan()
-                        if tempStrategy != .minimumsOnly && feasCheck.shortfall > 0 {
-                            let availText = formatAmount(feasCheck.available)
-                            let minsText = formatAmount(feasCheck.minimums)
-                            let message = "The budget available this month (\(availText)) is less than your minimum payments (\(minsText)). Please increase your budget, adjust income/bills, or choose Minimums Only."
-                            budgetValidationError = message
-                            planErrorMessage = message
-                            showPlanErrorAlert = true
-                            return
-                        }
-                        budgetValidationError = nil
-                        let parsedBudget: Decimal? = {
-                            if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-                            else { return parseCurrencyInput(tempMonthlyBudget) }
-                        }()
-                        if tempStrategy != .minimumsOnly && parsedBudget == nil {
-                            budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
-                            planErrorMessage = "Please enter a valid budget amount or select the Minimums Only strategy."
-                            showPlanErrorAlert = true
-                            return
-                        }
-
-                        // Build debts from current accounts
-                        let filteredAccounts = accounts.filter { acct in
-                            let baseBal = absDecimal(latestBalance(acct))
-                            let bal: Decimal = (tempPlanMode == .projectedAtDate) ? absProjectedOrBase(for: acct, planDate: normalizeToMonth(tempPlanDate), base: baseBal) : baseBal
-                            return bal > 0
-                        }
-                        let debts: [DebtInput] = filteredAccounts.map { acct in
-                            let baseBal = absDecimal(latestBalance(acct))
-                            let bal: Decimal = (tempPlanMode == .projectedAtDate) ? absProjectedOrBase(for: acct, planDate: normalizeToMonth(tempPlanDate), base: baseBal) : baseBal
-                            let minPayment = monthlyPayment(for: acct, balance: bal)
-                            return DebtInput(id: acct.id, name: acct.name, apr: acct.loanTerms?.apr, balance: bal, minPayment: minPayment)
-                        }
-
-                        // Determine budget series
-                        let startDateForPlan = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
-                        // Replace the plan building condition to use temp values:
-                        let schedule = budgetSchedule(start: startDateForPlan, months: 60, baselineOverride: tempBaselineSource())
-
-                        do {
-                            let planResult: DebtPlanResult
-                            // Use tempIncludeNonMonthlyIncomeSpreads and tempBaselineBudgetSourceRaw for preview logic
-                            if tempIncludeNonMonthlyIncomeSpreads || tempBaselineBudgetSourceRaw == "recurringNet" {
-                                planResult = try DebtPayoffEngine.plan(
-                                    debts: debts,
-                                    budgetByMonth: schedule,
-                                    strategy: tempStrategy,
-                                    startDate: startDateForPlan
-                                )
-                            } else {
-                                // Fixed path requires a valid parsed budget
-                                let budgetToUse: Decimal = parsedBudget ?? debts.reduce(0) { $0 + $1.minPayment }
-                                planResult = try DebtPayoffEngine.plan(
-                                    debts: debts,
-                                    monthlyBudget: budgetToUse,
-                                    strategy: tempStrategy,
-                                    startDate: startDateForPlan
-                                )
-                            }
-                            currentPlan = planResult
-
-                            // Persist selections for other views — only now (on Set Plan)
-
-                            // 1) Strategy
-                            switch tempStrategy {
-                            case .minimumsOnly: settings.defaultPayoffStrategyRaw = "minimumsOnly"
-                            case .snowball:     settings.defaultPayoffStrategyRaw = "snowball"
-                            case .avalanche:    settings.defaultPayoffStrategyRaw = "avalanche"
-                            }
-
-                            // 2) Baseline source & spreads
-                            baselineBudgetSourceRaw = tempBaselineBudgetSourceRaw
-                            includeNonMonthlyIncomeSpreads = tempIncludeNonMonthlyIncomeSpreads
-                            oneTimeIncomeDefaultSpreadMonths = tempOneTimeIncomeDefaultSpreadMonths
-
-                            // 3) Fixed/Recurring budget persistence
-                            if tempBaselineBudgetSourceRaw == "fixed" {
-                                // Require a valid budget amount for fixed baseline
-                                if let b = parsedBudget, b > 0 {
-                                    useFixedDebtBudget = true
-                                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
-                                } else {
-                                    budgetValidationError = "Please enter a valid budget amount for Fixed source or choose Recurring Net."
-                                    planErrorMessage = budgetValidationError
-                                    showPlanErrorAlert = true
-                                    return
-                                }
-                            } else {
-                                // Recurring Net path: ensure we are not stuck in fixed mode
-                                useFixedDebtBudget = false
-                                debtBudgetOverrideAmount = 0.0
-                            }
-
-                            // 4) Start mode/date
-                            debtPlanStartModeRaw = (tempPlanMode == .projectedAtDate) ? "projectedAtDate" : "currentInputs"
-                            let normalizedStart = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
-                            debtPlanStartDateEpoch = (tempPlanMode == .projectedAtDate) ? normalizedStart.timeIntervalSince1970 : 0
-
-                            NotificationCenter.default.post(name: .planSettingsDidChange, object: nil)
-                            dismiss()
-                        } catch DebtPlanError.infeasibleBudget {
-                            budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
-                            planErrorMessage = budgetValidationError
-                            showPlanErrorAlert = true
-                        } catch {
-                            budgetValidationError = "An unexpected error occurred."
-                            planErrorMessage = budgetValidationError
-                            showPlanErrorAlert = true
-                        }
+                        applyPlanSettings()
                     }
                     .disabled(isInfeasible)
                 }
@@ -1382,24 +1767,35 @@ struct DebtPlanSheetView: View {
                     PlanToolbarButton("Cancel", fixedWidth: 70) { dismiss() }
                 }
             }
-            .alert("Can't set plan", isPresented: $showPlanErrorAlert) { Button("OK", role: .cancel) { } } message: { Text(planErrorMessage ?? "") }
-            .safeAreaInset(edge: .bottom) {
-                Group {
-                    if isEditing {
-                        EditingAccessoryBar(
-                            canGoPrevious: false,
-                            canGoNext: false,
-                            onPrevious: { },
-                            onNext: { },
-                            onDone: { commitAndDismissKeyboard() }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else { EmptyView().frame(height: 0) }
-                }
-                .animation(.snappy, value: isEditing)
-            }
-            .task { await loadAccounts() }
         }
+        .alert("Can't set plan", isPresented: $showPlanErrorAlert) { Button("OK", role: .cancel) { } } message: { Text(planErrorMessage ?? "") }
+        .onReceive(NotificationCenter.default.publisher(for: .debtSummaryEmbeddedPlannerCommitKeyboard)) { _ in
+            guard embeddedInNavigation else { return }
+            commitAndDismissKeyboard()
+        }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if !embeddedInNavigation && isEditing {
+                    EditingAccessoryBar(
+                        canGoPrevious: false,
+                        canGoNext: false,
+                        onPrevious: { },
+                        onNext: { },
+                        onDone: { commitAndDismissKeyboard() }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    EmptyView().frame(height: 0)
+                }
+            }
+            .animation(.snappy, value: isEditing)
+        }
+        .onDisappear {
+            if embeddedInNavigation {
+                NotificationCenter.default.post(name: .debtSummaryEmbeddedPlannerEditingChanged, object: false)
+            }
+        }
+        .task { await loadAccounts() }
     }
 
     // MARK: - Helpers copied from DebtSummaryView
@@ -1490,21 +1886,133 @@ struct DebtPlanSheetView: View {
         if let d = parseCurrencyInput(trimmed) { return " • Adj Budget: \(formatAmount(d))" } else { return " • Budget: —" }
     }
 
+    @discardableResult
+    private func applyPlanSettings(showAlerts: Bool = true) -> Bool {
+        let feasCheck = feasibilityForTempPlan()
+        if tempStrategy != .minimumsOnly && feasCheck.shortfall > 0 {
+            let availText = formatAmount(feasCheck.available)
+            let minsText = formatAmount(feasCheck.minimums)
+            let message = "The budget available this month (\(availText)) is less than your minimum payments (\(minsText)). Please increase your budget, adjust income/bills, or choose Minimums Only."
+            budgetValidationError = message
+            planErrorMessage = message
+            if showAlerts { showPlanErrorAlert = true }
+            return false
+        }
+
+        budgetValidationError = nil
+        let parsedBudget: Decimal? = {
+            if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return parseCurrencyInput(tempMonthlyBudget)
+        }()
+
+        if tempStrategy != .minimumsOnly && parsedBudget == nil {
+            budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
+            planErrorMessage = budgetValidationError
+            if showAlerts { showPlanErrorAlert = true }
+            return false
+        }
+
+        let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
+        let planStartMonth = normalizeToMonth(tempPlanDate)
+        let filteredAccounts = accounts.filter { acct in
+            let baseBal = absDecimal(latestBalance(acct))
+            let bal = shouldProjectBalances
+                ? absProjectedOrBase(for: acct, planDate: planStartMonth, base: baseBal)
+                : baseBal
+            return bal > 0
+        }
+        let debts: [DebtInput] = filteredAccounts.map { acct in
+            let baseBal = absDecimal(latestBalance(acct))
+            let bal = shouldProjectBalances
+                ? absProjectedOrBase(for: acct, planDate: planStartMonth, base: baseBal)
+                : baseBal
+            let minPayment = monthlyPayment(for: acct, balance: bal)
+            return DebtInput(id: acct.id, name: acct.name, apr: acct.loanTerms?.apr, balance: bal, minPayment: minPayment)
+        }
+
+        let startDateForPlan = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+        let schedule = budgetSchedule(start: startDateForPlan, months: 60, baselineOverride: tempBaselineSource())
+
+        do {
+            let planResult: DebtPlanResult
+            if tempIncludeNonMonthlyIncomeSpreads || tempBaselineBudgetSourceRaw == "recurringNet" {
+                planResult = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: tempStrategy,
+                    startDate: startDateForPlan
+                )
+            } else {
+                let budgetToUse: Decimal = parsedBudget ?? debts.reduce(0) { $0 + $1.minPayment }
+                planResult = try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: budgetToUse,
+                    strategy: tempStrategy,
+                    startDate: startDateForPlan
+                )
+            }
+            currentPlan = planResult
+
+            switch tempStrategy {
+            case .minimumsOnly: settings.defaultPayoffStrategyRaw = "minimumsOnly"
+            case .snowball:     settings.defaultPayoffStrategyRaw = "snowball"
+            case .avalanche:    settings.defaultPayoffStrategyRaw = "avalanche"
+            }
+
+            baselineBudgetSourceRaw = tempBaselineBudgetSourceRaw
+            includeNonMonthlyIncomeSpreads = tempIncludeNonMonthlyIncomeSpreads
+            oneTimeIncomeDefaultSpreadMonths = tempOneTimeIncomeDefaultSpreadMonths
+
+            if tempBaselineBudgetSourceRaw == "fixed" {
+                if let b = parsedBudget, b > 0 {
+                    useFixedDebtBudget = true
+                    debtBudgetOverrideAmount = NSDecimalNumber(decimal: b).doubleValue
+                } else {
+                    budgetValidationError = "Please enter a valid budget amount for Fixed source or choose Recurring Net."
+                    planErrorMessage = budgetValidationError
+                    if showAlerts { showPlanErrorAlert = true }
+                    return false
+                }
+            } else {
+                useFixedDebtBudget = false
+                debtBudgetOverrideAmount = 0.0
+            }
+
+            let normalizedStart = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+            let shouldPersistProjectedStart = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
+            debtPlanStartModeRaw = shouldPersistProjectedStart ? "projectedAtDate" : "currentInputs"
+            debtPlanStartDateEpoch = shouldPersistProjectedStart ? normalizedStart.timeIntervalSince1970 : 0
+
+            NotificationCenter.default.post(name: .planSettingsDidChange, object: nil)
+            if !embeddedInNavigation {
+                dismiss()
+            }
+            return true
+        } catch DebtPlanError.infeasibleBudget {
+            budgetValidationError = "The budget is too low to cover minimum payments. Please increase your budget or choose Minimums Only strategy."
+            planErrorMessage = budgetValidationError
+            if showAlerts { showPlanErrorAlert = true }
+        } catch {
+            budgetValidationError = "An unexpected error occurred."
+            planErrorMessage = budgetValidationError
+            if showAlerts { showPlanErrorAlert = true }
+        }
+        return false
+    }
+
+    private func autoApplyEmbeddedPlanIfPossible() {
+        guard embeddedInNavigation else { return }
+        _ = applyPlanSettings(showAlerts: false)
+    }
+
     private func commitAndDismissKeyboard() {
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
         focusedField = nil
+        autoApplyEmbeddedPlanIfPossible()
         #if canImport(UIKit)
         let keyWindow = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first { $0.isKeyWindow }
         keyWindow?.endEditing(true)
-        #endif
-    }
-
-    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
-        #if canImport(UIKit)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
-        }
         #endif
     }
 
@@ -1643,6 +2151,11 @@ private extension Decimal {
     }
 }
 
+private extension Notification.Name {
+    static let debtSummaryEmbeddedPlannerEditingChanged = Notification.Name("DebtSummaryEmbeddedPlannerEditingChanged")
+    static let debtSummaryEmbeddedPlannerCommitKeyboard = Notification.Name("DebtSummaryEmbeddedPlannerCommitKeyboard")
+}
+
 extension Notification.Name {
     static let planSettingsDidChange = Notification.Name("planSettingsDidChange")
 }
@@ -1660,4 +2173,3 @@ extension UIView {
     }
 }
 #endif
-

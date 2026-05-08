@@ -5,11 +5,12 @@ import SwiftData
 
 private enum QuickStartTopic: String, CaseIterable, Identifiable {
     case debtPayoff = "Payoff"
+    case compareStrategies = "Compare Strategies"
     case netWorth = "Net Worth"
     case cashFlow = "Cash Flow"
     case incomeBills = "Income & Bills"
     case assets = "Assets"
-    case statementReview = "Statement Review"
+    case statementReview = "Unknown ​Statements"
 
     var id: String { rawValue }
     var title: String { rawValue }
@@ -378,6 +379,8 @@ struct QuickStartView: View {
                 onRouteImport: routeImportedAccount,
                 pendingExternal: $quickStartPending
             )
+        case .compareStrategies:
+            DebtSummaryView(embeddedInNavigation: true)
         case .netWorth:
             NetWorthView(embeddedInNavigation: compact)
         case .cashFlow:
