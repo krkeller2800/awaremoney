@@ -1,9 +1,13 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ManualAddAccountSheet: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @Binding var selectedType: StatementType?
     @Binding var editedInstitution: String
@@ -12,123 +16,368 @@ struct ManualAddAccountSheet: View {
     @Binding var aprPercentInput: String
     @Binding var balanceInput: String
     @State private var balanceDate: Date = Date()
+    @State private var showDebtImpactPreview = false
+
+    private enum ManualField: Hashable {
+        case institution
+        case monthlyPayment
+        case apr
+        case balance
+    }
+
+    @FocusState private var focusedManualField: ManualField?
 
     var onCancel: () -> Void
     var onSaved: (Account) -> Void
 
     var body: some View {
         NavigationStack {
-            HStack(spacing: 0) {
-                // Left column: mirrors Import Ready controls
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Enter the details for your account.")
-                        .foregroundStyle(.secondary)
+            content
+                .navigationTitle("Add Account")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { onCancel() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            formatMoneyInput(&monthlyPaymentInput)
+                            formatAPRInput()
+                            formatMoneyInput(&balanceInput)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Type")
-                        Spacer()
-                        Picker("Type", selection: $selectedType) {
-                            Text("Choose…").tag(nil as StatementType?)
-                            ForEach(StatementType.allCases, id: \.self) { t in
-                                Text(displayName(for: t)).tag(StatementType?.some(t))
+                            if let account = createAccount() {
+                                onSaved(account)
                             }
                         }
-                        .pickerStyle(.menu)
+                        .disabled(selectedType == nil || editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Institution")
-                        Spacer()
-                        TextField("Institution", text: $editedInstitution)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 200)
-                    }
-
-                    if selectedType == .bank {
-                        HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            Text("Bank Subtype")
-                            Spacer()
-                            Picker("Bank Subtype", selection: $bankSubtype) {
-                                Text("Auto").tag(nil as QuickIngestAccountType?)
-                                Text("Checking").tag(QuickIngestAccountType.checking as QuickIngestAccountType?)
-                                Text("Savings").tag(QuickIngestAccountType.savings as QuickIngestAccountType?)
-                            }
-                            .pickerStyle(.menu)
-                        }
-                    }
-
-                    Divider().padding(.top, 4)
-                    Text("Optional").font(.headline)
-
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Monthly payment")
-                        Spacer()
-                        TextField("Amount", text: $monthlyPaymentInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                            .keyboardType(.decimalPad)
-#endif
-                    }
-
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("APR (%)")
-                        Spacer()
-                        TextField("e.g., 19.99", text: $aprPercentInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                            .keyboardType(.decimalPad)
-#endif
-                    }
-
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Ending balance")
-                        Spacer()
-                        TextField("Amount", text: $balanceInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                            .keyboardType(.decimalPad)
-#endif
-                    }
-                    DatePicker("As of", selection: $balanceDate, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-
-                    Spacer()
                 }
-                .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
-                .padding()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if horizontalSizeClass == .regular {
+            HStack(spacing: 0) {
+                accountFormColumn
+                    .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+                    .padding()
 
                 Divider()
 
-                // Right column: placeholder instead of PDF
-                ContentUnavailableView(
-                    "Statement Preview",
-                    systemImage: "doc.richtext",
-                    description: Text("PDF not provided")
-                )
-                .frame(minWidth: 400, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.1))
+                manualDebtImpactPreview
+                    .frame(minWidth: 400, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity, alignment: .topLeading)
+                    .background(.quaternary.opacity(0.1))
             }
-            .navigationTitle("Add Account")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onCancel() }
+        } else {
+            VStack(spacing: 0) {
+                accountFormColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding()
+
+                Spacer(minLength: 12)
+
+                Button {
+                    showDebtImpactPreview = true
+                } label: {
+                    Label("View Debt Impact", systemImage: "chart.line.uptrend.xyaxis")
+                        .frame(maxWidth: .infinity)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if let account = createAccount() {
-                            onSaved(account)
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal)
+                .padding(.bottom)
+            }
+            .sheet(isPresented: $showDebtImpactPreview) {
+                NavigationStack {
+                    manualDebtImpactPreview
+                        .navigationTitle("Debt Impact")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") {
+                                    showDebtImpactPreview = false
+                                }
+                            }
                         }
-                    }
-                    .disabled(selectedType == nil || editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
     }
 
+    private var accountFormColumn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Enter the details for your account.")
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Type")
+                Spacer()
+                Picker("Type", selection: $selectedType) {
+                    Text("Choose…").tag(nil as StatementType?)
+                    ForEach(StatementType.allCases, id: \.self) { t in
+                        Text(displayName(for: t)).tag(StatementType?.some(t))
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Institution")
+                Spacer()
+                TextField("Institution", text: $editedInstitution)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 200)
+                    .focused($focusedManualField, equals: .institution)
+                    .onChange(of: focusedManualField) { _, newValue in
+                        guard newValue == .institution else { return }
+                        selectAllSoon("Institution")
+                    }
+            }
+
+            if selectedType == .bank {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Bank Subtype")
+                    Spacer()
+                    Picker("Bank Subtype", selection: $bankSubtype) {
+                        Text("Auto").tag(nil as QuickIngestAccountType?)
+                        Text("Checking").tag(QuickIngestAccountType.checking as QuickIngestAccountType?)
+                        Text("Savings").tag(QuickIngestAccountType.savings as QuickIngestAccountType?)
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
+            Divider().padding(.top, 4)
+            Text("Optional").font(.headline)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Monthly payment")
+                Spacer()
+                TextField("Amount", text: $monthlyPaymentInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 140)
+#if os(iOS) || os(visionOS)
+                    .keyboardType(.decimalPad)
+#endif
+                    .focused($focusedManualField, equals: .monthlyPayment)
+                    .onChange(of: focusedManualField) { oldValue, newValue in
+                        if oldValue == .monthlyPayment && newValue != .monthlyPayment {
+                            formatMoneyInput(&monthlyPaymentInput)
+                        }
+
+                        guard newValue == .monthlyPayment else { return }
+                        selectAllSoon("Monthly payment")
+                    }
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("APR (%)")
+                Spacer()
+                TextField("e.g., 19.99", text: $aprPercentInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 140)
+#if os(iOS) || os(visionOS)
+                    .keyboardType(.decimalPad)
+#endif
+                    .focused($focusedManualField, equals: .apr)
+                    .onChange(of: focusedManualField) { oldValue, newValue in
+                        if oldValue == .apr && newValue != .apr {
+                            formatAPRInput()
+                        }
+
+                        guard newValue == .apr else { return }
+                        selectAllSoon("APR")
+                    }
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Ending balance")
+                Spacer()
+                TextField("Amount", text: $balanceInput)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 140)
+#if os(iOS) || os(visionOS)
+                    .keyboardType(.decimalPad)
+#endif
+                    .focused($focusedManualField, equals: .balance)
+                    .onChange(of: focusedManualField) { oldValue, newValue in
+                        if oldValue == .balance && newValue != .balance {
+                            formatMoneyInput(&balanceInput)
+                        }
+
+                        guard newValue == .balance else { return }
+                        selectAllSoon("Ending balance")
+                    }
+            }
+
+            DatePicker("As of", selection: $balanceDate, displayedComponents: .date)
+                .datePickerStyle(.compact)
+
+            Spacer()
+        }
+    }
+
+
+    private var manualDebtImpactPreview: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Debt Impact")
+                .font(.title3.weight(.semibold))
+
+            Text("Preview based on the account details entered on the left.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                readOnlyImpactRow("Balance", formattedCurrency(parseDecimal(balanceInput)))
+                readOnlyImpactRow("APR", formattedAPR(parseAPRPercent(aprPercentInput)?.0, scale: parseAPRPercent(aprPercentInput)?.1))
+                readOnlyImpactRow("Monthly payment", formattedCurrency(parseDecimal(monthlyPaymentInput)))
+            }
+
+            Divider()
+
+            if let summary = payoffPreviewSummary {
+                VStack(alignment: .leading, spacing: 10) {
+                    readOnlyImpactRow("Estimated payoff", summary.monthsText)
+                    readOnlyImpactRow("Estimated interest", summary.interestText)
+                    readOnlyImpactRow("Total paid", summary.totalPaidText)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Enter loan details",
+                    systemImage: "chart.line.uptrend.xyaxis",
+                    description: Text("Add a balance, APR, and monthly payment to preview payoff impact.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 220)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding()
+    }
+
+    private func readOnlyImpactRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Text(value)
+                .font(.body.monospacedDigit())
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private var payoffPreviewSummary: (monthsText: String, interestText: String, totalPaidText: String)? {
+        guard let balance = parseDecimal(balanceInput),
+              let payment = parseDecimal(monthlyPaymentInput),
+              balance > 0,
+              payment > 0 else {
+            return nil
+        }
+
+        let apr = parseAPRPercent(aprPercentInput)?.0 ?? 0
+        let result = estimatePayoff(balance: balance, apr: apr, monthlyPayment: payment)
+
+        return (
+            monthsText: result.months.map { formattedMonths($0) } ?? "Not enough payment",
+            interestText: formattedCurrency(result.interest),
+            totalPaidText: formattedCurrency(result.totalPaid)
+        )
+    }
+
+    private func estimatePayoff(balance: Decimal, apr: Decimal, monthlyPayment: Decimal) -> (months: Int?, interest: Decimal, totalPaid: Decimal) {
+        var remaining = NSDecimalNumber(decimal: balance).doubleValue
+        let monthlyRate = NSDecimalNumber(decimal: apr).doubleValue / 12.0
+        let payment = NSDecimalNumber(decimal: monthlyPayment).doubleValue
+        var interestPaid = 0.0
+        var totalPaid = 0.0
+        var months = 0
+
+        guard remaining > 0, payment > 0 else {
+            return (nil, 0, 0)
+        }
+
+        while remaining > 0.005 && months < 1200 {
+            let interest = max(0, remaining * monthlyRate)
+
+            if payment <= interest && monthlyRate > 0 {
+                return (nil, Decimal(interestPaid), Decimal(totalPaid))
+            }
+
+            let actualPayment = min(payment, remaining + interest)
+            remaining = remaining + interest - actualPayment
+            interestPaid += interest
+            totalPaid += actualPayment
+            months += 1
+        }
+
+        return (months, Decimal(interestPaid), Decimal(totalPaid))
+    }
+
+    private func formattedCurrency(_ value: Decimal?) -> String {
+        guard let value else { return "—" }
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = settings.currencyCode
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "—"
+    }
+
+    private func formattedAPR(_ value: Decimal?, scale: Int?) -> String {
+        guard let value else { return "—" }
+        let percent = NSDecimalNumber(decimal: value * 100)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = max(scale ?? 2, 2)
+        formatter.minimumFractionDigits = min(scale ?? 2, 2)
+        return (formatter.string(from: percent) ?? "—") + "%"
+    }
+
+    private func formattedMonths(_ months: Int) -> String {
+        if months < 12 {
+            return "\(months) mo"
+        }
+
+        let years = months / 12
+        let rem = months % 12
+        if rem == 0 {
+            return "\(years) yr"
+        }
+        return "\(years) yr \(rem) mo"
+    }
+
+    private func selectAllSoon(_ label: String) {
+#if canImport(UIKit)
+        func sendSelectAll(after delay: TimeInterval) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let sent = UIApplication.shared.sendAction(
+                    #selector(UIResponder.selectAll(_:)),
+                    to: nil,
+                    from: nil,
+                    for: nil
+                )
+                print("\(label) selectAll sent after \(delay):", sent)
+            }
+        }
+
+        sendSelectAll(after: 0.15)
+        sendSelectAll(after: 0.35)
+#endif
+    }
+
+    private func formatMoneyInput(_ input: inout String) {
+        guard let value = parseDecimal(input) else { return }
+        input = formattedCurrency(value)
+    }
+
+    private func formatAPRInput() {
+        guard let parsed = parseAPRPercent(aprPercentInput) else { return }
+        aprPercentInput = formattedAPR(parsed.0, scale: parsed.1)
+    }
     private func displayName(for t: StatementType) -> String {
         switch t {
         case .creditCard: return "Credit Card"

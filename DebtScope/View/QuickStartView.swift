@@ -368,6 +368,17 @@ struct QuickStartView: View {
         }
     }
 
+    private func routeToIncomeBills(compact: Bool) {
+        planSheetMode = .incomeBills
+        if compact {
+            if compactPath.last != .incomeBills {
+                compactPath.append(.incomeBills)
+            }
+        } else {
+            selection = .incomeBills
+        }
+    }
+
     @ViewBuilder
     private func topicContent(_ topic: QuickStartTopic, compact: Bool) -> some View {
         switch topic {
@@ -380,7 +391,9 @@ struct QuickStartView: View {
                 pendingExternal: $quickStartPending
             )
         case .compareStrategies:
-            DebtSummaryView(embeddedInNavigation: true)
+            DebtSummaryView(embeddedInNavigation: true) {
+                routeToIncomeBills(compact: compact)
+            }
         case .netWorth:
             NetWorthView(embeddedInNavigation: compact)
         case .cashFlow:

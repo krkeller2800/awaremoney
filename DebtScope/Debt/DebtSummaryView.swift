@@ -26,6 +26,7 @@ fileprivate struct Debt: Identifiable, Hashable {
 
 struct DebtSummaryView: View {
     var embeddedInNavigation: Bool = false
+    var onManageIncomeBills: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
@@ -33,6 +34,7 @@ struct DebtSummaryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [Account] = []
     @State private var embeddedPlannerIsEditing = false
+    @State private var showDebtChart = false
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
@@ -178,17 +180,24 @@ struct DebtSummaryView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         // Portrait hint for iPhone
                         if isPhone && isPortrait {
-                            HStack(spacing: 6) {
-                                Image(systemName: "rotate.left")
-                                Text("Best viewed in landscape")
+                            HStack(alignment: .center, spacing: 12) {
+                                Image(systemName: "rotate.left.fill")
+                                    .font(.title2.weight(.bold))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Rotate to Landscape")
+                                        .font(.headline.weight(.bold))
+                                    Text("This table is much easier to read sideways on iPhone.")
+                                        .font(.subheadline)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 10)
-                            .background(.thinMaterial, in: Capsule())
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.bottom, compact ? 6 : 8)
+                            .foregroundStyle(.white)
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 14)
+                            .background(Color.orange, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .shadow(color: Color.orange.opacity(0.35), radius: 8, x: 0, y: 4)
+                            .padding(.horizontal, compact ? 6 : 12)
+                            .padding(.bottom, compact ? 8 : 10)
                         }
 
                         if isPortrait && proxy.size.width < 844 {
@@ -202,7 +211,8 @@ struct DebtSummaryView: View {
                         } else {
                             let outerPadding: CGFloat = embeddedInNavigation ? (compact ? 18 : 28) : (compact ? 6 : 12)
                             let maxContentWidth: CGFloat = compact ? 900 : 980
-                            let contentWidth: CGFloat = min(maxContentWidth, proxy.size.width - 2 * outerPadding)
+                            let rawContentWidth = proxy.size.width - 2 * outerPadding
+                            let contentWidth: CGFloat = rawContentWidth.isFinite ? min(maxContentWidth, max(0, rawContentWidth)) : 0
                             HStack {
                                 Spacer(minLength: outerPadding)
                                 summaryStack(compact: compact, availableWidth: contentWidth)
@@ -239,6 +249,18 @@ struct DebtSummaryView: View {
                         .accessibilityIdentifier("debtSummaryDoneButton")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    PlanToolbarButton("Chart", fixedWidth: 70) {
+                        showDebtChart = true
+                    }
+                    .accessibilityIdentifier("showDebtChartButton")
+                }
+            }
+            .sheet(isPresented: $showDebtChart) {
+                DebtProjectionChartView(items: allCashFlowItems())
+                    .environment(\.modelContext, modelContext)
+                    .environmentObject(settings)
+                    .applySheetSizing()
             }
             .task { recomputeAppliedState() }
             .task { await load() }
@@ -282,10 +304,11 @@ struct DebtSummaryView: View {
     }
 
     private func columnWidths(for totalWidth: CGFloat, compact: Bool) -> ColumnWidths {
+        let safeTotalWidth = totalWidth.isFinite ? max(0, totalWidth) : 0
         let gap: CGFloat = compact ? 2 : 12
         let gaps = 6 // number of gaps between 7 columns
         let totalSpacing = gap * CGFloat(gaps)
-        let usable = max(0, totalWidth - totalSpacing)
+        let usable = max(0, safeTotalWidth - totalSpacing)
         // Baseline widths taken from existing fixed widths to preserve proportions
         let base: [CGFloat] = compact
             ? [84, 60, 100, 100, 100, 110, 110]
@@ -325,7 +348,8 @@ struct DebtSummaryView: View {
     }
 
     private func summaryStack(compact: Bool, availableWidth: CGFloat) -> some View {
-        let widths = columnWidths(for: availableWidth, compact: compact)
+        let safeAvailableWidth = availableWidth.isFinite ? max(0, availableWidth) : 0
+        let widths = columnWidths(for: safeAvailableWidth, compact: compact)
         return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
             HStack {
                 Spacer()
@@ -335,7 +359,7 @@ struct DebtSummaryView: View {
                     Text("Avalanche").tag(PayoffStrategy.avalanche)
                 }
                 .pickerStyle(.segmented)
-                .frame(maxWidth: min(availableWidth, compact ? 420 : 520))
+                .frame(maxWidth: min(safeAvailableWidth, compact ? 420 : 520))
                 Spacer()
             }
             headerRow(compact: compact, widths: widths)
@@ -351,7 +375,7 @@ struct DebtSummaryView: View {
                     .padding(.horizontal, compact ? 12 : 16)
                     .padding(.top, compact ? 10 : 14)
 
-                DebtPlanSheetView(embeddedInNavigation: true)
+                DebtPlanSheetView(embeddedInNavigation: true, onManageIncomeBills: onManageIncomeBills)
                     .environment(\.modelContext, modelContext)
                     .environmentObject(settings)
                     .frame(maxWidth: .infinity)
@@ -982,6 +1006,7 @@ struct DebtSummaryView: View {
 
 struct DebtPlanSheetView: View {
     var embeddedInNavigation: Bool = false
+    var onManageIncomeBills: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
@@ -1245,6 +1270,15 @@ struct DebtPlanSheetView: View {
     }
 
     @ViewBuilder
+    private var manageIncomeBillsControl: some View {
+        if let onManageIncomeBills {
+            Button("Manage Income & Bills", action: onManageIncomeBills)
+        } else {
+            NavigationLink("Manage Income & Bills") { IncomeAndBillsView() }
+        }
+    }
+
+    @ViewBuilder
     private var embeddedPlanEditorContent: some View {
         let showLandscapeHint = shouldShowPlanLandscapeHint
         VStack(alignment: .leading, spacing: 16) {
@@ -1371,7 +1405,7 @@ struct DebtPlanSheetView: View {
                     if showLandscapeHint {
                         HStack {
                             Text("Plan by Month")
-                            Label("Rotate for better view", systemImage: "rotate.left")
+                            Label("Rotate iPhone", systemImage: "rotate.left.fill")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -1414,7 +1448,7 @@ struct DebtPlanSheetView: View {
             }
 
             embeddedSection("Income & Bills") {
-                NavigationLink("Manage Income & Bills") { IncomeAndBillsView() }
+                manageIncomeBillsControl
                 LabeledContent("Monthly Income") { Text(formatAmount(computedMonthlyIncome)) }
                 LabeledContent("Monthly Bills") { Text(formatAmount(computedMonthlyBills)) }
                 if reserveSeedingThisMonthTotal() > 0 {
@@ -1582,7 +1616,7 @@ struct DebtPlanSheetView: View {
                                     if showLandscapeHint {
                                         HStack {
                                             Text("Plan by Month")
-                                            Label("Rotate for better view", systemImage: "rotate.left")
+                                            Label("Rotate iPhone", systemImage: "rotate.left.fill")
                                                 .font(.footnote)
                                                 .foregroundStyle(.secondary)
                                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -1630,7 +1664,7 @@ struct DebtPlanSheetView: View {
                         }
 
                         Section("Income & Bills") {
-                            NavigationLink("Manage Income & Bills") { IncomeAndBillsView() }
+                            manageIncomeBillsControl
                             LabeledContent("Monthly Income") { Text(formatAmount(computedMonthlyIncome)) }
                             LabeledContent("Monthly Bills") { Text(formatAmount(computedMonthlyBills)) }
                             if reserveSeedingThisMonthTotal() > 0 {

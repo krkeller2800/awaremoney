@@ -13,26 +13,12 @@ struct QAccountsListView: View {
     var onSelectionChanged: (UUID?) -> Void
 
     @State private var pendingDelete: Account? = nil
-    @State private var showDebtChart: Bool = false
-    @State private var showDebtSummary: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                if showsDebtTools {
-                    PlanToolbarButton("Summary", titleFont: .caption) { showDebtSummary = true }
-                } else {
-                    Spacer()
-                }
-
-                Text(title)
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                Spacer()
-                if showsDebtTools {
-                    PlanToolbarButton("Chart", titleFont: .caption) { showDebtChart = true }
-                }
-            }
+            Text(title)
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .center)
             List {
                 ForEach(accounts) { account in
                     VStack(alignment: .leading, spacing: 2) {
@@ -129,14 +115,6 @@ struct QAccountsListView: View {
             }
             .listStyle(.inset)
         }
-        .sheet(isPresented: $showDebtSummary) {
-            DebtSummaryView()
-                .applySheetSizing()
-        }
-        .sheet(isPresented: $showDebtChart) {
-            DebtProjectionChartView(items: allCashFlowItems())
-                .applySheetSizing()
-        }
         .alert("Delete Account?", isPresented: Binding(get: { pendingDelete != nil },
                                                       set: { if !$0 { pendingDelete = nil } })) {
             Button("Delete", role: .destructive) {
@@ -201,11 +179,4 @@ private extension QAccountsListView {
         }
     }
 
-    func allCashFlowItems() -> [CashFlowItem] {
-        do {
-            return try modelContext.fetch(FetchDescriptor<CashFlowItem>())
-        } catch {
-            return []
-        }
-    }
 }
