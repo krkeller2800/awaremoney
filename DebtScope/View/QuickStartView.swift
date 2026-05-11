@@ -92,25 +92,33 @@ struct QuickStartView: View {
         institution: String?,
         to topic: QuickStartTopic
     ) {
-        let pending = QuickStartPendingImport(
-            url: url,
-            type: type,
-            institution: institution
-        )
-
-        withAnimation {
-            selection = topic
-            quickStartPending = pending
-        }
-
-        if isCompactLayout {
-            compactPath.append(topic)
-        }
-
         AMLogging.log(
-            "QuickStart delivered topic=\(topic.rawValue) pending=\(pending.id)",
+            "QuickStart deliverPendingImport start topic=\(topic.rawValue) compact=\(isCompactLayout)",
             component: "Import"
         )
+
+        quickStartPending = nil
+
+        if isCompactLayout {
+            if compactPath.last != topic {
+                compactPath.append(topic)
+            }
+        } else {
+            selection = topic
+        }
+
+        DispatchQueue.main.async {
+            self.quickStartPending = QuickStartPendingImport(
+                url: url,
+                type: type,
+                institution: institution
+            )
+
+            AMLogging.log(
+                "QuickStart pending set id=\(self.quickStartPending?.id.uuidString ?? "nil") topic=\(topic.rawValue) selection=\(String(describing: self.selection))",
+                component: "Import"
+            )
+        }
     }
 
     private func queueImport(url: URL, type: StatementType?, institution: String?) {
@@ -1275,6 +1283,7 @@ private struct StatementReviewDetailView: View {
     
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var reviewURL: URL? = nil
     @State private var selectedType: StatementType? = nil
     @State private var editedInstitution = ""
@@ -1285,6 +1294,7 @@ private struct StatementReviewDetailView: View {
     @State private var balanceDate = Date()
     @State private var saveMessage: String? = nil
     @State private var savedAccountID: UUID? = nil
+    @State private var showPDFPreview = false
 
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
@@ -1301,10 +1311,33 @@ private struct StatementReviewDetailView: View {
         )
     }
 
+    private var isCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
+    private var unknownStatementForm: some View {
+        ManualAccountFormPanel(
+            selectedType: $selectedType,
+            editedInstitution: $editedInstitution,
+            bankSubtype: $bankSubtype,
+            monthlyPaymentInput: $monthlyPaymentInput,
+            aprPercentInput: $aprPercentInput,
+            balanceInput: $balanceInput,
+            balanceDate: $balanceDate,
+            onSave: {
+                saveUnknownStatementAccount()
+            },
+            hasSavedAccount: savedAccountID != nil
+        )
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Text("Review statements that could not be confidently classified.")
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal)
             
             if let saveMessage {
                 Label(saveMessage, systemImage: "checkmark.circle.fill")
@@ -1316,29 +1349,35 @@ private struct StatementReviewDetailView: View {
             
             Group {
                 if let url = reviewURL {
-                    HStack(spacing: 0) {
-                        ManualAccountFormPanel(
-                            selectedType: $selectedType,
-                            editedInstitution: $editedInstitution,
-                            bankSubtype: $bankSubtype,
-                            monthlyPaymentInput: $monthlyPaymentInput,
-                            aprPercentInput: $aprPercentInput,
-                            balanceInput: $balanceInput,
-                            balanceDate: $balanceDate,
-                            onSave: {
-                                saveUnknownStatementAccount()
-                            },
-                            hasSavedAccount: savedAccountID != nil
-                        )
-                        .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
-                        .padding()
-                        
-                        Divider()
-                        
-                        PDFPreview(url: url)
-                            .id(url.path)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(.quaternary.opacity(0.05))
+                    if isCompactLayout {
+                        VStack(spacing: 12) {
+                            unknownStatementForm
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding()
+
+                            Button {
+                                showPDFPreview = true
+                            } label: {
+                                Label("View PDF", systemImage: "doc.richtext")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.horizontal)
+                            .padding(.bottom)
+                        }
+                    } else {
+                        HStack(spacing: 0) {
+                            unknownStatementForm
+                                .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+                                .padding()
+                            
+                            Divider()
+                            
+                            PDFPreview(url: url)
+                                .id(url.path)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(.quaternary.opacity(0.05))
+                        }
                     }
                 } else {
                     ContentUnavailableView(
@@ -1355,6 +1394,28 @@ private struct StatementReviewDetailView: View {
         .sheet(isPresented: isImportSheetPresented) {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
+        }
+        .sheet(isPresented: $showPDFPreview) {
+            NavigationStack {
+                Group {
+                    if let url = reviewURL {
+                        PDFPreview(url: url)
+                            .id(url.path)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ContentUnavailableView("No Statement", systemImage: "doc.text.magnifyingglass")
+                    }
+                }
+                .navigationTitle("Statement PDF")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showPDFPreview = false
+                        }
+                    }
+                }
+            }
         }
         .task(id: pendingExternal?.id) {
             guard let pending = pendingExternal else { return }

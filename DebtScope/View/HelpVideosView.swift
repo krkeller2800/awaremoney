@@ -72,7 +72,7 @@ final class HelpVideosViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    private let feedURL = URL(string: "https://komakode.com/videos/help-videos.json")!
+    private let feedURL = URL(string: "https://komakode.com/videos/DebtScope-help-videos.json")!
 
     func loadVideos() async {
         isLoading = true

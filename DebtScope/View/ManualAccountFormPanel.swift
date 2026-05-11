@@ -56,12 +56,12 @@ struct ManualAccountFormPanel: View {
         VStack(alignment: .trailing, spacing: 6) {
             if hasSavedAccount {
                 Text("This account has been added.")
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else if let saveDisabledHint {
                 Text(saveDisabledHint)
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }

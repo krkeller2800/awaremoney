@@ -376,6 +376,23 @@ struct ReviewImportView: View {
                     .listRowBackground(Color.yellow.opacity(0.08))
                     
                 }
+
+                if let duplicateImportWarning {
+                    Section {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+
+                            Text(duplicateImportWarning)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .listRowBackground(Color.orange.opacity(0.08))
+                }
+
                 Section {
                     VStack {
                         // Build a single banner text, preferring the live preview
@@ -801,6 +818,40 @@ struct ReviewImportView: View {
         }
     }
     
+    private var duplicateImportWarning: String? {
+        guard let balances = vm.staged?.balances.filter(\.include), !balances.isEmpty else {
+            return nil
+        }
+
+        for balance in balances {
+            let candidateBalances = duplicateCandidateBalances(for: balance.balance)
+            let balanceDay = Calendar.current.startOfDay(for: balance.asOfDate)
+
+            for account in accounts where account.type == vm.newAccountType {
+                let matchingSnapshot = account.balanceSnapshots.first { snapshot in
+                    Calendar.current.startOfDay(for: snapshot.asOfDate) == balanceDay
+                    && candidateBalances.contains(snapshot.balance)
+                }
+
+                if matchingSnapshot != nil {
+                    return "This statement appears to have already been imported. The same account type, statement date, and balance already exist."
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func duplicateCandidateBalances(for amount: Decimal) -> Set<Decimal> {
+        switch vm.newAccountType {
+        case .creditCard, .loan:
+            let magnitude = amount < 0 ? -amount : amount
+            return [amount, -magnitude]
+        default:
+            return [amount]
+        }
+    }
+
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider()
@@ -993,6 +1044,10 @@ struct ReviewImportView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled({
+                    if duplicateImportWarning != nil {
+                        return true
+                    }
+
                     // Allow enabling when the only blocking issue is missing balance, but the user has typed a valid pending amount
                     let issues = vm.computeCompletenessIssues()
                     if issues.contains(where: { $0.severity == .required }) {

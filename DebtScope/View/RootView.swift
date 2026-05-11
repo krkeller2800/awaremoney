@@ -37,7 +37,14 @@ struct RootView: View {
                     }
                     showImportFlow = false
                 } else {
-                    showImportFlow = true
+                    let stagedURL = ImportFileStaging.stageToCaches(url)
+                    importRouter.quickStartPendingImport = .init(
+                        url: stagedURL,
+                        type: nil,
+                        institution: nil
+                    )
+                    importRouter.pendingURL = nil
+                    showImportFlow = false
                 }
             }
         }
