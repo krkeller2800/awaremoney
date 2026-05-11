@@ -112,7 +112,8 @@ struct ManualAddAccountSheet: View {
                 if let account = createAccount() {
                     onSaved(account)
                 }
-            }
+            },
+            hasSavedAccount: false
         )
     }
 
@@ -258,15 +259,7 @@ struct ManualAddAccountSheet: View {
         guard let parsed = parseAPRPercent(aprPercentInput) else { return }
         aprPercentInput = formattedAPR(parsed.0, scale: parsed.1)
     }
-    private func displayName(for t: StatementType) -> String {
-        switch t {
-        case .creditCard: return "Credit Card"
-        case .bank: return "Bank"
-        case .loan: return "Loan"
-        case .brokerage: return "Brokerage"
-        }
-    }
-
+    
     private func toAccountType(_ t: StatementType?, bankSubtype: QuickIngestAccountType?) -> Account.AccountType {
         guard let t else { return .other }
         switch t {

@@ -21,6 +21,7 @@ struct ManualAccountFormPanel: View {
     @Binding var balanceDate: Date
 
     let onSave: () -> Void
+    let hasSavedAccount: Bool
     
     @EnvironmentObject private var settings: SettingsStore
     @FocusState private var focusedManualField: ManualField?
@@ -52,17 +53,52 @@ struct ManualAccountFormPanel: View {
     }
   
     private var bottomButtons: some View {
-        HStack {
-            Spacer()
-
-            Button {
-                onSave()
-            } label: {
-                Label("Add Account", systemImage: "checkmark")
+        VStack(alignment: .trailing, spacing: 6) {
+            if hasSavedAccount {
+                Text("This account has been added.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if let saveDisabledHint {
+                Text(saveDisabledHint)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .buttonStyle(.borderedProminent)
+
+            HStack {
+                Spacer()
+
+                Button {
+                    onSave()
+                } label: {
+                    Label(
+                        hasSavedAccount ? "Account Added" : "Add Account",
+                        systemImage: hasSavedAccount ? "checkmark.circle.fill" : "checkmark"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(hasSavedAccount || !canSaveManualAccount)
+            }
         }
         .padding(.top, 8)
+    }
+ 
+    private var canSaveManualAccount: Bool {
+        selectedType != nil &&
+        !editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var saveDisabledHint: String? {
+        if selectedType == nil {
+            return "Choose an account type to add this account."
+        }
+
+        if editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Enter an institution or account name."
+        }
+
+        return nil
     }
     
     private func formatAllManualInputs() {

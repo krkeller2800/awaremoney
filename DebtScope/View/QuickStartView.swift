@@ -1276,7 +1276,16 @@ private struct StatementReviewDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
     @State private var reviewURL: URL? = nil
-    
+    @State private var selectedType: StatementType? = nil
+    @State private var editedInstitution = ""
+    @State private var bankSubtype: QuickIngestAccountType? = nil
+    @State private var monthlyPaymentInput = ""
+    @State private var aprPercentInput = ""
+    @State private var balanceInput = ""
+    @State private var balanceDate = Date()
+    @State private var saveMessage: String? = nil
+    @State private var savedAccountID: UUID? = nil
+
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
             get: { vm.staged != nil || vm.mappingSession != nil },
@@ -1297,15 +1306,39 @@ private struct StatementReviewDetailView: View {
             Text("Review statements that could not be confidently classified.")
                 .foregroundStyle(.secondary)
             
+            if let saveMessage {
+                Label(saveMessage, systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+            }
+            
             Group {
                 if let url = reviewURL {
-                    VStack(spacing: 12) {
-                        Text("PDF received: \(url.lastPathComponent)")
-                            .font(.title2.bold())
-
+                    HStack(spacing: 0) {
+                        ManualAccountFormPanel(
+                            selectedType: $selectedType,
+                            editedInstitution: $editedInstitution,
+                            bankSubtype: $bankSubtype,
+                            monthlyPaymentInput: $monthlyPaymentInput,
+                            aprPercentInput: $aprPercentInput,
+                            balanceInput: $balanceInput,
+                            balanceDate: $balanceDate,
+                            onSave: {
+                                saveUnknownStatementAccount()
+                            },
+                            hasSavedAccount: savedAccountID != nil
+                        )
+                        .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+                        .padding()
+                        
+                        Divider()
+                        
                         PDFPreview(url: url)
                             .id(url.path)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(.quaternary.opacity(0.05))
                     }
                 } else {
                     ContentUnavailableView(
@@ -1315,8 +1348,6 @@ private struct StatementReviewDetailView: View {
                     )
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.quaternary.opacity(0.05))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 32)
@@ -1337,6 +1368,8 @@ private struct StatementReviewDetailView: View {
                 await MainActor.run {
                     reviewURL = pending.url
                     vm.lastPickedLocalURL = pending.url
+                    saveMessage = nil
+                    savedAccountID = nil
                     pendingExternal = nil
                 }
 
@@ -1356,9 +1389,107 @@ private struct StatementReviewDetailView: View {
             )
 
             await MainActor.run {
-                reviewURL = vm.lastPickedLocalURL ?? pending.url
+                reviewURL = pending.url
+                saveMessage = nil
+                savedAccountID = nil
                 pendingExternal = nil
             }
+        }
+    }
+    
+    private func toAccountType(_ t: StatementType?, bankSubtype: QuickIngestAccountType?) -> Account.AccountType {
+        guard let t else { return .other }
+        switch t {
+        case .creditCard: return .creditCard
+        case .loan:       return .loan
+        case .brokerage:  return .brokerage
+        case .bank:
+            switch bankSubtype {
+            case .some(.savings): return .savings
+            default: return .checking
+            }
+        }
+    }
+    
+    private func parseDecimal(_ s: String) -> Decimal? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let allowed = CharacterSet(charactersIn: "-0123456789.,")
+        let filtered = String(trimmed.unicodeScalars.filter { allowed.contains($0) })
+        var normalized = filtered
+        if filtered.contains(",") && filtered.contains(".") {
+            normalized = filtered.replacingOccurrences(of: ",", with: "")
+        } else if filtered.contains(",") && !filtered.contains(".") {
+            normalized = filtered.replacingOccurrences(of: ",", with: ".")
+        }
+        return Decimal(string: normalized)
+    }
+    
+    private func parseAPRPercent(_ s: String) -> (Decimal, Int)? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: ",", with: ".")
+        guard let dec = Decimal(string: cleaned) else { return nil }
+        let scale: Int = cleaned.split(separator: ".").last.map { $0.count } ?? 0
+        var fraction = dec
+        if fraction > 1 { fraction /= 100 }
+        return (fraction, scale)
+    }
+    
+    private func saveUnknownStatementAccount() {
+        let type = toAccountType(selectedType, bankSubtype: bankSubtype)
+        let inst = editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !inst.isEmpty else { return }
+
+        let acct = Account(
+            name: inst,
+            type: type,
+            institutionName: inst,
+            currencyCode: settings.currencyCode
+        )
+
+        modelContext.insert(acct)
+
+        if let pmt = parseDecimal(monthlyPaymentInput), pmt > 0 || !aprPercentInput.isEmpty {
+            var terms = acct.loanTerms ?? LoanTerms()
+            if let p = parseDecimal(monthlyPaymentInput), p > 0 {
+                terms.paymentAmount = p
+            }
+            if let (apr, scale) = parseAPRPercent(aprPercentInput) {
+                terms.apr = apr
+                terms.aprScale = scale
+            }
+            acct.loanTerms = terms
+        }
+
+        if let bal = parseDecimal(balanceInput) {
+            let snap = BalanceSnapshot(
+                asOfDate: balanceDate,
+                balance: bal,
+                interestRateAPR: acct.loanTerms?.apr,
+                interestRateScale: acct.loanTerms?.aprScale,
+                account: acct,
+                importBatch: nil
+            )
+            modelContext.insert(snap)
+        }
+
+        do {
+            try modelContext.save()
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+            savedAccountID = acct.id
+
+            saveMessage = "Saved \(inst). You can continue reviewing this PDF or navigate to the new account."
+            
+            AMLogging.log(
+                "StatementReview manual account saved id=\(acct.id) type=\(acct.typeRaw) institution=\(inst)",
+                component: "Import"
+            )
+        } catch {
+            AMLogging.error(
+                "StatementReview manual account save failed error=\(error.localizedDescription)",
+                component: "Import"
+            )
         }
     }
 }
