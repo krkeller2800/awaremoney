@@ -10,7 +10,7 @@ struct DebtPayoffDetailView: View {
 
     var importAction: () -> Void = {}
     var manualEntryAction: () -> Void = {}
-    @Binding var pendingExternal: (url: URL, type: StatementType?, institution: String?)?
+    @Binding var pendingExternal: QuickStartPendingImport?
 
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -2275,7 +2275,7 @@ struct DebtPayoffDetailView: View {
         .sheet(isPresented: $showStatementSheet) {
             statementSheetContent
         }
-        .onChange(of: pendingExternal?.url, initial: false) { _, _ in
+        .onChange(of: pendingExternal?.id, initial: false) { _, _ in
             guard let pending = pendingExternal else { return }
             isPreparingDetectionReview = true
             Task {

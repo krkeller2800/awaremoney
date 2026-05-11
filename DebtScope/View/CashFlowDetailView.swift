@@ -9,8 +9,8 @@ struct CashFlowDetailView: View {
     @Binding var externalSelectedAccountID: UUID?
     let onRouteImport: (StatementType?, UUID?) -> Void
 
-    @Binding var pendingExternal: (url: URL, type: StatementType?, institution: String?)?
-
+    @Binding var pendingExternal: QuickStartPendingImport?
+    
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
@@ -1608,7 +1608,7 @@ struct CashFlowDetailView: View {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
         }
-        .onChange(of: pendingExternal?.url, initial: false) { _, _ in
+        .onChange(of: pendingExternal?.id, initial: false) { _, _ in
             guard let pending = pendingExternal else { return }
             isPreparingDetectionReview = true
             Task {

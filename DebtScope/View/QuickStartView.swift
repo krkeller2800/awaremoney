@@ -16,6 +16,13 @@ private enum QuickStartTopic: String, CaseIterable, Identifiable {
     var title: String { rawValue }
 }
 
+struct QuickStartPendingImport: Equatable {
+    let id = UUID()
+    let url: URL
+    let type: StatementType?
+    let institution: String?
+}
+
 struct QuickStartView: View {
     @StateObject private var vm: ImportViewModel
     @State private var coordinator: StatementImportCoordinator
@@ -32,7 +39,7 @@ struct QuickStartView: View {
     @State private var showBackupRestore = false
     @State private var showHelp = false
     @State private var showDebug = false
-    @State private var quickStartPending: (url: URL, type: StatementType?, institution: String?)? = nil
+    @State private var quickStartPending: QuickStartPendingImport? = nil
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
     fileprivate enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
@@ -85,32 +92,73 @@ struct QuickStartView: View {
         institution: String?,
         to topic: QuickStartTopic
     ) {
-        selection = topic
-        if isCompactLayout {
-            if compactPath.last != topic {
-                compactPath.append(topic)
-            }
-        }
-        quickStartPending = nil
+        let pending = QuickStartPendingImport(
+            url: url,
+            type: type,
+            institution: institution
+        )
 
-        DispatchQueue.main.async {
-            quickStartPending = (url: url, type: type, institution: institution)
+        withAnimation {
+            selection = topic
+            quickStartPending = pending
         }
+
+        if isCompactLayout {
+            compactPath.append(topic)
+        }
+
+        AMLogging.log(
+            "QuickStart delivered topic=\(topic.rawValue) pending=\(pending.id)",
+            component: "Import"
+        )
     }
 
     private func queueImport(url: URL, type: StatementType?, institution: String?) {
+        AMLogging.log(
+            "QuickStart queueImport start file=\(url.lastPathComponent) type=\(String(describing: type)) readable=\(FileManager.default.isReadableFile(atPath: url.path))",
+            component: "Import"
+        )
         let stagedURL = ImportFileStaging.stageToCaches(url)
+        AMLogging.log(
+            "QuickStart staged file=\(stagedURL.lastPathComponent) path=\(stagedURL.path) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path))",
+            component: "Import"
+        )
         if let type {
             let topic = topicFor(statementType: type) ?? .statementReview
             deliverPendingImport(url: stagedURL, type: type, institution: institution, to: topic)
         } else {
             Task {
+
+                AMLogging.log(
+                    "QuickStart classify start file=\(stagedURL.lastPathComponent)",
+                    component: "Import"
+                )
+
                 let classifier = StatementIntakeClassifier()
                 let detection = await classifier.classify(url: stagedURL)
-                let fallback = await inferStatementFallback(from: stagedURL, preferredType: detection.type)
+
+                AMLogging.log(
+                    "QuickStart classify result type=\(String(describing: detection.type)) institution=\(detection.institution ?? "nil")",
+                    component: "Import"
+                )
+
+                let fallback = await inferStatementFallback(
+                    from: stagedURL,
+                    preferredType: detection.type
+                )
+
+                AMLogging.log(
+                    "QuickStart fallback result type=\(String(describing: fallback.type)) institution=\(fallback.institution ?? "nil")",
+                    component: "Import"
+                )
+
                 await MainActor.run {
                     let resolvedType = detection.type ?? fallback.type
                     let topic = topicFor(statementType: resolvedType) ?? .statementReview
+                    AMLogging.log(
+                        "QuickStart deliver topic=\(topic.rawValue) resolvedType=\(String(describing: resolvedType))",
+                        component: "Import"
+                    )
                     deliverPendingImport(
                         url: stagedURL,
                         type: resolvedType,
@@ -356,6 +404,11 @@ struct QuickStartView: View {
     private var detailContent: some View {
         Group {
             if let selection {
+                let _ = AMLogging.log(
+                    "QuickStart detailContent showing \(selection.rawValue)",
+                    component: "Import"
+                )
+
                 topicContent(selection, compact: false)
             } else {
                 VStack {
@@ -512,17 +565,33 @@ struct QuickStartView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
+                AMLogging.log(
+                    "QuickStart fileImporter success urls=\(urls.map(\.lastPathComponent))",
+                    component: "Import"
+                )
+
                 if let url = urls.first {
                     queueImportAfterImporterDismissal(url: url, type: nil, institution: nil)
                 }
-            case .failure:
-                break
+
+            case .failure(let error):
+                AMLogging.error(
+                    "QuickStart fileImporter failed error=\(error.localizedDescription)",
+                    component: "Import"
+                )
             }
         }
-        .onChange(of: importRouter.quickStartPendingImport?.url, initial: false) { _, _ in
+        .onChange(of: importRouter.quickStartPendingImport?.id, initial: true) { _, _ in
             guard let request = importRouter.quickStartPendingImport else { return }
-            queueImport(url: request.url, type: request.type, institution: request.institution)
-            importRouter.quickStartPendingImport = nil
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                queueImport(
+                    url: request.url,
+                    type: request.type,
+                    institution: request.institution
+                )
+                importRouter.quickStartPendingImport = nil
+            }
         }
     }
 
@@ -1202,19 +1271,19 @@ private struct QuickStartAssetsDetailView: View {
 private struct StatementReviewDetailView: View {
     @ObservedObject var vm: ImportViewModel
     let coordinator: StatementImportCoordinator
-    @Binding var pendingExternal: (url: URL, type: StatementType?, institution: String?)?
-
+    @Binding var pendingExternal: QuickStartPendingImport?
+    
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
-    @State private var lastImportedURL: URL? = nil
-
+    @State private var reviewURL: URL? = nil
+    
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
             get: { vm.staged != nil || vm.mappingSession != nil },
             set: { presented in
                 if !presented {
                     if let url = vm.lastPickedLocalURL {
-                        lastImportedURL = url
+                        reviewURL = url
                     }
                     vm.staged = nil
                     vm.mappingSession = nil
@@ -1227,10 +1296,17 @@ private struct StatementReviewDetailView: View {
         VStack(spacing: 16) {
             Text("Review statements that could not be confidently classified.")
                 .foregroundStyle(.secondary)
-
+            
             Group {
-                if let url = lastImportedURL ?? vm.lastPickedLocalURL {
-                    PDFPreview(url: url)
+                if let url = reviewURL {
+                    VStack(spacing: 12) {
+                        Text("PDF received: \(url.lastPathComponent)")
+                            .font(.title2.bold())
+
+                        PDFPreview(url: url)
+                            .id(url.path)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     ContentUnavailableView(
                         "No Statement",
@@ -1249,21 +1325,39 @@ private struct StatementReviewDetailView: View {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
         }
-        .onChange(of: pendingExternal?.url, initial: false) { _, _ in
+        .task(id: pendingExternal?.id) {
             guard let pending = pendingExternal else { return }
-            Task {
-                await coordinator.importURL(
-                    pending.url,
-                    hint: pending.type,
-                    modelContext: modelContext,
-                    settings: settings
-                )
+
+            AMLogging.log(
+                "StatementReview task received file=\(pending.url.lastPathComponent) type=\(String(describing: pending.type))",
+                component: "Import"
+            )
+
+            if pending.type == nil {
                 await MainActor.run {
-                    if let url = vm.lastPickedLocalURL {
-                        lastImportedURL = url
-                    }
+                    reviewURL = pending.url
+                    vm.lastPickedLocalURL = pending.url
                     pendingExternal = nil
                 }
+
+                AMLogging.log(
+                    "StatementReview task set reviewURL=\(pending.url.path)",
+                    component: "Import"
+                )
+
+                return
+            }
+
+            await coordinator.importURL(
+                pending.url,
+                hint: pending.type,
+                modelContext: modelContext,
+                settings: settings
+            )
+
+            await MainActor.run {
+                reviewURL = vm.lastPickedLocalURL ?? pending.url
+                pendingExternal = nil
             }
         }
     }

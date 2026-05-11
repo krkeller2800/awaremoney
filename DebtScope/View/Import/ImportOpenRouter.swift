@@ -4,7 +4,8 @@ import Foundation
 
 /// An ObservableObject that routes incoming file URLs opened from outside the app.
 final class ImportOpenRouter: ObservableObject {
-    struct QuickStartImportRequest {
+    struct QuickStartImportRequest: Identifiable, Equatable {
+        let id = UUID()
         let url: URL
         let type: StatementType?
         let institution: String?

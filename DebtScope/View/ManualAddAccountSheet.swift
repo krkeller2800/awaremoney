@@ -18,15 +18,6 @@ struct ManualAddAccountSheet: View {
     @State private var balanceDate: Date = Date()
     @State private var showDebtImpactPreview = false
 
-    private enum ManualField: Hashable {
-        case institution
-        case monthlyPayment
-        case apr
-        case balance
-    }
-
-    @FocusState private var focusedManualField: ManualField?
-
     var onCancel: () -> Void
     var onSaved: (Account) -> Void
 
@@ -59,7 +50,7 @@ struct ManualAddAccountSheet: View {
     private var content: some View {
         if horizontalSizeClass == .regular {
             HStack(spacing: 0) {
-                accountFormColumn
+                manualAccountFormPanel
                     .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
                     .padding()
 
@@ -71,7 +62,7 @@ struct ManualAddAccountSheet: View {
             }
         } else {
             VStack(spacing: 0) {
-                accountFormColumn
+                manualAccountFormPanel
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding()
 
@@ -104,120 +95,28 @@ struct ManualAddAccountSheet: View {
         }
     }
 
-    private var accountFormColumn: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Enter the details for your account.")
-                .foregroundStyle(.secondary)
+    private var manualAccountFormPanel: some View {
+        ManualAccountFormPanel(
+            selectedType: $selectedType,
+            editedInstitution: $editedInstitution,
+            bankSubtype: $bankSubtype,
+            monthlyPaymentInput: $monthlyPaymentInput,
+            aprPercentInput: $aprPercentInput,
+            balanceInput: $balanceInput,
+            balanceDate: $balanceDate,
+            onSave: {
+                formatMoneyInput(&monthlyPaymentInput)
+                formatAPRInput()
+                formatMoneyInput(&balanceInput)
 
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Type")
-                Spacer()
-                Picker("Type", selection: $selectedType) {
-                    Text("Choose…").tag(nil as StatementType?)
-                    ForEach(StatementType.allCases, id: \.self) { t in
-                        Text(displayName(for: t)).tag(StatementType?.some(t))
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Institution")
-                Spacer()
-                TextField("Institution", text: $editedInstitution)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 200)
-                    .focused($focusedManualField, equals: .institution)
-                    .onChange(of: focusedManualField) { _, newValue in
-                        guard newValue == .institution else { return }
-                        selectAllSoon("Institution")
-                    }
-            }
-
-            if selectedType == .bank {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("Bank Subtype")
-                    Spacer()
-                    Picker("Bank Subtype", selection: $bankSubtype) {
-                        Text("Auto").tag(nil as QuickIngestAccountType?)
-                        Text("Checking").tag(QuickIngestAccountType.checking as QuickIngestAccountType?)
-                        Text("Savings").tag(QuickIngestAccountType.savings as QuickIngestAccountType?)
-                    }
-                    .pickerStyle(.menu)
+                if let account = createAccount() {
+                    onSaved(account)
                 }
             }
-
-            Divider().padding(.top, 4)
-            Text("Optional").font(.headline)
-
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Monthly payment")
-                Spacer()
-                TextField("Amount", text: $monthlyPaymentInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                    .keyboardType(.decimalPad)
-#endif
-                    .focused($focusedManualField, equals: .monthlyPayment)
-                    .onChange(of: focusedManualField) { oldValue, newValue in
-                        if oldValue == .monthlyPayment && newValue != .monthlyPayment {
-                            formatMoneyInput(&monthlyPaymentInput)
-                        }
-
-                        guard newValue == .monthlyPayment else { return }
-                        selectAllSoon("Monthly payment")
-                    }
-            }
-
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("APR (%)")
-                Spacer()
-                TextField("e.g., 19.99", text: $aprPercentInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                    .keyboardType(.decimalPad)
-#endif
-                    .focused($focusedManualField, equals: .apr)
-                    .onChange(of: focusedManualField) { oldValue, newValue in
-                        if oldValue == .apr && newValue != .apr {
-                            formatAPRInput()
-                        }
-
-                        guard newValue == .apr else { return }
-                        selectAllSoon("APR")
-                    }
-            }
-
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Ending balance")
-                Spacer()
-                TextField("Amount", text: $balanceInput)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 140)
-#if os(iOS) || os(visionOS)
-                    .keyboardType(.decimalPad)
-#endif
-                    .focused($focusedManualField, equals: .balance)
-                    .onChange(of: focusedManualField) { oldValue, newValue in
-                        if oldValue == .balance && newValue != .balance {
-                            formatMoneyInput(&balanceInput)
-                        }
-
-                        guard newValue == .balance else { return }
-                        selectAllSoon("Ending balance")
-                    }
-            }
-
-            DatePicker("As of", selection: $balanceDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
-
-            Spacer()
-        }
+        )
     }
 
-
+    
     private var manualDebtImpactPreview: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Debt Impact")
@@ -348,25 +247,6 @@ struct ManualAddAccountSheet: View {
             return "\(years) yr"
         }
         return "\(years) yr \(rem) mo"
-    }
-
-    private func selectAllSoon(_ label: String) {
-#if canImport(UIKit)
-        func sendSelectAll(after delay: TimeInterval) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let sent = UIApplication.shared.sendAction(
-                    #selector(UIResponder.selectAll(_:)),
-                    to: nil,
-                    from: nil,
-                    for: nil
-                )
-                print("\(label) selectAll sent after \(delay):", sent)
-            }
-        }
-
-        sendSelectAll(after: 0.15)
-        sendSelectAll(after: 0.35)
-#endif
     }
 
     private func formatMoneyInput(_ input: inout String) {
