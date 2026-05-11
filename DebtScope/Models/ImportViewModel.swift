@@ -957,10 +957,14 @@ final class ImportViewModel: ObservableObject {
                 let fm = FileManager.default
                 let caches = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 let dest = caches.appendingPathComponent(url.lastPathComponent)
-                // Overwrite if exists
-                try? fm.removeItem(at: dest)
-                if fm.fileExists(atPath: url.path) {
-                    try? fm.copyItem(at: url, to: dest)
+                if dest.standardizedFileURL.path == url.standardizedFileURL.path {
+                    await AMLogging.log("ImportViewModel: picked file already staged at caches path \(dest.path)", component: "ImportViewModel")
+                } else {
+                    // Overwrite if exists
+                    try? fm.removeItem(at: dest)
+                    if fm.fileExists(atPath: url.path) {
+                        try? fm.copyItem(at: url, to: dest)
+                    }
                 }
                 await MainActor.run { self.lastPickedLocalURL = dest }
 
@@ -996,7 +1000,7 @@ final class ImportViewModel: ObservableObject {
                             await AMLogging.log("ImportViewModel: OFX parsed — rows=\(rows.count) headers=\(headers) stagedTx=\(staged.transactions.count)", component: "Import")
                         } else {
                             await MainActor.run {
-                                self.mappingSession = .init(kind: .bank,headers: headers, sampleRows: Array(rows.prefix(50)))
+                                self.mappingSession = .init(kind: .bank,headers: headers, sampleRows: rows)
                                 self.staged = nil
                             }
                             await AMLogging.log("ImportViewModel: OFX parsed but no parser matched; opened mapping editor", component: "Import")
@@ -1349,8 +1353,7 @@ final class ImportViewModel: ObservableObject {
                         }
                     } else {
                         AMLogging.log("No parser matched headers. Starting mapping session. Headers: \(headers)", component: "ImportViewModel")
-                        let sample = Array(rows.prefix(10))
-                        self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: sample, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
+                        self.mappingSession = MappingSession(kind: .bank, headers: headers, sampleRows: rows, dateIndex: nil, descriptionIndex: nil, amountIndex: nil, debitIndex: nil, creditIndex: nil, balanceIndex: nil, dateFormat: nil)
 
                         // Prefill institution name for import screen (mapping fallback) if empty, using filename guess
                         if self.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

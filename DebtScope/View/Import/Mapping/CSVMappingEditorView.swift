@@ -316,6 +316,8 @@ struct CSVMappingEditorView: View {
         case .date: return "Date"
         case .kind: return "Kind"
         case .amount: return "Amount"
+        case .debit: return "Debit"
+        case .credit: return "Credit"
         case .payee: return "Payee"
         case .memo: return "Memo"
         case .category: return "Category"
@@ -386,4 +388,3 @@ struct CSVMappingEditorView: View {
     }
     .modelContainer(for: [CSVColumnMapping.self], inMemory: true)
 }
-

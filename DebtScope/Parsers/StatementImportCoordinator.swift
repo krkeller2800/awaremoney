@@ -258,7 +258,7 @@ import UniformTypeIdentifiers
                 await MainActor.run { self.vm.staged = staged; self.vm.mappingSession = nil }
             } else {
                 await MainActor.run {
-                    self.vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
+                    self.vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: rows)
                     self.vm.staged = nil
                 }
             }
@@ -300,7 +300,7 @@ import UniformTypeIdentifiers
                 await MainActor.run { self.vm.staged = staged; self.vm.mappingSession = nil }
             } else {
                 await MainActor.run {
-                    self.vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: Array(rows.prefix(50)))
+                    self.vm.mappingSession = .init(kind: .bank, headers: headers, sampleRows: rows)
                     self.vm.staged = nil
                 }
             }
@@ -352,4 +352,3 @@ import UniformTypeIdentifiers
         return order.compactMap { chosen[$0] }
     }
 }
-

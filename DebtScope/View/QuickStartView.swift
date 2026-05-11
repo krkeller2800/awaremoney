@@ -179,9 +179,14 @@ struct QuickStartView: View {
     }
 
     private func queueImportAfterImporterDismissal(url: URL, type: StatementType?, institution: String?) {
+        let stagedURL = ImportFileStaging.stageToCaches(url)
+        AMLogging.log(
+            "QuickStart staged before importer dismissal file=\(stagedURL.lastPathComponent) path=\(stagedURL.path) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path))",
+            component: "Import"
+        )
         showImporter = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            queueImport(url: url, type: type, institution: institution)
+            queueImport(url: stagedURL, type: type, institution: institution)
         }
     }
 
@@ -1280,6 +1285,7 @@ private struct StatementReviewDetailView: View {
     @ObservedObject var vm: ImportViewModel
     let coordinator: StatementImportCoordinator
     @Binding var pendingExternal: QuickStartPendingImport?
+    @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
@@ -1293,17 +1299,23 @@ private struct StatementReviewDetailView: View {
     @State private var balanceInput = ""
     @State private var balanceDate = Date()
     @State private var saveMessage: String? = nil
+    @State private var saveMessageIsError = false
     @State private var savedAccountID: UUID? = nil
     @State private var showPDFPreview = false
-
+    @State private var showImportReviewSheet = false
+    @State private var showTransactionPreview = false
+    
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
-            get: { vm.staged != nil || vm.mappingSession != nil },
+            get: { showImportReviewSheet && (vm.staged != nil || vm.mappingSession != nil) },
             set: { presented in
                 if !presented {
+                    showImportReviewSheet = false
+
                     if let url = vm.lastPickedLocalURL {
                         reviewURL = url
                     }
+
                     vm.staged = nil
                     vm.mappingSession = nil
                 }
@@ -1325,10 +1337,13 @@ private struct StatementReviewDetailView: View {
             balanceInput: $balanceInput,
             balanceDate: $balanceDate,
             onSave: {
-                saveUnknownStatementAccount()
+                handleUnknownStatementSave()
             },
-            hasSavedAccount: savedAccountID != nil
-        )
+            hasSavedAccount: savedAccountID != nil,
+            saveButtonTitle: unknownStatementSaveButtonTitle,
+            savedButtonTitle: isTransactionImportFile ? "Import Ready" : "Account Added",
+            showsSaveButton: !isTransactionImportFile
+         )
     }
 
     var body: some View {
@@ -1340,11 +1355,14 @@ private struct StatementReviewDetailView: View {
                 .padding(.horizontal)
             
             if let saveMessage {
-                Label(saveMessage, systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
+                Label(
+                    saveMessage,
+                    systemImage: saveMessageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(saveMessageIsError ? .orange : .green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
             }
             
             Group {
@@ -1356,12 +1374,20 @@ private struct StatementReviewDetailView: View {
                                 .padding()
 
                             Button {
-                                showPDFPreview = true
+                                if isTransactionImportFile {
+                                    importUnknownTransactionFile()
+                                } else {
+                                    showPDFPreview = true
+                                }
                             } label: {
-                                Label("View PDF", systemImage: "doc.richtext")
-                                    .frame(maxWidth: .infinity)
+                                Label(
+                                    isTransactionImportFile ? "View Transactions" : "View PDF",
+                                    systemImage: isTransactionImportFile ? "list.bullet.rectangle" : "doc.richtext"
+                                )
+                                .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(isTransactionImportFile && (selectedType == nil || enteredInstitutionName.isEmpty))
                             .padding(.horizontal)
                             .padding(.bottom)
                         }
@@ -1394,6 +1420,39 @@ private struct StatementReviewDetailView: View {
         .sheet(isPresented: isImportSheetPresented) {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
+        }
+        .sheet(isPresented: $showTransactionPreview) {
+            NavigationStack {
+                Group {
+                    if let staged = vm.staged {
+                        StatementPreviewView(staged: staged)
+                    } else {
+                        ContentUnavailableView(
+                            "No Transactions",
+                            systemImage: "list.bullet.rectangle",
+                            description: Text("No parsed transactions are available yet.")
+                        )
+                    }
+                }
+                .navigationTitle("Transactions")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") {
+                            showTransactionPreview = false
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Approve") {
+                            showTransactionPreview = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                showImportReviewSheet = true
+                            }
+                        }
+                    }
+                }
+            }
+            .applySheetSizing()
         }
         .sheet(isPresented: $showPDFPreview) {
             NavigationStack {
@@ -1430,6 +1489,7 @@ private struct StatementReviewDetailView: View {
                     reviewURL = pending.url
                     vm.lastPickedLocalURL = pending.url
                     saveMessage = nil
+                    saveMessageIsError = false
                     savedAccountID = nil
                     pendingExternal = nil
                 }
@@ -1452,12 +1512,168 @@ private struct StatementReviewDetailView: View {
             await MainActor.run {
                 reviewURL = pending.url
                 saveMessage = nil
+                saveMessageIsError = false
                 savedAccountID = nil
                 pendingExternal = nil
             }
         }
     }
     
+    private var enteredInstitutionName: String {
+        editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedUnknownAccountType: Account.AccountType? {
+        guard selectedType != nil else { return nil }
+        return toAccountType(selectedType, bankSubtype: bankSubtype)
+    }
+
+    private var matchingAccountForUnknownTransactionImport: Account? {
+        guard isTransactionImportFile else { return nil }
+        guard let accountType = selectedUnknownAccountType else { return nil }
+        guard !enteredInstitutionName.isEmpty else { return nil }
+
+        return matchingExistingAccount(
+            type: accountType,
+            institution: enteredInstitutionName
+        )
+    }
+
+    private var unknownStatementSaveButtonTitle: String {
+        guard isTransactionImportFile else {
+            return "Add Account"
+        }
+
+        if matchingAccountForUnknownTransactionImport != nil {
+            return "Import Transactions"
+        } else {
+            return "Create & Import"
+        }
+    }
+    
+    private var reviewFileExtension: String {
+        reviewURL?.pathExtension.lowercased() ?? ""
+    }
+
+    private var isTransactionImportFile: Bool {
+        ["csv", "tsv", "txt", "qfx", "ofx", "qbo", "qif"].contains(reviewFileExtension)
+    }
+
+    private func handleUnknownStatementSave() {
+        if isTransactionImportFile {
+            importUnknownTransactionFile()
+        } else {
+            saveUnknownStatementAccount()
+        }
+    }
+
+    private func importUnknownTransactionFile() {
+        guard let url = reviewURL else { return }
+        guard let selectedType else { return }
+
+        let accountType = toAccountType(selectedType, bankSubtype: bankSubtype)
+        let inst = enteredInstitutionName
+        guard !inst.isEmpty else { return }
+
+        let existingAccount = matchingAccountForUnknownTransactionImport
+        let importAccountType = existingAccount?.type ?? accountType
+
+        vm.selectedAccountID = existingAccount?.id
+        vm.newAccountType = importAccountType
+        vm.userSelectedDocHint = importAccountType
+        vm.userInstitutionName = existingAccount?.institutionName ?? inst
+        vm.lastPickedLocalURL = url
+        vm.staged = nil
+        vm.mappingSession = nil
+        vm.errorMessage = nil
+        vm.infoMessage = nil
+        saveMessage = nil
+        saveMessageIsError = false
+
+        AMLogging.log(
+            "StatementReview importing unknown transaction file=\(url.lastPathComponent) ext=\(reviewFileExtension) type=\(selectedType) accountType=\(accountType.rawValue) accountMatch=\(existingAccount?.name ?? "nil") selectedAccountID=\(String(describing: vm.selectedAccountID)) institution=\(inst)",
+            component: "Import"
+        )
+
+        Task {
+            await coordinator.importURL(
+                url,
+                hint: selectedType,
+                modelContext: modelContext,
+                settings: settings
+            )
+            await waitForUnknownTransactionImportResult()
+
+            await MainActor.run {
+                vm.newAccountType = importAccountType
+                vm.userSelectedDocHint = importAccountType
+                if var staged = vm.staged {
+                    staged.suggestedAccountType = importAccountType
+                    vm.staged = staged
+                }
+
+                AMLogging.log(
+                    "StatementReview transaction import returned staged=\(vm.staged != nil) mapping=\(vm.mappingSession != nil) error=\(vm.errorMessage ?? "nil")",
+                    component: "Import"
+                )
+
+                if vm.staged != nil || vm.mappingSession != nil {
+                    saveMessage = existingAccount == nil
+                        ? "Ready to review. A new \(accountType.rawValue) account will be created when you approve the import."
+                        : "Ready to review. Transactions will be imported into \(existingAccount?.name ?? inst)."
+                    saveMessageIsError = false
+                    if vm.staged?.transactions.isEmpty == false {
+                        showTransactionPreview = true
+                    } else {
+                        showImportReviewSheet = true
+                    }
+                } else {
+                    showImportReviewSheet = false
+                    saveMessageIsError = true
+                    saveMessage = vm.errorMessage ?? "No transactions were found to review. Check the file type and account details."
+                }
+            }
+        }
+    }
+
+    private func waitForUnknownTransactionImportResult() async {
+        for _ in 0..<80 {
+            let hasResult = await MainActor.run {
+                vm.staged != nil || vm.mappingSession != nil || vm.errorMessage != nil
+            }
+            if hasResult { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    private func matchingExistingAccount(type: Account.AccountType, institution: String) -> Account? {
+        let wanted = normalizedAccountMatchText(institution)
+        guard !wanted.isEmpty else { return nil }
+
+        return accounts.first { account in
+            guard account.type == type else { return false }
+
+            let candidates = [
+                account.institutionName,
+                account.name
+            ]
+            .compactMap { $0 }
+            .map(normalizedAccountMatchText)
+
+            return candidates.contains(wanted)
+        }
+    }
+
+    private func normalizedAccountMatchText(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "&", with: "and")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined()
+    }
+
     private func toAccountType(_ t: StatementType?, bankSubtype: QuickIngestAccountType?) -> Account.AccountType {
         guard let t else { return .other }
         switch t {
@@ -1541,7 +1757,7 @@ private struct StatementReviewDetailView: View {
             savedAccountID = acct.id
 
             saveMessage = "Saved \(inst). You can continue reviewing this PDF or navigate to the new account."
-            
+            saveMessageIsError = false
             AMLogging.log(
                 "StatementReview manual account saved id=\(acct.id) type=\(acct.typeRaw) institution=\(inst)",
                 component: "Import"

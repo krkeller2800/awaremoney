@@ -105,7 +105,7 @@ final class ImportRoutingService {
             if !plans.contains(where: { $0.label == defaultLabel }) {
                 // create a synthetic plan for default if not present
                 let allAccounts: [Account] = (try? context.fetch(FetchDescriptor<Account>())) ?? []
-                let candidate = resolveCandidate(institution: analysis.institution, label: defaultLabel, accounts: allAccounts, context: context)
+                let candidate = resolveCandidate(institution: analysis.institution, label: defaultLabel, desiredType: staged.suggestedAccountType, accounts: allAccounts, context: context)
                 plans.append(RoutedClusterPlan(label: defaultLabel, candidate: candidate, transactions: txByLabel[defaultLabel] ?? [], balances: balByLabel[defaultLabel] ?? [], holdings: holdingsAll))
             } else {
                 // merge holdings into the existing default plan
@@ -327,7 +327,7 @@ final class ImportRoutingService {
             let txCount = staged.transactions.filter { AccountImportMapping.normalizedLabel($0.sourceAccountLabel) == label }.count
             let balCount = staged.balances.filter { AccountImportMapping.normalizedLabel($0.sourceAccountLabel) == label }.count
 
-            let candidate = resolveCandidate(institution: institution, label: label, accounts: allAccounts, context: context)
+            let candidate = resolveCandidate(institution: institution, label: label, desiredType: staged.suggestedAccountType, accounts: allAccounts, context: context)
             clusters.append(RoutingCluster(label: label, transactionsCount: txCount, balancesCount: balCount, candidate: candidate))
         }
 
@@ -446,15 +446,17 @@ final class ImportRoutingService {
 
     // MARK: - Internals
 
-    private func resolveCandidate(institution: String?, label: String, accounts: [Account], context: ModelContext) -> RoutingCandidate {
+    private func resolveCandidate(institution: String?, label: String, desiredType: Account.AccountType?, accounts: [Account], context: ModelContext) -> RoutingCandidate {
         // 1) Exact mapping lookup by institution + label
         if let inst = institution, let mapping = try? fetchMapping(inst: inst, label: label, context: context),
            let acct = accounts.first(where: { $0.id == mapping.accountID }) {
-            return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: clamp(mapping.confidence), reason: "mapping")
+            if desiredType == nil || acct.type == desiredType {
+                return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: clamp(mapping.confidence), reason: "mapping")
+            }
         }
 
         // 2) Heuristic: infer type from label and look for matching accounts at the same institution
-        let inferredType = inferType(from: label)
+        let inferredType = inferType(from: label) ?? desiredType
         let matchesAtInstitution: [Account] = {
             guard let instKey = normalizedInstitutionKey(institution), !instKey.isEmpty else { return [] }
             return accounts.filter {

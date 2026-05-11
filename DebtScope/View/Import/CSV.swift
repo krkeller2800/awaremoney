@@ -12,10 +12,24 @@ enum CSV {
         var delimiter: Character = ","
         var hasHeaderRow: Bool = true
         var skipEmptyLines: Bool = true
+
+        var shouldAutoDetectDelimiter: Bool = false
+
+        init(
+            delimiter: Character = ",",
+            hasHeaderRow: Bool = true,
+            skipEmptyLines: Bool = true,
+            autoDetectDelimiter: Bool = false
+        ) {
+            self.delimiter = delimiter
+            self.hasHeaderRow = hasHeaderRow
+            self.skipEmptyLines = skipEmptyLines
+            self.shouldAutoDetectDelimiter = autoDetectDelimiter
+        }
     }
 
     static func read(data: Data, encoding: String.Encoding = .utf8) throws -> (rows: [[String]], headers: [String]) {
-        return try read(data: data, encoding: encoding, options: ReadOptions())
+        return try read(data: data, encoding: encoding, options: ReadOptions(autoDetectDelimiter: true))
     }
 
     static func read(data: Data, encoding: String.Encoding = .utf8, options: ReadOptions) throws -> (rows: [[String]], headers: [String]) {
@@ -38,7 +52,8 @@ enum CSV {
         // Strip UTF BOM if present and normalize line endings to \n to avoid CRLF double-terminators
         s = s.replacingOccurrences(of: "\u{FEFF}", with: "")
         let normalized = s.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        let allRows = parse(csv: normalized, delimiter: options.delimiter)
+        let delimiter = options.shouldAutoDetectDelimiter ? sniffDelimiter(in: normalized) : options.delimiter
+        let allRows = parse(csv: normalized, delimiter: delimiter)
 
         func isBlankRow(_ row: [String]) -> Bool {
             return row.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -115,5 +130,33 @@ enum CSV {
 
     private static func parse(csv: String) -> [[String]] {
         return parse(csv: csv, delimiter: ",")
+    }
+
+    private static func sniffDelimiter(in csv: String) -> Character {
+        let candidates: [Character] = [",", "\t", ";", "|"]
+        let sampleLines = csv
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .prefix(10)
+            .map(String.init)
+
+        var bestDelimiter: Character = ","
+        var bestScore = 0
+
+        for candidate in candidates {
+            let counts = sampleLines.map { line in
+                parse(csv: line, delimiter: candidate).first?.count ?? 1
+            }
+            let multiColumnCounts = counts.filter { $0 > 1 }
+            guard !multiColumnCounts.isEmpty else { continue }
+
+            let consistencyBonus = Set(multiColumnCounts).count == 1 ? 10 : 0
+            let score = multiColumnCounts.reduce(0, +) + consistencyBonus
+            if score > bestScore {
+                bestScore = score
+                bestDelimiter = candidate
+            }
+        }
+
+        return bestDelimiter
     }
 }

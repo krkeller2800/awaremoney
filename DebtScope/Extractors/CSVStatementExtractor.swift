@@ -22,19 +22,14 @@ struct CSVMapping {
 enum CSVStatementExtractor {
     // Public entry point. If mapping is nil, we try to auto-map based on fuzzy header names.
     static func parse(url: URL, mapping: CSVMapping? = nil) throws -> (rows: [[String]], headers: [String]) {
-        guard let data = try? Data(contentsOf: url), let raw = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .ascii) else {
+        guard let data = try? Data(contentsOf: url) else {
             throw CSVImportError.unreadable
         }
 
-        // Split into lines and drop blank ones
-        var lines = raw.components(separatedBy: CharacterSet.newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard !lines.isEmpty else { throw CSVImportError.empty }
-
-        // Sniff delimiter from first few lines
-        let delimiter = sniffDelimiter(from: Array(lines.prefix(5)))
-
-        // Parse header
-        let headerFields = parseCSVLine(lines.removeFirst(), delimiter: delimiter)
+        let parsed = try CSV.read(data: data)
+        let inputRows = parsed.rows
+        let headerFields = parsed.headers
+        guard !headerFields.isEmpty || !inputRows.isEmpty else { throw CSVImportError.empty }
         guard !headerFields.isEmpty else { throw CSVImportError.missingHeader }
 
         // Build column index map
@@ -53,10 +48,9 @@ enum CSVStatementExtractor {
         let headers = ["date", "description", "amount", "balance", "account"]
 
         var out: [[String]] = []
-        out.reserveCapacity(lines.count)
+        out.reserveCapacity(inputRows.count)
 
-        for line in lines {
-            let fields = parseCSVLine(line, delimiter: delimiter)
+        for fields in inputRows {
             if fields.isEmpty { continue }
 
             func value(at idx: Int?) -> String {

@@ -277,8 +277,6 @@ enum ImportFileStaging {
                 return destinationStandardizedURL
             }
 
-            try? fm.removeItem(at: destinationStandardizedURL)
-
             let didStartSecurityScope = sourceURL.startAccessingSecurityScopedResource()
             defer {
                 if didStartSecurityScope {
@@ -286,13 +284,22 @@ enum ImportFileStaging {
                 }
             }
 
+            let temporaryURL = caches.appendingPathComponent(UUID().uuidString + "-" + sourceURL.lastPathComponent)
+            defer {
+                try? fm.removeItem(at: temporaryURL)
+            }
+
             do {
-                try fm.copyItem(at: sourceURL, to: destinationStandardizedURL)
+                try fm.copyItem(at: sourceURL, to: temporaryURL)
+                try? fm.removeItem(at: destinationStandardizedURL)
+                try fm.moveItem(at: temporaryURL, to: destinationStandardizedURL)
                 return destinationStandardizedURL
             } catch {
                 do {
                     let data = try Data(contentsOf: sourceURL)
-                    try data.write(to: destinationStandardizedURL, options: .atomic)
+                    try data.write(to: temporaryURL, options: .atomic)
+                    try? fm.removeItem(at: destinationStandardizedURL)
+                    try fm.moveItem(at: temporaryURL, to: destinationStandardizedURL)
                     return destinationStandardizedURL
                 } catch {
                     AMLogging.error(

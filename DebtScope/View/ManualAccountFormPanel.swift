@@ -23,6 +23,10 @@ struct ManualAccountFormPanel: View {
     let onSave: () -> Void
     let hasSavedAccount: Bool
     
+    var saveButtonTitle: String = "Add Account"
+    var savedButtonTitle: String = "Account Added"
+    var showsSaveButton: Bool = true
+    
     @EnvironmentObject private var settings: SettingsStore
     @FocusState private var focusedManualField: ManualField?
     private enum ManualField: Hashable {
@@ -54,36 +58,42 @@ struct ManualAccountFormPanel: View {
   
     private var bottomButtons: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            if hasSavedAccount {
-                Text("This account has been added.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            } else if let saveDisabledHint {
-                Text(saveDisabledHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-
-            HStack {
-                Spacer()
-
-                Button {
-                    onSave()
-                } label: {
-                    Label(
-                        hasSavedAccount ? "Account Added" : "Add Account",
-                        systemImage: hasSavedAccount ? "checkmark.circle.fill" : "checkmark"
-                    )
+            if showsSaveButton {
+                if hasSavedAccount {
+                    Text("This account has been added.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else if let saveDisabledHint {
+                    Text(saveDisabledHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(hasSavedAccount || !canSaveManualAccount)
+
+                HStack {
+                    Spacer()
+
+                    Button {
+                        onSave()
+                    } label: {
+                        Label(
+                            hasSavedAccount ? savedButtonTitle : saveButtonTitle,
+                            systemImage: hasSavedAccount ? "checkmark.circle.fill" : "checkmark"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(hasSavedAccount || !canSaveManualAccount)
+                }
             }
         }
         .padding(.top, 8)
     }
  
+    private var showsDebtTermFields: Bool {
+        selectedType == .creditCard || selectedType == .loan
+    }
+    
     private var canSaveManualAccount: Bool {
         selectedType != nil &&
         !editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -174,30 +184,31 @@ struct ManualAccountFormPanel: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             
-            manualTextFieldRow(
-                "Monthly payment",
-                placeholder: "Amount",
-                text: $monthlyPaymentInput,
-                field: .monthlyPayment,
-                minWidth: 140,
-                keyboardType: .numbersAndPunctuation,
-                onExit: {
-                    formatMoneyInput(&monthlyPaymentInput)
-                }
-            )
-            
-            manualTextFieldRow(
-                "APR (%)",
-                placeholder: "e.g., 19.99",
-                text: $aprPercentInput,
-                field: .apr,
-                minWidth: 140,
-                keyboardType: .numbersAndPunctuation,
-                onExit: {
-                    formatAPRInput()
-                }
-            )
-            
+            if showsDebtTermFields {
+                manualTextFieldRow(
+                    "Monthly payment",
+                    placeholder: "Amount",
+                    text: $monthlyPaymentInput,
+                    field: .monthlyPayment,
+                    minWidth: 140,
+                    keyboardType: .numbersAndPunctuation,
+                    onExit: {
+                        formatMoneyInput(&monthlyPaymentInput)
+                    }
+                )
+                
+                manualTextFieldRow(
+                    "APR (%)",
+                    placeholder: "e.g., 19.99",
+                    text: $aprPercentInput,
+                    field: .apr,
+                    minWidth: 140,
+                    keyboardType: .numbersAndPunctuation,
+                    onExit: {
+                        formatAPRInput()
+                    }
+                )
+            }
             manualTextFieldRow(
                 "Ending balance",
                 placeholder: "Amount",

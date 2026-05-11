@@ -369,8 +369,10 @@ struct ImportFlowView: View {
             (l.contains("description") || l.contains("payee") || l.contains("memo") || l.contains("details")) && !l.contains("date")
         }
 
-        // Try common amount-like tokens first
-        var amountHeader: String? = findHeader(containing: ["amount", "amt", "debit", "credit", "withdrawal", "deposit", "charge"])
+        // Try common amount-like tokens first. Keep debit/credit split columns distinct when both exist.
+        var amountHeader: String? = findHeader(containing: ["amount", "amt", "charge"])
+        let debitHeader = findHeader(containing: ["debit", "withdrawal"])
+        let creditHeader = findHeader(containing: ["credit", "deposit"])
 
         // Fallback to guess amount column by scanning sample rows for numeric-looking data
         if amountHeader == nil {
@@ -407,6 +409,8 @@ struct ImportFlowView: View {
         if let h = dateHeader { prefilled[.date] = h }
         if let h = payeeHeader { prefilled[.payee] = h }
         if let h = amountHeader { prefilled[.amount] = h }
+        if amountHeader == nil, let h = debitHeader { prefilled[.debit] = h }
+        if amountHeader == nil, let h = creditHeader { prefilled[.credit] = h }
         if let h = kindHeader { prefilled[.kind] = h }
         if let h = categoryHeader { prefilled[.category] = h }
         if let h = accountHeader { prefilled[.account] = h }
@@ -424,15 +428,15 @@ struct ImportFlowView: View {
             let fieldsForHint: [CSVColumnMapping.Field]? = {
                 switch vm.userSelectedDocHint {
                 case .loan:
-                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance, .interestRateAPR]
+                    return [.date, .payee, .memo, .amount, .debit, .credit, .category, .account, .balance, .runningBalance, .interestRateAPR]
                 case .creditCard:
-                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance, .interestRateAPR]
+                    return [.date, .payee, .memo, .amount, .debit, .credit, .category, .account, .balance, .runningBalance, .interestRateAPR]
                 case .brokerage:
                     return [.date, .symbol, .quantity, .price, .marketValue, .balance, .account]
                 case .checking:
                     fallthrough
                 default:
-                    return [.date, .payee, .memo, .amount, .category, .account, .balance, .runningBalance]
+                    return [.date, .payee, .memo, .amount, .debit, .credit, .category, .account, .balance, .runningBalance]
                 }
             }()
 

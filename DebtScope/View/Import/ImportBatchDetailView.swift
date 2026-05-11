@@ -764,7 +764,10 @@ struct ImportBatchDetailView: View {
     @ViewBuilder private func mappingSheetContent(for batch: ImportBatch) -> some View {
         NavigationStack {
             CSVMappingEditorView(
-                mapping: CSVColumnMapping(label: "New Mapping", mappings: [:]),
+                mapping: CSVColumnMapping(
+                    label: "New Mapping",
+                    mappings: CSVColumnMapping.suggestedMappings(from: pendingCSVHeaders, sampleRows: pendingCSVRows)
+                ),
                 headers: pendingCSVHeaders,
                 sampleRows: pendingCSVRows,
                 onSaveWithOptions: { mapping, opts in
@@ -1543,4 +1546,3 @@ private extension View {
 #Preview {
     Text("Preview requires model data")
 }
-

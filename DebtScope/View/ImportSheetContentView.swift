@@ -13,7 +13,10 @@ struct ImportSheetContentView: View {
             } else if let session = vm.mappingSession {
                 NavigationStack {
                     CSVMappingEditorView(
-                        mapping: CSVColumnMapping(label: "New Mapping", mappings: [:]),
+                        mapping: CSVColumnMapping(
+                            label: "New Mapping",
+                            mappings: CSVColumnMapping.suggestedMappings(from: session.headers, sampleRows: session.sampleRows)
+                        ),
                         headers: session.headers,
                         sampleRows: session.sampleRows,
                         onSaveWithOptions: { mapping, _ in

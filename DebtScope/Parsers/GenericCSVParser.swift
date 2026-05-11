@@ -40,13 +40,15 @@ struct GenericCSVParser: StatementParser {
             
             let lowerValuesByKey: [String: String] = Dictionary(uniqueKeysWithValues: valuesByKey.map { ($0.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0.value) })
             
-            let hasTxSignals = [mapping.amountColumn, mapping.dateColumn]
+            let hasTxSignals = [mapping.amountColumn, mapping.debitColumn, mapping.creditColumn, mapping.dateColumn]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .contains(where: { headerIndex[$0] != nil })
             if hasTxSignals {
                 // Use case-insensitive lookups for all mapped headers
                 let dateHeader = mapping.dateColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let amountHeader = mapping.amountColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let debitHeader = mapping.debitColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let creditHeader = mapping.creditColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let payeeHeader = mapping.payeeColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let memoHeader = mapping.memoColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 _ = mapping.categoryColumn?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -60,7 +62,11 @@ struct GenericCSVParser: StatementParser {
                     continue
                 }
 
-                guard let amount = GenericCSVParser.parseDecimal(from: amountHeader.flatMap({ lowerValuesByKey[$0] })) else { continue }
+                guard let amount = GenericCSVParser.parseTransactionAmount(
+                    amount: amountHeader.flatMap { lowerValuesByKey[$0] },
+                    debit: debitHeader.flatMap { lowerValuesByKey[$0] },
+                    credit: creditHeader.flatMap { lowerValuesByKey[$0] }
+                ) else { continue }
 
                 let payee = payeeHeader.flatMap { lowerValuesByKey[$0] }
                 let memo = memoHeader.flatMap { lowerValuesByKey[$0] }
@@ -235,6 +241,22 @@ private extension GenericCSVParser {
         if negativeHint && !positiveHint && !cleaned.hasPrefix("-") { cleaned = "-" + cleaned }
         return Decimal(string: cleaned)
     }
+
+    static func parseTransactionAmount(amount: String?, debit: String?, credit: String?) -> Decimal? {
+        if let parsedAmount = parseDecimal(from: amount) {
+            return parsedAmount
+        }
+
+        if let parsedDebit = parseDecimal(from: debit), parsedDebit != 0 {
+            return parsedDebit < 0 ? parsedDebit : -parsedDebit
+        }
+
+        if let parsedCredit = parseDecimal(from: credit), parsedCredit != 0 {
+            return parsedCredit
+        }
+
+        return nil
+    }
     
     static func decimalPlaces(in s: String) -> Int {
         let cleaned = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -244,4 +266,3 @@ private extension GenericCSVParser {
         return 0
     }
 }
-
