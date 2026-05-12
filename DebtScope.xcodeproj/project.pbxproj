@@ -365,8 +365,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.07;
-				PRODUCT_BUNDLE_IDENTIFIER = com.komakode.DebtScope;
+				MARKETING_VERSION = 1.08;
+				PRODUCT_BUNDLE_IDENTIFIER = com.komakode.awaremoney;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -402,8 +402,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.07;
-				PRODUCT_BUNDLE_IDENTIFIER = com.komakode.DebtScope;
+				MARKETING_VERSION = 1.08;
+				PRODUCT_BUNDLE_IDENTIFIER = com.komakode.awaremoney;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

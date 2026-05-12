@@ -9,7 +9,7 @@ struct DebugSettingsView: View {
     @State private var verboseEnabled: Bool = AMLogConfig.verbose
     @State private var categoryStates: [String: Bool] = [:]
     @State private var dynamicCategories: [String] = []
-    @State private var resetTrialToggle: Bool = false
+    @State private var resetFreeImportsToggle: Bool = false
     private let seedCategories: [String] = [
         "Import", "ImportViewModel", "PDFStatementExtractor", "PDFSummaryParser",
         "PDFBankTransactionsParser", "BrokerageCSVParser", "FidelityStatementCSVParser",
@@ -65,21 +65,20 @@ struct DebugSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Trial") {
-                    Toggle(isOn: $resetTrialToggle) {
+                Section("Import Allowance") {
+                    Toggle(isOn: $resetFreeImportsToggle) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Reset Free Trial")
-                            Text("Sets the trial start to now so you have a full trial window again.")
+                            Text("Reset Free Imports")
+                            Text("Resets the free import counter so all 4 free imports are available again.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .onChange(of: resetTrialToggle) { _, newValue in
+                    .onChange(of: resetFreeImportsToggle) { _, newValue in
                         if newValue {
                             let purchases = PurchaseManager.shared
-                            purchases.trialStartDate = Date()
-                            purchases.objectWillChange.send()
-                            resetTrialToggle = false
+                            purchases.resetFreeImportAllowanceForDebug()
+                            resetFreeImportsToggle = false
                         }
                     }
                 }
@@ -135,4 +134,3 @@ struct DebugSettingsView: View {
 }
 // What comes next: Hook this button up to a dedicated Import History screen where users can view batches, delete one, or replace it with a new file. This view will also surface conflicts and user-modified items.
 #endif
-

@@ -4,26 +4,24 @@ import SwiftUI
 import Combine
 import Security
 
-private enum TrialKeychain {
+private enum ImportAllowanceKeychain {
     private static var service: String { Bundle.main.bundleIdentifier ?? "com.debtscope.app" }
-    private static let account = "PremiumTrialStartDate"
 
-    static func save(date: Date) {
-        let seconds = date.timeIntervalSince1970
-        let data = withUnsafeBytes(of: seconds) { Data($0) }
+    static func saveInt(_ value: Int, account: String) {
+        var raw = Int64(value)
+        let data = withUnsafeBytes(of: &raw) { Data($0) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        // Replace if exists
         SecItemDelete(query as CFDictionary)
         var attrs = query
         attrs[kSecValueData as String] = data
         SecItemAdd(attrs as CFDictionary, nil)
     }
 
-    static func load() -> Date? {
+    static func loadInt(account: String) -> Int? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -34,12 +32,20 @@ private enum TrialKeychain {
         var out: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
         guard status == errSecSuccess, let data = out as? Data else { return nil }
-        guard data.count == MemoryLayout<TimeInterval>.size else { return nil }
-        let seconds = data.withUnsafeBytes { $0.load(as: TimeInterval.self) }
-        return Date(timeIntervalSince1970: seconds)
+        guard data.count == MemoryLayout<Int64>.size else { return nil }
+        let value = data.withUnsafeBytes { $0.load(as: Int64.self) }
+        return Int(value)
     }
 
-    static func delete() {
+    static func saveBool(_ value: Bool, account: String) {
+        saveInt(value ? 1 : 0, account: account)
+    }
+
+    static func loadBool(account: String) -> Bool {
+        loadInt(account: account) == 1
+    }
+
+    static func delete(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -55,11 +61,12 @@ final class PurchaseManager: ObservableObject {
     static let shared = PurchaseManager()
 
     // Non-consumable lifetime product
-    private let productID = "com.komakode.debtscope.lifetime"
+    private let productID = "com.komakode.awaremoney.lifetime"
 
-    // Trial configuration (app-side; not an App Store trial)
-    private let trialLengthDays: Int = 10
-    private let trialStartKey = "PremiumTrialStartDate"
+    // App-side free import allowance; this is not an App Store trial.
+    let freeImportLimit: Int = 4
+    private let freeImportsUsedKey = "FreeImportsUsedCount"
+    private let freeImportMigrationKey = "FreeImportAllowanceMigratedFromExistingImports"
 
     private var productShortCode: String {
         let parts = productID.split(separator: ".")
@@ -73,77 +80,64 @@ final class PurchaseManager: ObservableObject {
     @Published var errorMessage: String?
     @Published var iapDiagnosticSummary: String? = nil
     @Published var userMessage: String? = nil
+    @Published private(set) var freeImportsUsed: Int = 0
 
-    // Derived entitlement: purchased OR within trial window
-    var isPremiumUnlocked: Bool { isPurchased || isInTrial }
+    // Derived entitlement: purchased OR still has a free import available.
+    var isPremiumUnlocked: Bool { isPurchased || canUseFreeImport }
 
-    // MARK: - Trial state
-    var trialStartDate: Date? {
-        get {
-            // Prefer Keychain value
-            if let kc = TrialKeychain.load() { return kc }
-            // Legacy migration from UserDefaults if present
-            if let time = UserDefaults.standard.object(forKey: trialStartKey) as? TimeInterval {
-                let date = Date(timeIntervalSince1970: time)
-                TrialKeychain.save(date: date)
-                UserDefaults.standard.removeObject(forKey: trialStartKey)
-                return date
-            }
-            return nil
-        }
-        set {
-            if let date = newValue {
-                TrialKeychain.save(date: date)
-            } else {
-                TrialKeychain.delete()
-            }
-        }
+    var canUseFreeImport: Bool {
+        freeImportsRemaining > 0
     }
 
-    var trialEndDate: Date? {
-        guard let start = trialStartDate else { return nil }
-        return Calendar(identifier: .gregorian).date(byAdding: .day, value: trialLengthDays, to: start)
+    var freeImportsRemaining: Int {
+        max(0, freeImportLimit - freeImportsUsed)
     }
 
-    var isInTrial: Bool {
-        #if DEBUG
-        // In debug builds, keep the trial active indefinitely
+    var hasMigratedFreeImportAllowance: Bool {
+        ImportAllowanceKeychain.loadBool(account: freeImportMigrationKey)
+    }
+
+    var freeImportStatusText: String {
+        if isPurchased {
+            return "Lifetime access active"
+        }
+        let remaining = freeImportsRemaining
+        if remaining > 0 {
+            return "\(remaining) free import\(remaining == 1 ? "" : "s") remaining"
+        }
+        return "Free imports used"
+    }
+
+    func synchronizeInitialFreeImportUsage(existingImportCount: Int) {
+        guard !hasMigratedFreeImportAllowance else { return }
+        let migratedUsage = min(max(existingImportCount, 0), freeImportLimit)
+        if migratedUsage > freeImportsUsed {
+            setFreeImportsUsed(migratedUsage)
+        }
+        ImportAllowanceKeychain.saveBool(true, account: freeImportMigrationKey)
+    }
+
+    @discardableResult
+    func recordCompletedImportIfNeeded() -> Bool {
+        if isPurchased { return true }
+        guard canUseFreeImport else { return false }
+        setFreeImportsUsed(freeImportsUsed + 1)
         return true
-        #else
-        guard let end = trialEndDate else { return false }
-        return Date() < end
-        #endif
     }
 
-    var trialDaysRemaining: Int {
-        #if DEBUG
-        // Keep UI stable in debug by always showing the full trial length
-        return trialLengthDays
-        #else
-        guard let end = trialEndDate else { return 0 }
-        let cal = Calendar(identifier: .gregorian)
-        let startOfToday = cal.startOfDay(for: Date())
-        let startOfEnd = cal.startOfDay(for: end)
-        let comps = cal.dateComponents([.day], from: startOfToday, to: startOfEnd)
-        return max(0, (comps.day ?? 0))
-        #endif
+    func resetFreeImportAllowanceForDebug() {
+        setFreeImportsUsed(0)
+        ImportAllowanceKeychain.saveBool(true, account: freeImportMigrationKey)
     }
 
-    var trialHoursRemaining: Int {
-        #if DEBUG
-        // Not used when showing days, but provide a sensible fallback
-        return 24
-        #else
-        guard let end = trialEndDate else { return 0 }
-        let seconds = end.timeIntervalSinceNow
-        if seconds <= 0 { return 0 }
-        // Ceil to ensure we never show 0 hours when time remains
-        return Int(ceil(seconds / 3600.0))
-        #endif
+    private func setFreeImportsUsed(_ value: Int) {
+        freeImportsUsed = max(0, min(value, freeImportLimit))
+        ImportAllowanceKeychain.saveInt(freeImportsUsed, account: freeImportsUsedKey)
     }
 
     // MARK: - Init
     init() {
+        freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
         Task { await configure() }
     }
 
@@ -193,17 +187,9 @@ final class PurchaseManager: ObservableObject {
 
     // MARK: - Setup
     private func configure() async {
-        startTrialIfNeeded()
         await loadProductWithRetry()
         await updatePurchasedStatus()
         listenForTransactions()
-    }
-
-    private func startTrialIfNeeded() {
-        // Start the trial on first run if the user hasn't purchased yet and has no existing trial
-        if !isPurchased && trialStartDate == nil {
-            trialStartDate = Date()
-        }
     }
 
     private func loadProduct() async {
@@ -318,4 +304,3 @@ final class PurchaseManager: ObservableObject {
         }
     }
 }
-

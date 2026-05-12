@@ -39,6 +39,7 @@ struct QuickStartView: View {
     @State private var showBackupRestore = false
     @State private var showHelp = false
     @State private var showDebug = false
+    @State private var showPaywall = false
     @State private var quickStartPending: QuickStartPendingImport? = nil
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
@@ -510,6 +511,12 @@ struct QuickStartView: View {
                         }
 
                         utilitySection
+
+                        TrialBanner(horizontalPadding: 8, textLineLimit: 1) {
+                            showPaywall = true
+                        }
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                     }
                     .navigationTitle("DebtScope")
                     .navigationBarTitleDisplayMode(.inline)
@@ -544,6 +551,11 @@ struct QuickStartView: View {
                                     handleUtilityTap(title: tappedTitle)
                                 }
                             )
+
+                            TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                                showPaywall = true
+                            }
+                            .padding(.horizontal, 12)
                         }
                         .padding(16)
                     }
@@ -561,6 +573,10 @@ struct QuickStartView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(PurchaseManager.shared)
         }
         .sheet(isPresented: $showBackupRestore) {
             BackupRestoreView()
@@ -1301,6 +1317,7 @@ private struct StatementReviewDetailView: View {
     @State private var saveMessage: String? = nil
     @State private var saveMessageIsError = false
     @State private var savedAccountID: UUID? = nil
+    @State private var selectedExistingAccountID: UUID? = nil
     @State private var showPDFPreview = false
     @State private var showImportReviewSheet = false
     @State private var showTransactionPreview = false
@@ -1342,7 +1359,10 @@ private struct StatementReviewDetailView: View {
             hasSavedAccount: savedAccountID != nil,
             saveButtonTitle: unknownStatementSaveButtonTitle,
             savedButtonTitle: isTransactionImportFile ? "Import Ready" : "Account Added",
-            showsSaveButton: !isTransactionImportFile
+            showsSaveButton: !isTransactionImportFile,
+            showsExistingAccountPicker: isTransactionImportFile,
+            existingAccounts: existingAccountsForUnknownTransactionImport,
+            selectedExistingAccountID: $selectedExistingAccountID
          )
     }
 
@@ -1491,6 +1511,7 @@ private struct StatementReviewDetailView: View {
                     saveMessage = nil
                     saveMessageIsError = false
                     savedAccountID = nil
+                    selectedExistingAccountID = nil
                     pendingExternal = nil
                 }
 
@@ -1514,8 +1535,18 @@ private struct StatementReviewDetailView: View {
                 saveMessage = nil
                 saveMessageIsError = false
                 savedAccountID = nil
+                selectedExistingAccountID = nil
                 pendingExternal = nil
             }
+        }
+        .onChange(of: selectedExistingAccountID) { _, newValue in
+            applySelectedExistingAccount(newValue)
+        }
+        .onChange(of: selectedType) { _, _ in
+            clearSelectedExistingAccountIfNeeded()
+        }
+        .onChange(of: bankSubtype) { _, _ in
+            clearSelectedExistingAccountIfNeeded()
         }
     }
     
@@ -1530,6 +1561,10 @@ private struct StatementReviewDetailView: View {
 
     private var matchingAccountForUnknownTransactionImport: Account? {
         guard isTransactionImportFile else { return nil }
+        if let selectedExistingAccountID,
+           let selected = accounts.first(where: { $0.id == selectedExistingAccountID }) {
+            return selected
+        }
         guard let accountType = selectedUnknownAccountType else { return nil }
         guard !enteredInstitutionName.isEmpty else { return nil }
 
@@ -1537,6 +1572,64 @@ private struct StatementReviewDetailView: View {
             type: accountType,
             institution: enteredInstitutionName
         )
+    }
+
+    private var existingAccountsForUnknownTransactionImport: [Account] {
+        guard isTransactionImportFile else { return [] }
+        guard let accountType = selectedUnknownAccountType else { return [] }
+        return accounts
+            .filter { $0.type == accountType }
+            .sorted { lhs, rhs in
+                let lhsInst = lhs.institutionName ?? ""
+                let rhsInst = rhs.institutionName ?? ""
+                if lhsInst.localizedCaseInsensitiveCompare(rhsInst) != .orderedSame {
+                    return lhsInst.localizedCaseInsensitiveCompare(rhsInst) == .orderedAscending
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    private func applySelectedExistingAccount(_ accountID: UUID?) {
+        guard let accountID,
+              let account = accounts.first(where: { $0.id == accountID })
+        else { return }
+
+        switch account.type {
+        case .checking:
+            selectedType = .bank
+            bankSubtype = .checking
+        case .savings:
+            selectedType = .bank
+            bankSubtype = .savings
+        case .creditCard:
+            selectedType = .creditCard
+            bankSubtype = nil
+        case .loan:
+            selectedType = .loan
+            bankSubtype = nil
+        case .brokerage:
+            selectedType = .brokerage
+            bankSubtype = nil
+        default:
+            break
+        }
+
+        editedInstitution = account.institutionName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? account.institutionName ?? account.name
+            : account.name
+    }
+
+    private func clearSelectedExistingAccountIfNeeded() {
+        guard let selectedExistingAccountID else { return }
+        guard let accountType = selectedUnknownAccountType else {
+            self.selectedExistingAccountID = nil
+            return
+        }
+        if let account = accounts.first(where: { $0.id == selectedExistingAccountID }),
+           account.type == accountType {
+            return
+        }
+        self.selectedExistingAccountID = nil
     }
 
     private var unknownStatementSaveButtonTitle: String {

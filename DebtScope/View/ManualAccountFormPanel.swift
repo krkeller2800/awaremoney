@@ -26,6 +26,9 @@ struct ManualAccountFormPanel: View {
     var saveButtonTitle: String = "Add Account"
     var savedButtonTitle: String = "Account Added"
     var showsSaveButton: Bool = true
+    var showsExistingAccountPicker: Bool = false
+    var existingAccounts: [Account] = []
+    var selectedExistingAccountID: Binding<UUID?>? = nil
     
     @EnvironmentObject private var settings: SettingsStore
     @FocusState private var focusedManualField: ManualField?
@@ -157,6 +160,18 @@ struct ManualAccountFormPanel: View {
                     }
                 }
                 .pickerStyle(.menu)
+            }
+
+            if showsExistingAccountPicker, let selectedExistingAccountID {
+                manualPickerRow("Account") {
+                    Picker("Account", selection: selectedExistingAccountID) {
+                        Text("Create New Account").tag(nil as UUID?)
+                        ForEach(existingAccounts, id: \.id) { account in
+                            Text(accountDisplayName(account)).tag(account.id as UUID?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
             }
             
             manualTextFieldRow(
@@ -443,6 +458,27 @@ struct ManualAccountFormPanel: View {
         case .loan: return "Loan"
         case .brokerage: return "Brokerage"
         }
+    }
+
+    private func accountDisplayName(_ account: Account) -> String {
+        let typeName: String = {
+            switch account.type {
+            case .checking: return "Checking"
+            case .savings: return "Savings"
+            case .creditCard: return "Credit Card"
+            case .loan: return "Loan"
+            case .cash: return "Cash"
+            case .brokerage: return "Brokerage"
+            case .property: return "Property"
+            case .other: return "Other"
+            }
+        }()
+
+        if account.name.localizedCaseInsensitiveContains(typeName) {
+            return account.name
+        }
+
+        return "\(account.name) — \(typeName)"
     }
 
     private func toAccountType(_ t: StatementType?, bankSubtype: QuickIngestAccountType?) -> Account.AccountType {

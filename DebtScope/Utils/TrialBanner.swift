@@ -3,51 +3,81 @@ import SwiftUI
 @MainActor
 struct TrialBanner: View {
     @ObservedObject private var purchases: PurchaseManager
+    private let horizontalPadding: CGFloat
+    private let textLineLimit: Int?
+    private let action: (() -> Void)?
 
-    init(purchases: PurchaseManager) {
+    init(
+        purchases: PurchaseManager,
+        horizontalPadding: CGFloat = 16,
+        textLineLimit: Int? = 2,
+        action: (() -> Void)? = nil
+    ) {
         self.purchases = purchases
+        self.horizontalPadding = horizontalPadding
+        self.textLineLimit = textLineLimit
+        self.action = action
     }
 
     @MainActor
-    init() {
+    init(
+        horizontalPadding: CGFloat = 16,
+        textLineLimit: Int? = 2,
+        action: (() -> Void)? = nil
+    ) {
         self.purchases = .shared
+        self.horizontalPadding = horizontalPadding
+        self.textLineLimit = textLineLimit
+        self.action = action
     }
 
     var body: some View {
         Group {
             if shouldShow {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "hourglass")
-                        .imageScale(.medium)
-                        .foregroundStyle(.blue)
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.blue)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.9)
+                if let action {
+                    Button(action: action) {
+                        bannerContent
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(.isButton)
+                } else {
+                    bannerContent
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.blue.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .padding(.horizontal)
-                .accessibilityIdentifier("trialBanner")
             }
         }
     }
 
+    private var bannerContent: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .imageScale(.medium)
+                .foregroundStyle(.blue)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.blue)
+                .lineLimit(textLineLimit)
+                .minimumScaleFactor(0.8)
+            if action != nil {
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.blue.opacity(0.8))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color.blue.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, horizontalPadding)
+        .accessibilityIdentifier("trialBanner")
+    }
+
     private var shouldShow: Bool {
-        return !purchases.isPurchased && purchases.isInTrial
+        return !purchases.isPurchased && purchases.canUseFreeImport
     }
 
     private var message: String {
-        let days = purchases.trialDaysRemaining
-        if days > 0 {
-            return "Free trial active — \(days) day\(days == 1 ? "" : "s") remaining"
-        } else {
-            let hours = purchases.trialHoursRemaining
-            return "Free trial active — \(hours) hour\(hours == 1 ? "" : "s") remaining"
-        }
+        purchases.freeImportStatusText
     }
 }
 
@@ -58,4 +88,3 @@ struct TrialBanner: View {
         Spacer()
     }
 }
-

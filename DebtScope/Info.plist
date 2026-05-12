@@ -31,9 +31,9 @@
 			<array>
 				<string>com.komakode.debtscope.backup</string>
 			</array>
-			<key>LSTypeIsPackage</key>
-			<true/>
 			<key>LSSupportsOpeningDocumentsInPlace</key>
+			<true/>
+			<key>LSTypeIsPackage</key>
 			<true/>
 			<key>UISupportsDocumentBrowser</key>
 			<false/>
@@ -44,17 +44,17 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.komakode.debtscope.backup</string>
-			<key>UTTypeDescription</key>
-			<string>DebtScope Backup</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>com.apple.package</string>
 				<string>public.data</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>DebtScope Backup</string>
 			<key>UTTypeIconFiles</key>
 			<array/>
+			<key>UTTypeIdentifier</key>
+			<string>com.komakode.debtscope.backup</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>

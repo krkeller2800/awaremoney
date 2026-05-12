@@ -20,7 +20,7 @@ struct PaywallView: View {
     var body: some View {
         VStack(spacing: 20) {
             header
-            trialStatus
+            allowanceStatus
             purchaseSection
             restoreSection
             footer
@@ -68,23 +68,16 @@ struct PaywallView: View {
         }
     }
 
-    private var trialStatus: some View {
+    private var allowanceStatus: some View {
         Group {
             if purchases.isPurchased {
                 Label("Purchased — Thank you!", systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green)
-            } else if purchases.isInTrial {
-                let days = purchases.trialDaysRemaining
-                if days > 0 {
-                    Label("Free trial active — \(days) day\(days == 1 ? "" : "s") remaining", systemImage: "hourglass")
-                        .foregroundStyle(.blue)
-                } else {
-                    let hours = purchases.trialHoursRemaining
-                    Label("Free trial active — \(hours) hour\(hours == 1 ? "" : "s") remaining", systemImage: "hourglass")
-                        .foregroundStyle(.blue)
-                }
+            } else if purchases.canUseFreeImport {
+                Label(purchases.freeImportStatusText, systemImage: "tray.and.arrow.down")
+                    .foregroundStyle(.blue)
             } else {
-                Label("Free trial expired", systemImage: "exclamationmark.triangle.fill")
+                Label("Free imports used", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
             }
         }
@@ -155,7 +148,7 @@ struct PaywallView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Text("Includes a 10-day free trial. After the trial, a one-time purchase is required to continue using premium features.")
+            Text("Includes 4 free imports. After those imports, a one-time purchase is required to continue importing.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -176,7 +169,7 @@ private struct IdentifiedError: Identifiable { let id = UUID(); let message: Str
 
 // MARK: - Premium gating helper
 extension View {
-    /// Wrap premium-only content. Presents the paywall if the user is not entitled (neither purchased nor in trial).
+    /// Wrap premium-only content. Presents the paywall if the user is not entitled.
     /// - Parameters:
     ///   - isPresented: A binding you control to show the paywall.
     ///   - purchases: A purchase manager instance.
@@ -195,4 +188,3 @@ extension View {
         paywalled(isPresented: isPresented, purchases: PurchaseManager.shared)
     }
 }
-

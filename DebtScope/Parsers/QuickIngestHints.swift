@@ -62,6 +62,14 @@ public final class QuickIngestor: QuickIngesting {
     @MainActor
     public func ingest(url: URL, hints: QuickIngestHints, context:
                        ModelContext) async throws -> QuickIngestResult {
+        let existingCompletedImportCount = ((try? context.fetch(FetchDescriptor<ImportBatch>())) ?? [])
+            .filter { !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty }
+            .count
+        PurchaseManager.shared.synchronizeInitialFreeImportUsage(existingImportCount: existingCompletedImportCount)
+        guard PurchaseManager.shared.isPremiumUnlocked else {
+            throw QuickIngestError.parsingFailed("You have used all 4 free imports. Buy lifetime access to continue importing.")
+        }
+
         // 1. Classification and Detection
         let classifier = StatementIntakeClassifier()
         let detection = await classifier.classify(url: url)
@@ -218,6 +226,7 @@ public final class QuickIngestor: QuickIngesting {
         }
         
         try context.save()
+        _ = PurchaseManager.shared.recordCompletedImportIfNeeded()
         
         return QuickIngestResult(
             account: account,

@@ -64,6 +64,11 @@ struct ImportFlowView: View {
     }
 
     private func handlePendingURLWithIntake(_ url: URL) {
+        guard purchases.isPremiumUnlocked else {
+            showPaywall = true
+            importRouter.pendingURL = nil
+            return
+        }
         let stagedURL = ImportFileStaging.stageToCaches(url)
         externalImportActive = true
         pendingExternalURL = stagedURL
@@ -107,6 +112,10 @@ struct ImportFlowView: View {
     }
 
     private func applyExternal(kind: ExternalDocKind, url: URL) {
+        guard purchases.isPremiumUnlocked else {
+            showPaywall = true
+            return
+        }
         switch kind {
         case .creditCard:
             vm.userSelectedDocHint = .creditCard
@@ -637,7 +646,7 @@ struct ImportFlowView: View {
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
                 isActive = true
-//                showPaywall = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+                showPaywall = !purchases.isPremiumUnlocked
             }
             .onDisappear {
                 isActive = false
@@ -979,7 +988,7 @@ struct ImportFlowView: View {
         // Shared modifiers remain attached to the container so behavior remains the same
         .onAppear {
             AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
-            let shouldShow = (!purchases.isPremiumUnlocked && !purchases.isInTrial)
+            let shouldShow = !purchases.isPremiumUnlocked
             if shouldShow && !externalImportActive && importRouter.pendingURL == nil && vm.staged == nil && vm.mappingSession == nil {
                 showPaywall = true
             }
@@ -1210,6 +1219,10 @@ struct ImportFlowView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
+                guard purchases.isPremiumUnlocked else {
+                    showPaywall = true
+                    return
+                }
                 Task { await coordinator.importURL(url, hint: statementHint(from: vm.newAccountType), modelContext: modelContext, settings: settings) }
             case .failure(let error):
                 AMLogging.error("ImportFlowView: fileImporter failed — \(error.localizedDescription)", component: "Import")
@@ -1233,6 +1246,10 @@ struct ImportFlowView: View {
             desc.sortBy = [SortDescriptor(\ImportBatch.createdAt, order: .reverse)]
             let fetched = try modelContext.fetch(desc)
             await MainActor.run {
+                let completedImportCount = fetched.filter {
+                    !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty
+                }.count
+                purchases.synchronizeInitialFreeImportUsage(existingImportCount: completedImportCount)
                 // Track previous IDs across loads to detect newly created batches; avoid auto-nav on initial load
                 let previousIDs = self.lastKnownBatchIDs
                 self.batches = fetched

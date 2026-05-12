@@ -1497,6 +1497,18 @@ final class ImportViewModel: ObservableObject {
 
     func approveAndSave(context: ModelContext) throws {
         guard let staged else { return }
+        let shouldConsumeFreeImportAllowance = staged.parserId != "manual.user"
+        if shouldConsumeFreeImportAllowance {
+            let existingCompletedImportCount = ((try? context.fetch(FetchDescriptor<ImportBatch>())) ?? [])
+                .filter { !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty }
+                .count
+            PurchaseManager.shared.synchronizeInitialFreeImportUsage(existingImportCount: existingCompletedImportCount)
+            guard PurchaseManager.shared.isPremiumUnlocked else {
+                let message = "You have used all 4 free imports. Buy lifetime access to continue importing."
+                self.errorMessage = message
+                throw NSError(domain: "ImportViewModel", code: 402, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
         AMLogging.log("Approve & Save started", component: "ImportViewModel")  // DEBUG LOG
         AMLogging.log("Staged counts — tx: \(staged.transactions.count), holdings: \(staged.holdings.count), balances: \(staged.balances.count)", component: "ImportViewModel")  // DEBUG LOG
 
@@ -2008,10 +2020,14 @@ final class ImportViewModel: ObservableObject {
         } else {
             self.errorMessage = nil
         }
+        let didSaveImportContent = insertedTxCount > 0 || insertedHoldingsCount > 0 || insertedBalancesCount > 0
 
         do {
             try context.save()
             AMLogging.log("Context save succeeded", component: "ImportViewModel")  // DEBUG LOG
+            if didSaveImportContent && shouldConsumeFreeImportAllowance {
+                _ = PurchaseManager.shared.recordCompletedImportIfNeeded()
+            }
 
             // Debug: post-save counts
             do {
