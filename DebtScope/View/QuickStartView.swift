@@ -40,6 +40,7 @@ struct QuickStartView: View {
     @State private var showHelp = false
     @State private var showDebug = false
     @State private var showPaywall = false
+    @State private var importReadyWarningMessage: String? = nil
     @State private var quickStartPending: QuickStartPendingImport? = nil
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
@@ -109,16 +110,27 @@ struct QuickStartView: View {
         }
 
         DispatchQueue.main.async {
-            self.quickStartPending = QuickStartPendingImport(
+            let pending = QuickStartPendingImport(
                 url: url,
                 type: type,
                 institution: institution
             )
+            self.quickStartPending = pending
 
             AMLogging.log(
                 "QuickStart pending set id=\(self.quickStartPending?.id.uuidString ?? "nil") topic=\(topic.rawValue) selection=\(String(describing: self.selection))",
                 component: "Import"
             )
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                guard self.quickStartPending?.id == pending.id else { return }
+                AMLogging.error(
+                    "QuickStart pending import was not consumed id=\(pending.id) file=\(pending.url.lastPathComponent)",
+                    component: "Import"
+                )
+                self.importReadyWarningMessage = "Import Ready did not open. Please try importing the statement again."
+                self.quickStartPending = nil
+            }
         }
     }
 
@@ -591,6 +603,11 @@ struct QuickStartView: View {
             DebugSettingsView()
         }
 #endif
+        .alert("Import Not Opened", isPresented: Binding(get: { importReadyWarningMessage != nil }, set: { if !$0 { importReadyWarningMessage = nil } })) {
+            Button("OK", role: .cancel) { importReadyWarningMessage = nil }
+        } message: {
+            Text(importReadyWarningMessage ?? "Please try importing the statement again.")
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):

@@ -267,6 +267,11 @@ struct DebtSummaryView: View {
             .onReceive(NotificationCenter.default.publisher(for: .planSettingsDidChange)) { _ in
                 recomputeAppliedState()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+                accounts = []
+                currentPlan = nil
+                Task { await load() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .debtSummaryEmbeddedPlannerEditingChanged)) { note in
                 guard embeddedInNavigation, let isEditing = note.object as? Bool else { return }
                 embeddedPlannerIsEditing = isEditing
@@ -362,13 +367,22 @@ struct DebtSummaryView: View {
                 .frame(maxWidth: min(safeAvailableWidth, compact ? 420 : 520))
                 Spacer()
             }
-            headerRow(compact: compact, widths: widths)
-            Divider()
-            ForEach(sortedAccountsByPayoffDate(), id: \.id) { acct in
-                row(for: acct, compact: compact, widths: widths)
+            if accounts.isEmpty {
+                ContentUnavailableView(
+                    "No debts yet",
+                    systemImage: "creditcard",
+                    description: Text("Add liability accounts to compare payoff strategies.")
+                )
+                .frame(maxWidth: .infinity, minHeight: compact ? 220 : 280)
+            } else {
+                headerRow(compact: compact, widths: widths)
                 Divider()
+                ForEach(sortedAccountsByPayoffDate(), id: \.id) { acct in
+                    row(for: acct, compact: compact, widths: widths)
+                    Divider()
+                }
+                totalRow(compact: compact, widths: widths)
             }
-            totalRow(compact: compact, widths: widths)
             VStack(alignment: .leading, spacing: compact ? 8 : 10) {
                 Text("Plan Settings")
                     .font(compact ? .headline : .title3.weight(.semibold))
@@ -1830,6 +1844,11 @@ struct DebtPlanSheetView: View {
             }
         }
         .task { await loadAccounts() }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            accounts = []
+            currentPlan = nil
+            Task { await loadAccounts() }
+        }
     }
 
     // MARK: - Helpers copied from DebtSummaryView

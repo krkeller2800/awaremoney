@@ -1608,7 +1608,7 @@ struct CashFlowDetailView: View {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
         }
-        .onChange(of: pendingExternal?.id, initial: false) { _, _ in
+        .onChange(of: pendingExternal?.id, initial: true) { _, _ in
             guard let pending = pendingExternal else { return }
             isPreparingDetectionReview = true
             Task {

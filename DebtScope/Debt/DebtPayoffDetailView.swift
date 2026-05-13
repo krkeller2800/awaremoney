@@ -791,7 +791,7 @@ struct DebtPayoffDetailView: View {
                 // Pre-fill editable fields
                 self.lastDetection = detection
                 self.editedInstitution = detection.institution ?? preview?.institution ?? ""
-                self.selectedType = (preview?.bankBalanceSummaries.isEmpty == false) ? .bank : resolvedImportedStatementType(
+                self.selectedType = resolvedImportedStatementType(
                     detectionType: detection.type,
                     previewType: preview?.statementType
                 )
@@ -2275,7 +2275,7 @@ struct DebtPayoffDetailView: View {
         .sheet(isPresented: $showStatementSheet) {
             statementSheetContent
         }
-        .onChange(of: pendingExternal?.id, initial: false) { _, _ in
+        .onChange(of: pendingExternal?.id, initial: true) { _, _ in
             guard let pending = pendingExternal else { return }
             isPreparingDetectionReview = true
             Task {
@@ -2286,7 +2286,7 @@ struct DebtPayoffDetailView: View {
                 await MainActor.run {
                     self.lastDetection = detection
                     self.editedInstitution = detection.institution ?? preview?.institution ?? pending.institution ?? ""
-                    self.selectedType = (preview?.bankBalanceSummaries.isEmpty == false) ? .bank : resolvedImportedStatementType(
+                    self.selectedType = resolvedImportedStatementType(
                         detectionType: detection.type,
                         previewType: preview?.statementType,
                         pendingType: pending.type
