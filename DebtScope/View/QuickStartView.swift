@@ -4,13 +4,13 @@ import UniformTypeIdentifiers
 import SwiftData
 
 private enum QuickStartTopic: String, CaseIterable, Identifiable {
-    case debtPayoff = "Payoff"
+    case debtPayoff = "Debt Payoff"
     case compareStrategies = "Compare Strategies"
     case netWorth = "Net Worth"
     case cashFlow = "Cash Flow"
     case incomeBills = "Income & Bills"
     case assets = "Assets"
-    case statementReview = "Unknown ​Statements"
+    case statementReview = "Needs Review"
 
     var id: String { rawValue }
     var title: String { rawValue }
@@ -31,6 +31,7 @@ struct QuickStartView: View {
     @EnvironmentObject private var importRouter: ImportOpenRouter
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     @State private var selection: QuickStartTopic? = .debtPayoff
     @State private var compactPath: [QuickStartTopic] = []
     @State private var showImporter = false
@@ -41,6 +42,9 @@ struct QuickStartView: View {
     @State private var showDebug = false
     @State private var showPaywall = false
     @State private var importReadyWarningMessage: String? = nil
+    @State private var importProgressID: UUID? = nil
+    @State private var showImportProgress = false
+    @State private var importIsTakingLonger = false
     @State private var quickStartPending: QuickStartPendingImport? = nil
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
@@ -51,6 +55,15 @@ struct QuickStartView: View {
         let vm = ImportViewModel(parsers: ImportViewModel.defaultParsers())
         _vm = StateObject(wrappedValue: vm)
         _coordinator = State(initialValue: StatementImportCoordinator(vm: vm))
+    }
+
+    private var topicGroups: [(title: String, topics: [QuickStartTopic])] {
+        [
+            ("Debt", [.debtPayoff, .compareStrategies]),
+            ("Money Flow", [.cashFlow, .incomeBills]),
+            ("Worth", [.netWorth, .assets]),
+            ("Review", [.statementReview])
+        ]
     }
 
     private func topicFor(statementType: StatementType?) -> QuickStartTopic? {
@@ -88,6 +101,33 @@ struct QuickStartView: View {
         return types
     }()
 
+    private func beginImportProgress() {
+        let id = UUID()
+        importProgressID = id
+        showImportProgress = false
+        importIsTakingLonger = false
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            guard importProgressID == id else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showImportProgress = true
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+            guard importProgressID == id else { return }
+            importIsTakingLonger = true
+        }
+    }
+
+    private func endImportProgress() {
+        importProgressID = nil
+        importIsTakingLonger = false
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showImportProgress = false
+        }
+    }
+
     private func deliverPendingImport(
         url: URL,
         type: StatementType?,
@@ -100,6 +140,7 @@ struct QuickStartView: View {
         )
 
         quickStartPending = nil
+        endImportProgress()
 
         if isCompactLayout {
             if compactPath.last != topic {
@@ -128,7 +169,7 @@ struct QuickStartView: View {
                     "QuickStart pending import was not consumed id=\(pending.id) file=\(pending.url.lastPathComponent)",
                     component: "Import"
                 )
-                self.importReadyWarningMessage = "Import Ready did not open. Please try importing the statement again."
+                self.importReadyWarningMessage = "We couldn't open the import review. Please try again."
                 self.quickStartPending = nil
             }
         }
@@ -139,6 +180,7 @@ struct QuickStartView: View {
             "QuickStart queueImport start file=\(url.lastPathComponent) type=\(String(describing: type)) readable=\(FileManager.default.isReadableFile(atPath: url.path))",
             component: "Import"
         )
+        beginImportProgress()
         let stagedURL = ImportFileStaging.stageToCaches(url)
         AMLogging.log(
             "QuickStart staged file=\(stagedURL.lastPathComponent) path=\(stagedURL.path) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path))",
@@ -495,17 +537,57 @@ struct QuickStartView: View {
             QuickStartAssetsDetailView()
         }
     }
+    private var shouldShowImportStartHint: Bool {
+        accounts.isEmpty
+    }
+
     @ToolbarContentBuilder
     private var importToolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             PlanToolbarButton("Import", fixedWidth: 75) { showImporter = true }
         }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                showAbout = true
-            } label: {
-                Label("About", systemImage: "info.circle")
-            }
+    }
+
+    private var importStartHint: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Import a statement to begin", systemImage: "doc.badge.plus")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+            Text("You can also share statement files from your bank or credit card app to DebtScope. Example in Help.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Import a statement to begin. You can also share statement files from your bank or credit card app to DebtScope. Example in Help.")
+    }
+
+    private var importProgressOverlay: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(importIsTakingLonger ? "Still preparing import..." : "Preparing import...")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(importIsTakingLonger ? "Still preparing import" : "Preparing import")
+    }
+
+    @ViewBuilder
+    private var importStatusOverlay: some View {
+        if showImportProgress {
+            importProgressOverlay
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -513,26 +595,40 @@ struct QuickStartView: View {
         Group {
             if isCompactLayout {
                 NavigationStack(path: $compactPath) {
-                    List {
-                        Section {
-                            ForEach(QuickStartTopic.allCases) { topic in
-                                NavigationLink(value: topic) {
-                                    Text(topic.title)
-                                }
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            if shouldShowImportStartHint {
+                                importStartHint
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8)
                             }
-                        }
 
-                        utilitySection
+                            quickStartGroupedTopicCard { topic in
+                                selection = topic
+                                compactPath.append(topic)
+                            }
 
-                        TrialBanner(horizontalPadding: 8, textLineLimit: 1) {
-                            showPaywall = true
+                            quickStartSidebarCard(
+                                title: "Utility",
+                                items: utilityItems.map { ($0.title, $0.systemImage, false) },
+                                action: { tappedTitle in
+                                    handleUtilityTap(title: tappedTitle)
+                                }
+                            )
+
+                            TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                                showPaywall = true
+                            }
+                            .padding(.horizontal, 8)
                         }
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
+                        .padding(10)
                     }
                     .navigationTitle("DebtScope")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar { importToolbarContent }
+                    .overlay(alignment: .bottom) {
+                        importStatusOverlay
+                    }
                     .navigationDestination(for: QuickStartTopic.self) { topic in
                         topicContent(topic, compact: true)
                             .onAppear {
@@ -545,16 +641,16 @@ struct QuickStartView: View {
             } else {
                 NavigationSplitView {
                     ScrollView {
-                        VStack(spacing: 20) {
-                            quickStartSidebarCard(
-                                title: nil,
-                                items: QuickStartTopic.allCases.map { ($0.title, nil, $0 == selection) },
-                                action: { tappedTitle in
-                                    if let topic = QuickStartTopic.allCases.first(where: { $0.title == tappedTitle }) {
-                                        selection = topic
-                                    }
-                                }
-                            )
+                        VStack(spacing: 12) {
+                            if shouldShowImportStartHint {
+                                importStartHint
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                            }
+
+                            quickStartGroupedTopicCard { topic in
+                                selection = topic
+                            }
 
                             quickStartSidebarCard(
                                 title: "Utility",
@@ -569,12 +665,16 @@ struct QuickStartView: View {
                             }
                             .padding(.horizontal, 12)
                         }
-                        .padding(16)
+                        .padding(10)
                     }
                     .navigationTitle("DebtScope")
                     .toolbar { importToolbarContent }
                 } detail: {
                     detailContent
+                        .padding(.horizontal, 10)
+                        .overlay(alignment: .bottom) {
+                            importStatusOverlay
+                        }
                         .navigationTitle(selection == .assets ? "" : (selection?.title ?? "DebtScope"))
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -606,7 +706,7 @@ struct QuickStartView: View {
         .alert("Import Not Opened", isPresented: Binding(get: { importReadyWarningMessage != nil }, set: { if !$0 { importReadyWarningMessage = nil } })) {
             Button("OK", role: .cancel) { importReadyWarningMessage = nil }
         } message: {
-            Text(importReadyWarningMessage ?? "Please try importing the statement again.")
+            Text(importReadyWarningMessage ?? "We couldn't open the import review. Please try again.")
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: false) { result in
             switch result {
@@ -621,6 +721,7 @@ struct QuickStartView: View {
                 }
 
             case .failure(let error):
+                endImportProgress()
                 AMLogging.error(
                     "QuickStart fileImporter failed error=\(error.localizedDescription)",
                     component: "Import"
@@ -645,7 +746,8 @@ struct QuickStartView: View {
         var items: [(title: String, systemImage: String)] = [
             ("Backup & Restore", "externaldrive"),
             ("Settings", "gearshape"),
-            ("Help", "questionmark.circle")
+            ("Help", "questionmark.circle"),
+            ("About", "info.circle")
         ]
 #if DEBUG
         if settings.showDebugTools {
@@ -663,6 +765,8 @@ struct QuickStartView: View {
             showSettings = true
         case "Help":
             showHelp = true
+        case "About":
+            showAbout = true
         case "Debug":
             showDebug = true
         default:
@@ -670,69 +774,133 @@ struct QuickStartView: View {
         }
     }
 
-    private func quickStartSidebarCard(
-        title: String?,
-        items: [(title: String, systemImage: String?, isSelected: Bool)],
-        action: @escaping (String) -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let title, !title.isEmpty {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+    private func quickStartGroupedTopicCard(action: @escaping (QuickStartTopic) -> Void) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(topicGroups.enumerated()), id: \.offset) { groupIndex, group in
+                if groupIndex > 0 {
+                    Divider()
+                        .padding(.leading, 16)
+                }
 
-            VStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.title) { index, item in
+                Text(group.title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.top, groupIndex == 0 ? 6 : 8)
+                    .padding(.bottom, 2)
+
+                ForEach(Array(group.topics.enumerated()), id: \.element.id) { topicIndex, topic in
                     Button {
-                        action(item.title)
+                        action(topic)
                     } label: {
                         HStack(spacing: 12) {
-                            if let systemImage = item.systemImage {
-                                Image(systemName: systemImage)
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 20)
-                            }
-                            Text(item.title)
+                            Text(topic.title)
                                 .foregroundStyle(.primary)
+                                .padding(.leading, 12)
                             Spacer()
-                            if item.systemImage == nil {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(item.isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                                .fill(topic == selection ? Color.accentColor.opacity(0.12) : Color.clear)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(
-                                    item.isSelected ? Color.accentColor : Color.clear,
-                                    lineWidth: item.isSelected ? 2 : 0
+                                    topic == selection ? Color.accentColor : Color.clear,
+                                    lineWidth: topic == selection ? 2 : 0
                                 )
                         )
                     }
                     .buttonStyle(.plain)
 
-                    if index < items.count - 1 {
+                    if topicIndex < group.topics.count - 1 {
                         Divider()
-                            .padding(.leading, item.systemImage == nil ? 16 : 48)
+                            .padding(.leading, 16)
                     }
                 }
             }
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.background)
-            )
         }
-        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.background)
+        )
+        .padding(.horizontal, 8)
+    }
+
+    private func quickStartSidebarCard(
+        title: String?,
+        items: [(title: String, systemImage: String?, isSelected: Bool)],
+        action: @escaping (String) -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 6)
+                    .padding(.bottom, 2)
+            }
+
+            ForEach(Array(items.enumerated()), id: \.element.title) { index, item in
+                Button {
+                    action(item.title)
+                } label: {
+                    HStack(spacing: 12) {
+                        if let systemImage = item.systemImage {
+                            Image(systemName: systemImage)
+                                .foregroundStyle(.blue)
+                                .frame(width: 20)
+                        }
+                        Text(item.title)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if item.systemImage == nil {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(item.isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(
+                                item.isSelected ? Color.accentColor : Color.clear,
+                                lineWidth: item.isSelected ? 2 : 0
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if index < items.count - 1 {
+                    Divider()
+                        .padding(.leading, item.systemImage == nil ? 16 : 48)
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.background)
+        )
+        .padding(.horizontal, 8)
     }
 }
 

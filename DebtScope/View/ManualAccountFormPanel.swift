@@ -29,6 +29,40 @@ struct ManualAccountFormPanel: View {
     var showsExistingAccountPicker: Bool = false
     var existingAccounts: [Account] = []
     var selectedExistingAccountID: Binding<UUID?>? = nil
+
+    init(
+        selectedType: Binding<StatementType?>,
+        editedInstitution: Binding<String>,
+        bankSubtype: Binding<QuickIngestAccountType?>,
+        monthlyPaymentInput: Binding<String>,
+        aprPercentInput: Binding<String>,
+        balanceInput: Binding<String>,
+        balanceDate: Binding<Date>,
+        onSave: @escaping () -> Void,
+        hasSavedAccount: Bool,
+        saveButtonTitle: String = "Add Account",
+        savedButtonTitle: String = "Account Added",
+        showsSaveButton: Bool = true,
+        showsExistingAccountPicker: Bool = false,
+        existingAccounts: [Account] = [],
+        selectedExistingAccountID: Binding<UUID?>? = nil
+    ) {
+        self._selectedType = selectedType
+        self._editedInstitution = editedInstitution
+        self._bankSubtype = bankSubtype
+        self._monthlyPaymentInput = monthlyPaymentInput
+        self._aprPercentInput = aprPercentInput
+        self._balanceInput = balanceInput
+        self._balanceDate = balanceDate
+        self.onSave = onSave
+        self.hasSavedAccount = hasSavedAccount
+        self.saveButtonTitle = saveButtonTitle
+        self.savedButtonTitle = savedButtonTitle
+        self.showsSaveButton = showsSaveButton
+        self.showsExistingAccountPicker = showsExistingAccountPicker
+        self.existingAccounts = existingAccounts
+        self.selectedExistingAccountID = selectedExistingAccountID
+    }
     
     @EnvironmentObject private var settings: SettingsStore
     @FocusState private var focusedManualField: ManualField?

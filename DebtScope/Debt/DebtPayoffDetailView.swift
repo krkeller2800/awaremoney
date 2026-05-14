@@ -255,6 +255,7 @@ struct DebtPayoffDetailView: View {
         let id = UUID()
         var detection: IntakeDetection
         var url: URL
+        var routeConfirmationText: String? = nil
     }
     private struct ImportedStatementPreview {
         var institution: String?
@@ -757,6 +758,7 @@ struct DebtPayoffDetailView: View {
             importedAPRScale: importedPreview?.aprScale,
             importedBalance: importedPreview?.balance,
             importedBankBalanceSummaries: importedBankSummaries,
+            routeConfirmationText: model.routeConfirmationText,
             detectedAccounts: $detectedAccounts,
             account: acct,
             latestBalance: latest,
@@ -1787,8 +1789,8 @@ struct DebtPayoffDetailView: View {
                 aprScale: fallbackAPRScale
             )
             applyDetectedAccountSelections(selectedDetectedAccounts)
+            detectionSheetModel = nil
         }
-        detectionSheetModel = nil
     }
 
     @MainActor
@@ -2300,7 +2302,11 @@ struct DebtPayoffDetailView: View {
                         institution: self.editedInstitution,
                         confidence: detection.confidence
                     )
-                    self.detectionSheetModel = DetectionSheetModel(detection: seededDetection, url: stagedURL)
+                    self.detectionSheetModel = DetectionSheetModel(
+                        detection: seededDetection,
+                        url: stagedURL,
+                        routeConfirmationText: "Opened as Debt Payoff"
+                    )
                     self.isPreparingDetectionReview = false
                     self.pendingExternal = nil
                 }

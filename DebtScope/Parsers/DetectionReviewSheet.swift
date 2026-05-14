@@ -23,6 +23,7 @@ struct DetectionReviewSheet: View {
     let importedAPRScale: Int?
     let importedBalance: Decimal?
     let importedBankBalanceSummaries: [ImportedBankBalanceSummary]
+    let routeConfirmationText: String?
     @Binding var detectedAccounts: [DetectedAccountSelection]
     let account: Account?
     let latestBalance: Decimal?
@@ -36,6 +37,8 @@ struct DetectionReviewSheet: View {
     @State private var computedPayoffDate: Date? = nil
     @State private var nonReducingPayment: Bool = false
     @State private var showPDFSheet = false
+    @State private var didSubmitSave = false
+    @State private var showRouteConfirmation = true
 
     // Focus management
     @FocusState private var focusedField: FocusedField?
@@ -57,6 +60,10 @@ struct DetectionReviewSheet: View {
         horizontalSizeClass == .compact
     }
 
+    private var importedFileName: String {
+        url.lastPathComponent
+    }
+
     private func splitColumnWidths(for availableWidth: CGFloat) -> (left: CGFloat, right: CGFloat)? {
         guard !isCompactLayout && availableWidth >= 680 else { return nil }
 
@@ -69,10 +76,30 @@ struct DetectionReviewSheet: View {
         return (left: leftWidth, right: rightWidth)
     }
 
+    private func routeConfirmationBottomBanner(_ text: String) -> some View {
+        Label(text, systemImage: "checkmark.circle.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.green)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: 420)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(.green.opacity(0.35), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 18)
+            .accessibilityLabel(text)
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
-                ZStack {
+                ZStack(alignment: .bottom) {
                     if let splitWidths = splitColumnWidths(for: geometry.size.width) {
                         HStack(spacing: 0) {
                             ScrollView {
@@ -119,6 +146,11 @@ struct DetectionReviewSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .shadow(radius: 12)
                     }
+
+                    if let routeConfirmationText, showRouteConfirmation {
+                        routeConfirmationBottomBanner(routeConfirmationText)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
             .navigationTitle("Import Ready")
@@ -129,10 +161,26 @@ struct DetectionReviewSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveAction() }
-                        .disabled(isSaveDisabled)
+                        .disabled(isSaveDisabled || didSubmitSave)
                 }
             }
             .onAppear { prefillAndCompute() }
+            .task(id: routeConfirmationText) {
+                guard routeConfirmationText != nil else { return }
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showRouteConfirmation = true
+                    }
+                }
+
+                try? await Task.sleep(for: .seconds(3))
+
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showRouteConfirmation = false
+                    }
+                }
+            }
             .onChange(of: focusedField) { oldValue, newValue in
                 handleFocusChange(from: oldValue, to: newValue)
             }
@@ -156,6 +204,19 @@ struct DetectionReviewSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Review detected details and make changes if needed.")
                 .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Imported file", systemImage: "doc")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(importedFileName)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("Imported file \(importedFileName)")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             // Type picker
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -425,6 +486,8 @@ struct DetectionReviewSheet: View {
 
     // MARK: - Actions
     private func saveAction() {
+        guard !didSubmitSave else { return }
+        didSubmitSave = true
         var det = detection
         det.type = selectedType
         det.institution = editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -617,6 +680,7 @@ struct DetectionReviewSheet: View {
                 importedAPRScale: nil,
                 importedBalance: nil,
                 importedBankBalanceSummaries: [],
+                routeConfirmationText: nil,
                 detectedAccounts: $detectedAccounts,
                 account: nil,
                 latestBalance: nil,

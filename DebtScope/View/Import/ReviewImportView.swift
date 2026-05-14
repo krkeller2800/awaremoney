@@ -43,6 +43,10 @@ struct ReviewImportView: View {
     @State private var routingGlobalTargetMode: Int = 0
     @State private var routingPreviewEffective: [String: RoutingCandidate.Action] = [:]
     @State private var routingPreviewInstitution: String? = nil
+    @State private var isApprovingSave = false
+    @State private var importLimitReached = false
+    @State private var showImportLimitAlert = false
+    @State private var showPaywall = false
     @State private var childIsEditing: Bool = false
     private var isEditing: Bool { focusedField != nil || childIsEditing }
     @FocusState private var focusedField: FocusedField?
@@ -322,6 +326,18 @@ struct ReviewImportView: View {
             NavigationStack { HelpVideosView() }
                 .ignoresSafeArea()
         }
+        .alert("Free Imports Used", isPresented: $showImportLimitAlert) {
+            Button("Purchase Lifetime") {
+                showPaywall = true
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(importLimitMessage)
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(PurchaseManager.shared)
+        }
     }
     
     private var mainList: some View {
@@ -462,34 +478,38 @@ struct ReviewImportView: View {
                     }
                     .foregroundStyle(.primary)
                 }
-                Section("Routing") {
-                    let service = ImportRoutingService()
-                    let result = service.buildPlans(staged: staged, context: modelContext)
+                Group {
+                    if let currentStaged = vm.staged {
+                        Section("Routing") {
+                            let service = ImportRoutingService()
+                            let result = service.buildPlans(staged: currentStaged, context: modelContext)
 
-                    RoutingConfirmationView(
-                        analysis: result.analysis,
-                        plans: result.plans,
-                        overrides: $routingOverrides,
-                        selectedInstitution: Binding<String?>(
-                            get: {
-                                // Prefer any user-entered value; otherwise analysis
-                                let trimmed = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                return trimmed.isEmpty ? result.analysis.institution : vm.userInstitutionName
-                            },
-                            set: { newVal in
-                                vm.userInstitutionName = newVal ?? ""
-                            }
-                        ),
-                        globalTargetMode: $routingGlobalTargetMode,
-                        onPreviewUpdate: { effective, selectedInstitution in
-                            // Capture the preview-only effective actions and institution without persisting
-                            routingPreviewEffective = effective
-                            routingPreviewInstitution = selectedInstitution
-                        },
-                        onCancel: {
-                            // No-op in embedded mode; parent controls dismissal
+                            RoutingConfirmationView(
+                                analysis: result.analysis,
+                                plans: result.plans,
+                                overrides: $routingOverrides,
+                                selectedInstitution: Binding<String?>(
+                                    get: {
+                                        // Prefer any user-entered value; otherwise analysis
+                                        let trimmed = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        return trimmed.isEmpty ? result.analysis.institution : vm.userInstitutionName
+                                    },
+                                    set: { newVal in
+                                        vm.userInstitutionName = newVal ?? ""
+                                    }
+                                ),
+                                globalTargetMode: $routingGlobalTargetMode,
+                                onPreviewUpdate: { effective, selectedInstitution in
+                                    // Capture the preview-only effective actions and institution without persisting
+                                    routingPreviewEffective = effective
+                                    routingPreviewInstitution = selectedInstitution
+                                },
+                                onCancel: {
+                                    // No-op in embedded mode; parent controls dismissal
+                                }
+                            )
                         }
-                    )
+                    }
                 }
                 .onPreferenceChange(RoutingChildEditingKey.self) { value in
                     childIsEditing = value
@@ -777,16 +797,31 @@ struct ReviewImportView: View {
                 }
                 
                 Section() {
-                    //                if let err = vm.errorMessage, !err.isEmpty {
-                    //                    HStack(alignment: .top, spacing: 8) {
-                    //                        Image(systemName: "exclamationmark.triangle")
-                    //                            .foregroundStyle(.red)
-                    //                        Text(err)
-                    //                            .font(.footnote)
-                    //                            .foregroundStyle(.red)
-                    //                    }
-                    //                    .padding(.vertical, 2)
-                    //                }
+                    if importLimitReached {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                                Text("You have used all 4 free imports. Purchase Lifetime to continue importing statements.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.primary)
+                            }
+                            Button("Purchase Lifetime") {
+                                showPaywall = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        .padding(.vertical, 2)
+                    } else if let err = vm.errorMessage, !err.isEmpty {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.red)
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                        .padding(.vertical, 2)
+                    }
                 } header: {
                     VStack {
                         Text("Notes")
@@ -852,6 +887,21 @@ struct ReviewImportView: View {
         }
     }
 
+    private var importLimitMessage: String {
+        "You have used all 4 free imports. Purchase Lifetime to continue importing statements."
+    }
+
+    private func showFreeImportLimitMessage() {
+        importLimitReached = true
+        vm.errorMessage = nil
+        isApprovingSave = false
+        showImportLimitAlert = true
+    }
+
+    private func shouldBlockForFreeImportLimit(_ staged: StagedImport) -> Bool {
+        staged.parserId != "manual.user" && !PurchaseManager.shared.isPremiumUnlocked
+    }
+
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider()
@@ -878,14 +928,25 @@ struct ReviewImportView: View {
                 .frame(maxWidth: .infinity)
                 
                 Button {
+                    guard !isApprovingSave else { return }
+                    guard let currentStaged = vm.staged else {
+                        vm.errorMessage = "There is no reviewed import to save."
+                        return
+                    }
+                    if shouldBlockForFreeImportLimit(currentStaged) {
+                        showFreeImportLimitMessage()
+                        return
+                    }
+
+                    isApprovingSave = true
                     selectedAccountId = nil
                     vm.selectedAccountID = nil
+                    importLimitReached = false
                     AMLogging.log("ReviewImportView: Approve tapped — typicalPaymentInput='\(typicalPaymentInput)' parsedField=\(String(describing: parseCurrencyInput(typicalPaymentInput))) typicalPaymentParsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                     // Diagnostics: log institution state at approve time
                     let guess = vm.guessInstitutionName(from: staged.sourceFileName)
                     let selected = selectedAccountId.flatMap { id in accounts.first(where: { $0.id == id }) }
                     AMLogging.log("ReviewImportView: Approve tapped — selectedAccount=\(selected?.name ?? "nil"), selectedInst=\(selected?.institutionName ?? "nil"), vm.userInstitutionName='\(vm.userInstitutionName)', filenameGuess=\(guess ?? "nil")", component: "ReviewImportView")
-                    // NOTE: Typical payment entered here is currently not persisted; expose a VM API to pass it if needed.
                     vm.applyLiabilityLabelSafetyNetIfNeeded()
                     AMLogging.log("ReviewImportView: Safety net applied (if needed) before save", component: "ReviewImportView")
 
@@ -897,9 +958,15 @@ struct ReviewImportView: View {
                         AMLogging.log("ReviewImportView: Auto-appended pending starting balance before save — value=\(pending) date=\(asOf)", component: "ReviewImportView")
                     }
 
-                    // Prepare routing based on preview selections (no persistence yet)
+                    guard let stagedForSave = vm.staged else {
+                        isApprovingSave = false
+                        vm.errorMessage = "There is no reviewed import to save."
+                        return
+                    }
+
+                    // Prepare routing from the edited staged import, not the initial immutable view input.
                     let service = ImportRoutingService()
-                    let result = service.buildPlans(staged: staged, context: modelContext)
+                    let result = service.buildPlans(staged: stagedForSave, context: modelContext)
 
                     // Use preview-effective overrides; fallback to current overrides if preview hasn't emitted yet
                     let effectiveOverrides: [String: RoutingCandidate.Action] = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
@@ -907,6 +974,8 @@ struct ReviewImportView: View {
                     let resolvedInstitution: String? = {
                         let trimmed = routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         if !trimmed.isEmpty { return trimmed }
+                        let typed = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !typed.isEmpty { return typed }
                         return result.analysis.institution
                     }()
 
@@ -923,7 +992,11 @@ struct ReviewImportView: View {
                             context: modelContext
                         )
 
-                        // Update routedAccountIDs and auto-select if a single account
+                        if let resolvedInstitution {
+                            vm.userInstitutionName = resolvedInstitution
+                        }
+
+                        // Update routedAccountIDs and auto-select if a single account so approveAndSave attaches content to it.
                         let uniqueIDs = Set(labelToAccount.values.map { $0.id })
                         routedAccountIDs = Array(uniqueIDs)
                         if uniqueIDs.count == 1, let only = uniqueIDs.first, let any = labelToAccount.values.first {
@@ -947,27 +1020,25 @@ struct ReviewImportView: View {
                         )
                         AMLogging.log("ReviewImportView: Persisted import mappings for routing — labels=\(labelToAccount.keys.count)", component: "ReviewImportView")
 
-                        AMLogging.log("ReviewImportView: post-save, attempting to persist Typical Payment — candidate=\(String(describing: (typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput))))", component: "ReviewImportView")
-                        // Persist Typical Payment to the chosen account if available
-                        if let pay = typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput), pay > 0 {
-                            // Resolve target account: selected existing or best-effort newly created
-                            let targetAccount: Account? = {
-                                if let sel = selectedAccountId {
-                                    return accounts.first(where: { $0.id == sel })
-                                } else {
-                                    // Best effort: find the most recently created liability account matching selection
-                                    let all = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
-                                    let liabilities = all.filter { $0.type == .creditCard || $0.type == .loan }
-                                    // Prefer matching institution name when available
-                                    let inst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let candidates: [Account] = liabilities.sorted { $0.createdAt > $1.createdAt }
-                                    if let byInst = candidates.first(where: { ($0.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(inst) == .orderedSame && $0.type == vm.newAccountType }) {
-                                        return byInst
-                                    }
-                                    return candidates.first
+                        let routedTargetAccount: Account? = {
+                            let routedLiabilities = labelToAccount.values.filter { $0.type == .creditCard || $0.type == .loan }
+                            if routedLiabilities.count == 1 {
+                                return routedLiabilities.first
+                            }
+                            if let selectedAccountId {
+                                if let routed = labelToAccount.values.first(where: { $0.id == selectedAccountId }) {
+                                    return routed
                                 }
-                            }()
-                            if let acct = targetAccount {
+                                let descriptor = FetchDescriptor<Account>(predicate: #Predicate { $0.id == selectedAccountId })
+                                return try? modelContext.fetch(descriptor).first
+                            }
+                            return nil
+                        }()
+
+                        AMLogging.log("ReviewImportView: post-save, attempting to persist Typical Payment — candidate=\(String(describing: (typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput))))", component: "ReviewImportView")
+                        // Persist Typical Payment to the routed liability account if available.
+                        if let pay = typicalPaymentParsed ?? parseCurrencyInput(typicalPaymentInput), pay > 0 {
+                            if let acct = routedTargetAccount {
                                 var terms = acct.loanTerms ?? LoanTerms()
                                 terms.paymentAmount = pay
                                 acct.loanTerms = terms
@@ -981,23 +1052,9 @@ struct ReviewImportView: View {
                             AMLogging.log("ReviewImportView: Not persisting Typical Payment — value is nil or non-positive", component: "ReviewImportView")
                         }
 
-                        // Persist APR to the chosen account if available
+                        // Persist APR to the routed liability account if available.
                         if let (aprFraction, scale) = parsePercentInput(aprInput) {
-                            let targetAccount: Account? = {
-                                if let sel = selectedAccountId {
-                                    return accounts.first(where: { $0.id == sel })
-                                } else {
-                                    let all = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
-                                    let liabilities = all.filter { $0.type == .creditCard || $0.type == .loan }
-                                    let inst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let candidates: [Account] = liabilities.sorted { $0.createdAt > $1.createdAt }
-                                    if let byInst = candidates.first(where: { ($0.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(inst) == .orderedSame && $0.type == vm.newAccountType }) {
-                                        return byInst
-                                    }
-                                    return candidates.first
-                                }
-                            }()
-                            if let acct = targetAccount {
+                            if let acct = routedTargetAccount {
                                 var terms = acct.loanTerms ?? LoanTerms()
                                 terms.apr = aprFraction
                                 terms.aprScale = scale
@@ -1013,6 +1070,9 @@ struct ReviewImportView: View {
                         }
 
                         vm.userInstitutionName = ""
+                        vm.mappingSession = nil
+                        vm.staged = nil
+                        vm.infoMessage = nil
                         let afterSnap = snapshotAccounts(modelContext)
                         let changes = diffAccounts(before: beforeSnap, after: afterSnap)
                         if changes.isEmpty {
@@ -1028,9 +1088,19 @@ struct ReviewImportView: View {
                             change
                         }
                         self.selectedAccountId = nil
+                        showRoutingSheet = false
+                        dismiss()
                         AMLogging.always("RoutingDebug: Changes across save — routedIDs=\(Array(routedIDs)) details=\(annotated.joined(separator: " | "))", component: "RoutingDebug")
                     } catch {
-                        vm.errorMessage = error.localizedDescription
+                        isApprovingSave = false
+                        let nsError = error as NSError
+                        if nsError.domain == "ImportViewModel" && nsError.code == 402 {
+                            showFreeImportLimitMessage()
+                        } else {
+                            importLimitReached = false
+                            vm.errorMessage = error.localizedDescription.isEmpty ? "We couldn't save this import." : error.localizedDescription
+                        }
+                        AMLogging.error("ReviewImportView: Approve & Save failed — \(vm.errorMessage ?? nsError.localizedDescription)", component: "ReviewImportView")
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -1044,7 +1114,7 @@ struct ReviewImportView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled({
-                    if duplicateImportWarning != nil {
+                    if isApprovingSave || duplicateImportWarning != nil {
                         return true
                     }
 

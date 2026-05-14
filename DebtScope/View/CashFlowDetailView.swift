@@ -42,6 +42,7 @@ struct CashFlowDetailView: View {
         var detection: IntakeDetection
         var url: URL
         var preview: ImportedStatementPreview?
+        var routeConfirmationText: String? = nil
     }
 
     private struct ImportedStatementPreview {
@@ -1529,6 +1530,7 @@ struct CashFlowDetailView: View {
                         endingBalance: $0.endingBalance
                     )
                 } ?? [],
+                routeConfirmationText: model.routeConfirmationText,
                 detectedAccounts: $detectedAccounts,
                 account: account,
                 latestBalance: account.flatMap { latestBalance(for: $0) },
@@ -1568,6 +1570,7 @@ struct CashFlowDetailView: View {
                         endingBalance: $0.endingBalance
                     )
                 } ?? [],
+                routeConfirmationText: model.routeConfirmationText,
                 detectedAccounts: $detectedAccounts,
                 account: account,
                 latestBalance: account.flatMap { latestBalance(for: $0) },
@@ -1623,7 +1626,12 @@ struct CashFlowDetailView: View {
                     bankSubtype = nil
                     applyImportedPreviewToInputs(preview)
                     let detection = IntakeDetection(type: selectedType, institution: editedInstitution, confidence: 0.6)
-                    detectionSheetModel = DetectionSheetModel(detection: detection, url: stagedURL, preview: preview)
+                    detectionSheetModel = DetectionSheetModel(
+                        detection: detection,
+                        url: stagedURL,
+                        preview: preview,
+                        routeConfirmationText: "Opened as Cash Flow"
+                    )
                     isPreparingDetectionReview = false
                     pendingExternal = nil
                 }

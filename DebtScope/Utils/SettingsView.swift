@@ -89,6 +89,14 @@ struct SettingsView: View {
                     Text("Hides the in-app Debug toolbar button and related developer UI.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+
+                    LabeledContent("Free Imports Used", value: "\(purchases.freeImportsUsed) of \(purchases.freeImportLimit)")
+
+                    Button("Reset Free Imports") {
+                        purchases.resetFreeImportAllowanceForDebug()
+                        resetResultMessage = "Free imports were reset. All \(purchases.freeImportLimit) free imports are available again."
+                        showResetResultAlert = true
+                    }
                 }
                 #endif
             }
