@@ -10,13 +10,14 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
     let id: String
     let title: String
     let subtitle: String?
+    let durationSeconds: TimeInterval?
     // Optional per-device URLs and a universal fallback URL
     let iphoneURL: URL?
     let ipadURL: URL?
     let universalURL: URL?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, subtitle, url, urls, iphoneURL, ipadURL
+        case id, title, subtitle, duration, durationSeconds, seconds, url, urls, iphoneURL, ipadURL
     }
 
     enum URLKeys: String, CodingKey {
@@ -28,6 +29,7 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
+        durationSeconds = Self.decodeDuration(from: container)
 
         // Support multiple JSON shapes:
         // 1) legacy: "url": "https://..."
@@ -41,6 +43,42 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
         } else {
             iphoneURL = try container.decodeIfPresent(URL.self, forKey: .iphoneURL)
             ipadURL = try container.decodeIfPresent(URL.self, forKey: .ipadURL)
+        }
+    }
+
+    private static func decodeDuration(from container: KeyedDecodingContainer<CodingKeys>) -> TimeInterval? {
+        for key in [CodingKeys.durationSeconds, .seconds, .duration] {
+            if let seconds = try? container.decode(TimeInterval.self, forKey: key), seconds.isFinite, seconds > 0 {
+                return seconds
+            }
+
+            if let text = try? container.decode(String.self, forKey: key),
+               let seconds = parseDuration(text),
+               seconds.isFinite,
+               seconds > 0 {
+                return seconds
+            }
+        }
+
+        return nil
+    }
+
+    private static func parseDuration(_ text: String) -> TimeInterval? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = TimeInterval(trimmed) {
+            return seconds
+        }
+
+        let parts = trimmed.split(separator: ":").compactMap { TimeInterval($0) }
+        guard parts.count == trimmed.split(separator: ":").count else { return nil }
+
+        switch parts.count {
+        case 2:
+            return parts[0] * 60 + parts[1]
+        case 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        default:
+            return nil
         }
     }
 
@@ -60,6 +98,12 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
         #endif
     }
 
+    var displayKey: String {
+        [id, title, subtitle, urlForCurrentDevice?.absoluteString]
+            .compactMap { $0 }
+            .joined(separator: "|")
+    }
+
     // Whether this video has a playable URL for the current device
     var isAvailableOnCurrentDevice: Bool {
         urlForCurrentDevice != nil
@@ -71,6 +115,7 @@ final class HelpVideosViewModel: ObservableObject {
     @Published var videos: [HelpVideo] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published private var durations: [String: TimeInterval] = [:]
 
     private let feedURL = URL(string: "https://komakode.com/videos/DebtScope-help-videos.json")!
 
@@ -90,13 +135,74 @@ final class HelpVideosViewModel: ObservableObject {
             var decoded = try decoder.decode([HelpVideo].self, from: data)
             decoded = decoded.filter { $0.isAvailableOnCurrentDevice }
             videos = decoded
+            isLoading = false
+            await loadDurations(for: decoded)
         } catch {
             errorMessage = "Couldn’t load help videos."
             videos = []
+            durations = [:]
+            isLoading = false
             print("Help video load error:", error.localizedDescription)
         }
+    }
 
-        isLoading = false
+    func durationText(for video: HelpVideo) -> String? {
+        guard let seconds = video.durationSeconds ?? durations[video.displayKey] else { return nil }
+        return Self.formatDuration(seconds)
+    }
+
+    private func loadDurations(for videos: [HelpVideo]) async {
+        var nextDurations = Dictionary(
+            uniqueKeysWithValues: videos.compactMap { video in
+                video.durationSeconds.map { (video.displayKey, $0) }
+            }
+        )
+        durations = nextDurations
+
+        for video in videos where nextDurations[video.displayKey] == nil {
+            guard let url = video.urlForCurrentDevice else { continue }
+
+            do {
+                let seconds = try await loadAssetDuration(from: url)
+                guard seconds.isFinite, seconds > 0 else { continue }
+                nextDurations[video.displayKey] = seconds
+                durations = nextDurations
+            } catch {
+                print("Help video duration load error:", error.localizedDescription)
+            }
+        }
+    }
+
+    private nonisolated static func loadAssetDuration(from url: URL) async throws -> TimeInterval {
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration)
+        return CMTimeGetSeconds(duration)
+    }
+
+    private func loadAssetDuration(from url: URL) async throws -> TimeInterval {
+        try await withThrowingTaskGroup(of: TimeInterval.self) { group in
+            group.addTask {
+                try await Self.loadAssetDuration(from: url)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(8))
+                throw URLError(.timedOut)
+            }
+
+            guard let seconds = try await group.next() else {
+                throw URLError(.cannotLoadFromNetwork)
+            }
+            group.cancelAll()
+            return seconds
+        }
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(1, Int(seconds.rounded()))
+        if totalSeconds < 60 {
+            return "\(totalSeconds) sec"
+        }
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 }
 
@@ -195,35 +301,49 @@ struct HelpVideosView: View {
                                                 Button {
                                                     selected = video
                                                 } label: {
-                                                    VStack(alignment: .leading, spacing: 8) {
-                                                        HStack(alignment: .top, spacing: 8) {
-                                                            Image(systemName: selected?.id == video.id ? "checkmark.circle.fill" : "play.rectangle.fill")
-                                                                .font(.title3)
-                                                                .foregroundStyle(selected?.id == video.id ? .green : .blue)
-                                                            VStack(alignment: .leading, spacing: 4) {
-                                                                Text(video.title)
-                                                                    .font(.headline)
-                                                                    .multilineTextAlignment(.leading)
-                                                                    .lineLimit(2)
-                                                                if let sub = video.subtitle {
-                                                                    Text(sub)
-                                                                        .font(.subheadline)
-                                                                        .foregroundStyle(.secondary)
-                                                                        .lineLimit(2)
+                                                    HStack(alignment: .center, spacing: 12) {
+                                                        Image(systemName: selected?.displayKey == video.displayKey ? "checkmark.circle.fill" : "play.rectangle.fill")
+                                                            .font(.title3)
+                                                            .foregroundStyle(selected?.displayKey == video.displayKey ? .green : .blue)
+
+                                                        VStack(alignment: .leading, spacing: 3) {
+                                                            Text(video.title)
+                                                                .font(.headline)
+                                                                .multilineTextAlignment(.leading)
+                                                                .lineLimit(2)
+                                                            if video.subtitle != nil || viewModel.durationText(for: video) != nil {
+                                                                HStack(spacing: 4) {
+                                                                    if let sub = video.subtitle {
+                                                                        Text(sub)
+                                                                            .lineLimit(1)
+                                                                    }
+                                                                    if let duration = viewModel.durationText(for: video) {
+                                                                        if video.subtitle != nil {
+                                                                            Text("•")
+                                                                        }
+                                                                        Text(duration)
+                                                                            .fontWeight(.semibold)
+                                                                    }
                                                                 }
-                                                            }
-                                                            Spacer()
-                                                            if selected?.id == video.id {
-                                                                Image(systemName: "speaker.wave.2")
-                                                                    .foregroundStyle(.tertiary)
-                                                            } else {
-                                                                Image(systemName: "chevron.right")
-                                                                    .foregroundStyle(.tertiary)
+                                                                .font(.subheadline)
+                                                                .foregroundStyle(.secondary)
+                                                                .lineLimit(1)
                                                             }
                                                         }
+
+                                                        Spacer(minLength: 8)
+
+                                                        if selected?.displayKey == video.displayKey {
+                                                            Image(systemName: "speaker.wave.2")
+                                                                .foregroundStyle(.tertiary)
+                                                        } else {
+                                                            Image(systemName: "chevron.right")
+                                                                .foregroundStyle(.tertiary)
+                                                        }
                                                     }
-                                                    .padding()
-                                                    .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                                                    .padding(.vertical, 12)
+                                                    .padding(.horizontal, 14)
+                                                    .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
                                                 }
                                                 .buttonStyle(.plain)
                                             }
@@ -240,12 +360,12 @@ struct HelpVideosView: View {
                     }
                 }
             }
-            .navigationTitle("Help & Tutorials")
+            .navigationTitle(UIDevice.type == "iPad" ? "Help & Tutorials" : "Help")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(Color(.systemBackground), for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -273,7 +393,7 @@ struct HelpVideosView: View {
                     .accessibilityLabel("Restart Video")
                     .disabled(selected == nil || player == nil)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         withAnimation(.snappy) { isFullScreen.toggle() }
                     } label: {

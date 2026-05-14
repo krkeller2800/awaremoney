@@ -51,28 +51,36 @@ struct QAccountsListView: View {
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                     }
-                    .padding(.trailing, 32) // reserve space for the trailing button
+                    .padding(.trailing, UIDevice.type == "iPhone" ? 40 : 25) // reserve space for navigation cue and trailing button
                     .overlay(alignment: .trailing) {
-                        Menu {
-                            Button {
-                                onEdit(account)
+                        HStack(spacing: 2) {
+                            Menu {
+                                Button {
+                                    onEdit(account)
+                                } label: {
+                                    Label("Edit Account…", systemImage: "pencil")
+                                }
+                                Button(role: .destructive) {
+                                    pendingDelete = account
+                                } label: {
+                                    Label("Delete Account", systemImage: "trash")
+                                }
                             } label: {
-                                Label("Edit Account…", systemImage: "pencil")
+                                Image(systemName: "ellipsis.circle")
+                                    .imageScale(.medium)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 8) // larger tap target
+                                    .accessibilityLabel("More actions")
                             }
-                            Button(role: .destructive) {
-                                pendingDelete = account
-                            } label: {
-                                Label("Delete Account", systemImage: "trash")
+                            .menuStyle(.button)
+                            if UIDevice.type == "iPhone" {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.trailing, 4)
+                                    .accessibilityHidden(true)
                             }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                                .imageScale(.medium)
-                                .foregroundStyle(.secondary)
-                                .padding(.trailing, 8)
-                                .padding(.vertical, 8) // larger tap target
-                                .accessibilityLabel("More actions")
                         }
-                        .menuStyle(.button)
                     }
                     .background(selectedAccountID == account.id ? Color.accentColor.opacity(0.08) : Color.clear)
                     .contentShape(Rectangle())

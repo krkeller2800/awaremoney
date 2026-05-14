@@ -343,7 +343,13 @@ struct DebtDashboardView: View {
                                     DebtDetailView(account: acct)
                                 }
                             } label: {
-                                debtRowContent(for: acct)
+                                HStack(spacing: 8) {
+                                    debtRowContent(for: acct)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                        .accessibilityHidden(true)
+                                }
                             }
                         }
                     }
