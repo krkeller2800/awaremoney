@@ -1293,30 +1293,15 @@ final class ImportViewModel: ObservableObject {
                                 self.applyLiabilityLabelSafetyNetIfNeeded(to: &stagedImport)
                             }
 
-                            // Filter out non-liability balances at staging time for liability imports
-                            // Use user-selected newAccountType instead of parser's suggestion here
-                            let importTypeForStaging = self.newAccountType
-                            if importTypeForStaging == .loan || importTypeForStaging == .creditCard {
-                                let before = stagedImport.balances.count
-                                let filtered = stagedImport.balances.filter { b in
+                            // Preserve all staged balances, even on liability-classified statements.
+                            // Some institutions emit legitimate mixed statements (for example, savings + loan)
+                            // and routing now resolves those clusters independently.
+                            if !stagedImport.balances.isEmpty {
+                                AMLogging.log("Staged balances detail:", component: "ImportViewModel")
+                                for b in stagedImport.balances {
+                                    let raw = b.sourceAccountLabel ?? "(nil)"
                                     let norm = self.normalizeSourceLabel(b.sourceAccountLabel) ?? "default"
-                                    return norm == "loan" || norm == "creditCard" || norm == "default"
-                                }
-                                let dropped = before - filtered.count
-                                if dropped > 0 {
-                                    let keptLabels = filtered.map { balance in self.normalizeSourceLabel(balance.sourceAccountLabel) ?? "default" }
-                                    AMLogging.log("Staging filter: liability import — dropped \(dropped) of \(before) non-liability balances. Kept labels: \(keptLabels)", component: "ImportViewModel")
-                                } else {
-                                    AMLogging.log("Staging filter: liability import — no non-liability balances to drop", component: "ImportViewModel")
-                                }
-                                stagedImport.balances = filtered
-                                if !stagedImport.balances.isEmpty {
-                                    AMLogging.log("Staged balances detail (post-filter):", component: "ImportViewModel")
-                                    for b in stagedImport.balances {
-                                        let raw = b.sourceAccountLabel ?? "(nil)"
-                                        let norm = self.normalizeSourceLabel(b.sourceAccountLabel) ?? "default"
-                                        AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
-                                    }
+                                    AMLogging.log("• asOf: \(b.asOfDate), balance: \(b.balance), rawLabel: \(raw), normalized: \(norm), apr: \(String(describing: b.interestRateAPR))", component: "ImportViewModel")
                                 }
                             }
 
@@ -1675,12 +1660,19 @@ final class ImportViewModel: ObservableObject {
         // For liability/report types (credit card, loan, brokerage), do NOT split by label — treat as a single account.
         // Prefer user-selected newAccountType over parser suggestion here
         let importType = self.newAccountType
+        let concreteBalanceLabels = Set(includedBalances.compactMap { normalizedLabel($0.sourceAccountLabel) })
+        let concreteTransactionLabels = Set(includedTransactions.compactMap { normalizedLabel($0.sourceAccountLabel) })
+        let concreteSourceLabels = concreteBalanceLabels.union(concreteTransactionLabels)
         let allowSplitByLabel: Bool = {
             switch importType {
             case .checking, .savings:
                 return true
             default:
-                return false
+                // Most liability statements should remain single-account imports, but some PDFs
+                // legitimately bundle multiple account families (for example, savings + loan).
+                // When the source has more than one concrete normalized label, keep them separate
+                // so balances are persisted to the routed account for each label.
+                return concreteSourceLabels.count > 1
             }
         }()
 
@@ -1690,38 +1682,10 @@ final class ImportViewModel: ObservableObject {
             AMLogging.log("Approve: non-split path will assign all balances to a single account. Staged balance labels: \(labels)", component: "ImportViewModel")
         }
 
-        // Filter out non-liability balances for liability imports (e.g., Chase statements listing checking/savings)
-        var effectiveIncludedBalances = includedBalances
-        var effectiveBalanceGroups = balanceGroups
-        if importType == .loan || importType == .creditCard {
-            let before = effectiveIncludedBalances.count
-            let filtered = effectiveIncludedBalances.filter { b in
-                let norm = normalizedLabel(b.sourceAccountLabel) ?? "default"
-                return norm == "loan" || norm == "creditCard" || norm == "default"
-            }
-            let dropped = before - filtered.count
-            if dropped > 0 {
-                let keptLabels = filtered.map { normalizedLabel($0.sourceAccountLabel) ?? "default" }
-                AMLogging.log("Approve: filtered non-liability balances for liability import — dropped \(dropped) of \(before). Kept labels: \(keptLabels)", component: "ImportViewModel")
-            } else {
-                AMLogging.log("Approve: no non-liability balances to filter for liability import", component: "ImportViewModel")
-            }
-            effectiveIncludedBalances = filtered
-            // Rebuild balance groups after filtering
-            effectiveBalanceGroups = [:]
-            for b in filtered {
-                if let key = normalizedLabel(b.sourceAccountLabel) {
-                    effectiveBalanceGroups[key, default: []].append(b)
-                } else {
-                    effectiveBalanceGroups["default", default: []].append(b)
-                }
-            }
-            AMLogging.log("Approve: effective label groups (balances) after filter => \(effectiveBalanceGroups.map { "\($0.key): \($0.value.count)" }.joined(separator: ", "))", component: "ImportViewModel")
-        } else {
-            // For non-liability imports, use original groups
-            effectiveIncludedBalances = includedBalances
-            effectiveBalanceGroups = balanceGroups
-        }
+        // Preserve all included balances here. Mixed statements can legitimately carry both
+        // liability and cash accounts, and routing resolves each normalized label independently.
+        let effectiveIncludedBalances = includedBalances
+        let effectiveBalanceGroups = balanceGroups
 
         let allLabels: Set<String> = Set(labeledGroups.keys).union(Set(effectiveBalanceGroups.keys))
 

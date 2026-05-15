@@ -238,6 +238,7 @@ struct PDFBankTransactionsParser: StatementParser {
             "daily balance",
             "ending balance",
             "beginning balance",
+            "balance forward",
             "opening balance",
             "closing balance",
             "deposits additions",
@@ -268,13 +269,6 @@ struct PDFBankTransactionsParser: StatementParser {
         if lower.contains("page ") && lower.contains(" of ") { return true }
         if lower.contains("statement") && (lower.contains("date") || lower.contains("period")) { return true }
         if lower.contains("account number") || lower.contains("account ending") { return true }
-
-        // Lines that are all caps with no digits and short (likely headings)
-        let hasLowercase = s.rangeOfCharacter(from: CharacterSet.lowercaseLetters) != nil
-        let hasDigits = s.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil
-        if !hasLowercase && !hasDigits && s == s.uppercased() && s.count <= 48 {
-            return true
-        }
 
         return false
     }

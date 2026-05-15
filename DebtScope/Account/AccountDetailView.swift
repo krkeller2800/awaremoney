@@ -963,6 +963,7 @@ struct AccountDetailView: View {
 
     private func deleteAccount(_ account: Account) {
         AMLogging.log("Deleting account id=\(account.id) name=\(account.name)", component: "AccountDetailView")
+        removeImportMappings(for: account.id)
         modelContext.delete(account)
         do {
             try modelContext.save()
@@ -972,6 +973,15 @@ struct AccountDetailView: View {
         NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
         NotificationCenter.default.post(name: .accountsDidChange, object: nil)
 //        dismiss()
+    }
+
+    private func removeImportMappings(for accountID: UUID) {
+        let descriptor = FetchDescriptor<AccountImportMapping>(predicate: #Predicate { $0.accountID == accountID })
+        guard let mappings = try? modelContext.fetch(descriptor), !mappings.isEmpty else { return }
+        for mapping in mappings {
+            modelContext.delete(mapping)
+        }
+        AMLogging.log("Removed \(mappings.count) import mapping(s) for deleted account id=\(accountID)", component: "AccountDetailView")
     }
 }
 

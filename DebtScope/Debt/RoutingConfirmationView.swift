@@ -210,6 +210,11 @@ struct RoutingConfirmationView: View {
                 } else if case .existing(let id, _) = p.candidate.action,
                           instAccounts.contains(where: { $0.id == id }) {
                     result[p.label] = p.candidate.action
+                } else if case .createNew = p.candidate.action {
+                    // Mixed statements can legitimately contain an existing savings account plus
+                    // a brand-new loan on the same PDF. Preserve an intentional create-new candidate
+                    // instead of treating it as an unresolved existing-account failure.
+                    result[p.label] = p.candidate.action
                 } else {
                     // No valid existing selection at the chosen institution; mark unresolved
                     result[p.label] = .createNew(type: nil)
@@ -240,6 +245,9 @@ struct RoutingConfirmationView: View {
                instAccounts.contains(where: { $0.id == id }) {
                 return plan.candidate.action
             }
+            if case .createNew = plan.candidate.action {
+                return plan.candidate.action
+            }
             // Unresolved in Existing mode
             return .createNew(type: nil)
         } else {
@@ -267,6 +275,9 @@ struct RoutingConfirmationView: View {
             }
             if case .existing(let id, _) = plan.candidate.action,
                instAccounts.contains(where: { $0.id == id }) {
+                return plan.candidate.action
+            }
+            if case .createNew = plan.candidate.action {
                 return plan.candidate.action
             }
             return RoutingCandidate.Action.createNew(type: nil)
@@ -590,15 +601,13 @@ struct RoutingConfirmationView: View {
                         case .existing(_, let name):
                             return name.isEmpty ? " — Existing" : " — Existing (\(name))"
                         case .createNew(let t):
-                            if globalTargetMode == 0 {
+                            if let t {
+                                let typeName = displayName(for: t)
+                                return " — Create New (\(typeName))"
+                            } else if globalTargetMode == 0 {
                                 return " — Needs Selection"
                             } else {
-                                if let t {
-                                    let typeName = displayName(for: t)
-                                    return " — Create New (\(typeName))"
-                                } else {
-                                    return " — Create New"
-                                }
+                                return " — Create New"
                             }
                         }
                     }()

@@ -65,7 +65,9 @@ final class ImportRoutingService {
 
         // Prepare grouped items per normalized label
         let defaultKey = "__default__"
-        func norm(_ raw: String?) -> String? { AccountImportMapping.normalizedLabel(raw) }
+        func norm(_ raw: String?) -> String? {
+            AccountImportMapping.normalizedLabel(raw)
+        }
 
         // Materialize once to avoid repeated normalization work
         let txByLabel: [String: [StagedTransaction]] = {
@@ -209,7 +211,27 @@ final class ImportRoutingService {
                 let fd = FetchDescriptor<Account>(predicate: predicate)
                 let fetched = try context.fetch(fd)
                 guard let acct = fetched.first else {
-                    AMLogging.error("ImportRoutingService: resolveAccounts failed — existing account not found id=\(accountID)", component: "ImportRoutingService")
+                    let fallbackType = inferType(from: plan.label) ?? .other
+                    let fallbackPlan = RoutedClusterPlan(
+                        label: plan.label,
+                        candidate: RoutingCandidate(action: .createNew(type: fallbackType), confidence: Tuning.createWithInferredType, reason: "stale-existing-fallback"),
+                        transactions: plan.transactions,
+                        balances: plan.balances,
+                        holdings: plan.holdings
+                    )
+                    AMLogging.log("ImportRoutingService: stale existing target missing id=\(accountID); creating new account for label='\(plan.label)' instead", component: "ImportRoutingService")
+                    let created = try resolveAccounts(
+                        for: [fallbackPlan],
+                        institution: institution,
+                        currencyCode: currencyCode,
+                        context: context,
+                        applyInstitutionToExisting: applyInstitutionToExisting
+                    )
+                    if let replacement = created[plan.label] {
+                        result[plan.label] = replacement
+                        continue
+                    }
+                    AMLogging.error("ImportRoutingService: resolveAccounts failed — stale existing target could not be replaced id=\(accountID)", component: "ImportRoutingService")
                     struct LocalError: Error {}
                     throw LocalError()
                 }
@@ -308,7 +330,9 @@ final class ImportRoutingService {
     func analyze(staged: StagedImport, context: ModelContext) -> RoutingAnalysis {
         let institution = AccountImportMapping.normalizedInstitution(staged.inferredInstitutionName ?? guessInstitutionName(from: staged.sourceFileName))
 
-        // Collect labels from transactions and balances
+        // Collect labels from transactions and balances. Mixed statements can legitimately contain
+        // multiple account types (for example, a savings account plus a loan on one PDF), so keep
+        // each normalized source label distinct for routing.
         let txLabels = Set(staged.transactions.compactMap { AccountImportMapping.normalizedLabel($0.sourceAccountLabel) })
         let balLabels = Set(staged.balances.compactMap { AccountImportMapping.normalizedLabel($0.sourceAccountLabel) })
         var labels = Array(txLabels.union(balLabels))
@@ -447,11 +471,25 @@ final class ImportRoutingService {
     // MARK: - Internals
 
     private func resolveCandidate(institution: String?, label: String, desiredType: Account.AccountType?, accounts: [Account], context: ModelContext) -> RoutingCandidate {
-        // 1) Exact mapping lookup by institution + label
-        if let inst = institution, let mapping = try? fetchMapping(inst: inst, label: label, context: context),
-           let acct = accounts.first(where: { $0.id == mapping.accountID }) {
-            if desiredType == nil || acct.type == desiredType {
-                return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: clamp(mapping.confidence), reason: "mapping")
+        let accountSummary = accounts.map { "\($0.name)[\($0.id.uuidString.prefix(4))]:\($0.type.rawValue):\($0.institutionName ?? "nil")" }.joined(separator: ", ")
+        AMLogging.log(
+            "ImportRoutingService: resolveCandidate start — inst='\(institution ?? "nil")' label='\(label)' desiredType='\(desiredType?.rawValue ?? "nil")' accounts=[\(accountSummary)]",
+            component: "ImportRoutingService"
+        )
+
+        // 1) Exact mapping lookup by institution + label.
+        // If the remembered target account was deleted, discard the stale memory and fall through
+        // to normal heuristics so the next import proposes a fresh account instead of a ghost.
+        if let inst = institution, let mapping = try? fetchMapping(inst: inst, label: label, context: context) {
+            if let acct = accounts.first(where: { $0.id == mapping.accountID }) {
+                if desiredType == nil || acct.type == desiredType {
+                    AMLogging.log("ImportRoutingService: resolveCandidate chose existing via mapping — label='\(label)' account='\(acct.name)' id=\(acct.id)", component: "ImportRoutingService")
+                    return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: clamp(mapping.confidence), reason: "mapping")
+                }
+            } else {
+                context.delete(mapping)
+                try? context.save()
+                AMLogging.log("ImportRoutingService: removed stale mapping — inst='\(inst)' label='\(label)' missingAccountID=\(mapping.accountID)", component: "ImportRoutingService")
             }
         }
 
@@ -467,21 +505,26 @@ final class ImportRoutingService {
         if let t = inferredType {
             let typed = matchesAtInstitution.filter { $0.type == t }
             if typed.count == 1, let acct = typed.first {
+                AMLogging.log("ImportRoutingService: resolveCandidate chose existing via type+institution — label='\(label)' account='\(acct.name)' id=\(acct.id)", component: "ImportRoutingService")
                 return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: Tuning.typeAndInstitutionSingleMatch, reason: "heuristic:type+institution")
             } else if typed.count > 1 {
                 // Ambiguous same-type accounts at the institution
+                AMLogging.log("ImportRoutingService: resolveCandidate chose create-new because type+institution is ambiguous — label='\(label)' matches=\(typed.count)", component: "ImportRoutingService")
                 return RoutingCandidate(action: .createNew(type: t), confidence: Tuning.ambiguousTypeAtInstitution, reason: "ambiguous:type+institution")
             } else {
                 // No existing; propose creating new with inferred type
+                AMLogging.log("ImportRoutingService: resolveCandidate chose create-new because no type+institution match exists — label='\(label)' inferredType='\(t.rawValue)'", component: "ImportRoutingService")
                 return RoutingCandidate(action: .createNew(type: t), confidence: Tuning.createWithInferredType, reason: "create:type")
             }
         }
 
         // 3) Fallbacks: use institution-only match, otherwise create new without type
         if let acct = matchesAtInstitution.sorted(by: { $0.createdAt > $1.createdAt }).first {
+            AMLogging.log("ImportRoutingService: resolveCandidate chose existing via institution-only — label='\(label)' account='\(acct.name)' id=\(acct.id)", component: "ImportRoutingService")
             return RoutingCandidate(action: .existing(accountID: acct.id, name: acct.name), confidence: Tuning.institutionOnlyMatch, reason: "heuristic:institution-only")
         }
 
+        AMLogging.log("ImportRoutingService: resolveCandidate chose create-new fallback — label='\(label)'", component: "ImportRoutingService")
         return RoutingCandidate(action: .createNew(type: nil), confidence: Tuning.fallbackCreate, reason: "fallback:create")
     }
 

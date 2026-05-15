@@ -691,6 +691,15 @@ enum PDFStatementExtractor {
                 return false
             }
         }
+        func contextHasStandaloneAmountHeader() -> Bool {
+            recentContext.contains { line in
+                let words = line
+                    .lowercased()
+                    .split(whereSeparator: { !$0.isLetter })
+                    .map(String.init)
+                return words.contains("amount")
+            }
+        }
         func isSavingsHeader(_ s: String) -> Bool {
             let raw = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let lower = raw.lowercased()
@@ -1124,14 +1133,33 @@ enum PDFStatementExtractor {
                         return dateRaw
                     }()
                     let date = normalizeDateString(dateTokenChoice, inferredYear: inferredYear)
-                    let desc = cleanDesc(descRaw)
+                    var desc = cleanDesc(descRaw)
+                    var amount = applySectionSign(amount: sanitizeAmount(amtRaw))
+                    var balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
+
+                    // If a nearby header explicitly names an Amount column and the regex had to absorb
+                    // earlier money values into the description, prefer the first money token as Amount.
+                    // This handles generic tables like Amount / Principal / Charge Fee / Balance without
+                    // baking in institution-specific column names.
+                    if contextHasStandaloneAmountHeader() {
+                        let descRange = NSRange(location: 0, length: descRaw.utf16.count)
+                        let embeddedMoneyMatches = amountAnywhereRegex.matches(in: descRaw, options: [], range: descRange)
+                        if let firstMoney = embeddedMoneyMatches.first,
+                           let firstMoneyRange = Range(firstMoney.range, in: descRaw),
+                           embeddedMoneyMatches.count >= 1,
+                           !balRaw.isEmpty {
+                            let explicitAmount = String(descRaw[firstMoneyRange])
+                            amount = applySectionSign(amount: sanitizeAmount(explicitAmount))
+                            desc = cleanDesc(String(descRaw[..<firstMoneyRange.lowerBound]))
+                            balance = sanitizeAmount(balRaw)
+                        }
+                    }
+
                     // If the description itself indicates account type, update context if no override
                     if accountOverride == nil {
                         if isSavingsHeader(desc) { currentAccount = .savings }
                         else if isInvestmentHeader(desc) && !docLooksLoan { currentAccount = .investment }
                     }
-                    let amount = applySectionSign(amount: sanitizeAmount(amtRaw))
-                    let balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
                     rows.append([date, desc, amount, balance, accountLabelForRow()])
                     AMLogging.log("PDF single-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
                     i += 1
@@ -2021,6 +2049,17 @@ enum PDFStatementExtractor {
                 rows[idx][3] = forceNegativeIfNeeded(rows[idx][3])
                 if keyLower.isEmpty || keyLower == "unknown" {
                     rows[idx][4] = looksLoan ? "loan" : "creditCard"
+                }
+            }
+        }
+
+        // Credit-card documents often leave transaction rows unlabeled even when summary rows are clear.
+        // Keep transaction routing coherent with the document type instead of leaking "unknown" rows downstream.
+        if documentLooksCreditCard(lines) || documentLooksCreditCardLoose(lines) {
+            for idx in 0..<rows.count where rows[idx].count >= 5 {
+                let keyLower = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if keyLower.isEmpty || keyLower == "unknown" {
+                    rows[idx][4] = "creditCard"
                 }
             }
         }

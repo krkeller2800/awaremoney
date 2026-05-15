@@ -970,8 +970,10 @@ struct ReviewImportView: View {
                     let service = ImportRoutingService()
                     let result = service.buildPlans(staged: stagedForSave, context: modelContext)
 
-                    // Use preview-effective overrides; fallback to current overrides if preview hasn't emitted yet
-                    let effectiveOverrides: [String: RoutingCandidate.Action] = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
+                    // Use preview-effective overrides; fallback to current overrides if preview hasn't emitted yet.
+                    // Drop stale existing-account choices whose target was deleted after the prior import.
+                    let rawOverrides: [String: RoutingCandidate.Action] = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
+                    let effectiveOverrides = sanitizedRoutingOverrides(rawOverrides, plans: result.plans)
                     let beforeSnap = snapshotAccounts(modelContext)
                     let resolvedInstitution: String? = {
                         let trimmed = routingPreviewInstitution?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1238,13 +1240,21 @@ struct ReviewImportView: View {
         }
 
         if var currentStaged = vm.staged {
-            if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
-                for index in currentStaged.balances.indices where currentStaged.balances[index].balance > 0 {
-                    currentStaged.balances[index].balance = -currentStaged.balances[index].balance
-                }
-            } else if vm.newAccountType == .checking || vm.newAccountType == .savings || vm.newAccountType == .cash {
-                for index in currentStaged.balances.indices where currentStaged.balances[index].balance < 0 {
-                    currentStaged.balances[index].balance = -currentStaged.balances[index].balance
+            for index in currentStaged.balances.indices {
+                let label = (currentStaged.balances[index].sourceAccountLabel ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let isCashLabel = label.contains("checking") || label.contains("savings") || label == "cash"
+                let isLiabilityLabel = label.contains("loan") || label.contains("credit")
+
+                if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+                    if !isCashLabel && (isLiabilityLabel || label.isEmpty), currentStaged.balances[index].balance > 0 {
+                        currentStaged.balances[index].balance = -currentStaged.balances[index].balance
+                    }
+                } else if vm.newAccountType == .checking || vm.newAccountType == .savings || vm.newAccountType == .cash {
+                    if !isLiabilityLabel && currentStaged.balances[index].balance < 0 {
+                        currentStaged.balances[index].balance = -currentStaged.balances[index].balance
+                    }
                 }
             }
             vm.staged = currentStaged
@@ -1270,6 +1280,8 @@ struct ReviewImportView: View {
         let chosenInst = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
         let routingService = ImportRoutingService()
         let routingResult = routingService.buildPlans(staged: staged, context: modelContext)
+        routingOverrides = sanitizedRoutingOverrides(routingOverrides, plans: routingResult.plans)
+        routingPreviewEffective = sanitizedRoutingOverrides(routingPreviewEffective, plans: routingResult.plans)
         let allPlansCreateNew = !routingResult.plans.isEmpty && routingResult.plans.allSatisfy { plan in
             if case .createNew = plan.candidate.action { return true }
             return false
@@ -1354,6 +1366,28 @@ struct ReviewImportView: View {
         lastAnalyzedSource = src
         AMLogging.log("Routing analysis computed — clusters=\(analysis.clusters.count) needsConfirmation=\(analysis.needsConfirmation)", component: "ReviewImportView")
         showRoutingSheet = true
+    }
+
+    private func sanitizedRoutingOverrides(_ overrides: [String: RoutingCandidate.Action], plans: [ImportRoutingService.RoutedClusterPlan]) -> [String: RoutingCandidate.Action] {
+        guard !overrides.isEmpty else { return overrides }
+        let validAccountIDs = Set(accounts.map(\.id))
+        var sanitized: [String: RoutingCandidate.Action] = [:]
+
+        for plan in plans {
+            guard let action = overrides[plan.label] else { continue }
+            switch action {
+            case .existing(let accountID, _):
+                if validAccountIDs.contains(accountID) {
+                    sanitized[plan.label] = action
+                } else {
+                    AMLogging.log("ReviewImportView: dropped stale routing override — label=\(plan.label) missingAccountID=\(accountID)", component: "ReviewImportView")
+                }
+            case .createNew:
+                sanitized[plan.label] = action
+            }
+        }
+
+        return sanitized
     }
 
     private func resolvedPDFURL() -> URL? {
@@ -1598,12 +1632,18 @@ struct ReviewImportView: View {
         // Prefer live-preview overrides over stored overrides
         let effectiveOverrides = routingPreviewEffective.isEmpty ? routingOverrides : routingPreviewEffective
 
-        // In Existing mode, any cluster that would still create new indicates unresolved
+        // In Existing mode, a create-new action is only unresolved when it is a fallback caused
+        // by a missing existing selection. If routing itself intentionally proposed create-new
+        // (for example, a new loan beside an existing savings account on the same statement),
+        // that mixed plan is already resolved.
         for plan in result.plans {
             if let override = effectiveOverrides[plan.label] {
-                if case .createNew = override { return true }
-            } else {
-                if case .createNew = plan.candidate.action { return true }
+                if case .createNew = override,
+                   case .existing = plan.candidate.action {
+                    return true
+                }
+            } else if case .createNew = plan.candidate.action {
+                continue
             }
         }
 

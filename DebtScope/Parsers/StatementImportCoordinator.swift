@@ -135,8 +135,22 @@ import UniformTypeIdentifiers
                 augmentedRows.append([fullText])
             }
 
-            let summaryStaged = try? PDFSummaryParser().parse(rows: augmentedRows, headers: augmentedHeaders)
-            let transactionStaged = try? PDFBankTransactionsParser().parse(rows: augmentedRows, headers: augmentedHeaders)
+            let summaryStaged: StagedImport? = {
+                do {
+                    return try PDFSummaryParser().parse(rows: augmentedRows, headers: augmentedHeaders)
+                } catch {
+                    AMLogging.log("StatementImportCoordinator: PDF summary parse failed — \(error)", component: "Import")
+                    return nil
+                }
+            }()
+            let transactionStaged: StagedImport? = {
+                do {
+                    return try PDFBankTransactionsParser().parse(rows: augmentedRows, headers: augmentedHeaders)
+                } catch {
+                    AMLogging.log("StatementImportCoordinator: PDF transaction parse failed — \(error)", component: "Import")
+                    return nil
+                }
+            }()
 
             var staged: StagedImport
             switch (summaryStaged, transactionStaged) {
@@ -174,15 +188,23 @@ import UniformTypeIdentifiers
 
             staged.sourceFileName = url.lastPathComponent
 
-            // Normalize snapshot signs by account class so review is consistent across statement formats.
+            // Normalize snapshot signs by the balance's own label, not only the document hint.
+            // Mixed statements can carry both a loan and a real savings/checking balance; liability
+            // snapshots should be negative while cash snapshots remain positive.
             for i in staged.balances.indices {
+                let label = (staged.balances[i].sourceAccountLabel ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let isCashLabel = label.contains("checking") || label.contains("savings") || label == "cash"
+                let isLiabilityLabel = label.contains("loan") || label.contains("credit")
+
                 switch hint {
                 case .some(.creditCard), .some(.loan):
-                    if staged.balances[i].balance > 0 {
+                    if !isCashLabel && (isLiabilityLabel || label.isEmpty), staged.balances[i].balance > 0 {
                         staged.balances[i].balance = -staged.balances[i].balance
                     }
                 case .some(.bank):
-                    if staged.balances[i].balance < 0 {
+                    if !isLiabilityLabel && staged.balances[i].balance < 0 {
                         staged.balances[i].balance = -staged.balances[i].balance
                     }
                 default:
