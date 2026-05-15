@@ -22,6 +22,7 @@ struct DetectionReviewSheet: View {
     let importedAPRFraction: Decimal?
     let importedAPRScale: Int?
     let importedBalance: Decimal?
+    let importedBalanceDate: Date?
     let importedBankBalanceSummaries: [ImportedBankBalanceSummary]
     let routeConfirmationText: String?
     @Binding var detectedAccounts: [DetectedAccountSelection]
@@ -54,6 +55,7 @@ struct DetectionReviewSheet: View {
         let label: String
         let beginningBalance: Decimal?
         let endingBalance: Decimal?
+        let endingBalanceDate: Date?
     }
 
     private var isCompactLayout: Bool {
@@ -157,10 +159,10 @@ struct DetectionReviewSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Discard") { onDiscard() }
+                    PlanToolbarButton("Discard",fixedWidth: 80) { onDiscard() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveAction() }
+                    PlanToolbarButton("Continue") { saveAction() }
                         .disabled(isSaveDisabled || didSubmitSave)
                 }
             }
@@ -345,6 +347,7 @@ struct DetectionReviewSheet: View {
                 Text("Monthly payment")
                 Spacer()
                 TextField("Amount", text: $monthlyPaymentInput)
+                    .multilineTextAlignment(.trailing)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 140)
 #if os(iOS) || os(visionOS)
@@ -362,6 +365,7 @@ struct DetectionReviewSheet: View {
                 Text("APR (%)")
                 Spacer()
                 TextField("e.g., 19.99", text: $aprPercentInput)
+                    .multilineTextAlignment(.trailing)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 140)
 #if os(iOS) || os(visionOS)
@@ -375,10 +379,20 @@ struct DetectionReviewSheet: View {
             }
 
             // Ending/current balance
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Ending balance")
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ending balance")
+                    if let importedBalanceDate {
+                        Text("As of \(importedBalanceDate.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Spacer()
+
                 TextField("Amount", text: $balanceInput)
+                    .multilineTextAlignment(.trailing)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 140)
 #if os(iOS) || os(visionOS)
@@ -432,7 +446,18 @@ struct DetectionReviewSheet: View {
 
             if importedBankBalanceSummaries.isEmpty {
                 if let importedBalance {
-                    LabeledContent("Imported ending balance") {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Imported ending balance")
+                            if let importedBalanceDate {
+                                Text("As of \(importedBalanceDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
                         Text(formatCurrency(importedBalance.magnitude))
                             .monospacedDigit()
                     }
@@ -451,7 +476,18 @@ struct DetectionReviewSheet: View {
                         }
 
                         if let endingBalance = summary.endingBalance {
-                            LabeledContent("Ending balance") {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Ending balance")
+                                    if let endingBalanceDate = summary.endingBalanceDate {
+                                        Text("As of \(endingBalanceDate.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                Spacer()
+
                                 Text(formatCurrency(endingBalance))
                                     .monospacedDigit()
                             }
@@ -679,6 +715,7 @@ struct DetectionReviewSheet: View {
                 importedAPRFraction: nil,
                 importedAPRScale: nil,
                 importedBalance: nil,
+                importedBalanceDate: nil,
                 importedBankBalanceSummaries: [],
                 routeConfirmationText: nil,
                 detectedAccounts: $detectedAccounts,

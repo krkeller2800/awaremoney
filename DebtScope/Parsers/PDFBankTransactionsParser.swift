@@ -69,12 +69,25 @@ struct PDFBankTransactionsParser: StatementParser {
                 continue
             }
             let balStr = value(row, map, key: "balance")
-            let balance = balStr.flatMap { Decimal(string: sanitize($0)) }
+            let parsedBalance = balStr.flatMap { Decimal(string: sanitize($0)) }
             let desc = descRaw ?? "Unknown"
             let accountLabel: String? = value(row, map, key: "account")
 
-            items.append(RowItem(date: date, desc: desc, amount: amountVal, balance: balance, account: accountLabel))
-            AMLogging.log("Row \(rowIndex) included — date=\(dateStr), desc=\(desc), amount=\(amountVal), balance=\(balance?.description ?? "nil"), account=\(accountLabel ?? "(nil)")", component: LOG_COMPONENT)
+            // Loan statements often use Charges / Payments columns rather than Amount / Running Balance.
+            // In that shape, the extractor maps Charges -> amount and Payments -> balance. If Charges is zero
+            // and Payments is non-zero for a payment row, recover the real transaction amount from Payments.
+            let lowerDesc = desc.lowercased()
+            let lowerAccount = accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let isLoanPaymentRow = (lowerAccount == "loan" || lowerDesc.contains("payment")) && amountVal == .zero && (parsedBalance ?? .zero) != .zero
+            let amount = isLoanPaymentRow ? (parsedBalance ?? amountVal) : amountVal
+            let balance = isLoanPaymentRow ? nil : parsedBalance
+
+            if isLoanPaymentRow {
+                AMLogging.log("Row \(rowIndex) loan payment recovery — charges=\(amountVal), payments=\(parsedBalance?.description ?? "nil"), recoveredAmount=\(amount)", component: LOG_COMPONENT)
+            }
+
+            items.append(RowItem(date: date, desc: desc, amount: amount, balance: balance, account: accountLabel))
+            AMLogging.log("Row \(rowIndex) included — date=\(dateStr), desc=\(desc), amount=\(amount), balance=\(balance?.description ?? "nil"), account=\(accountLabel ?? "(nil)")", component: LOG_COMPONENT)
         }
 
         AMLogging.log("Parsed items count: \(items.count)", component: LOG_COMPONENT)

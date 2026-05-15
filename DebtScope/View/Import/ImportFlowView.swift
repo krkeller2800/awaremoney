@@ -119,7 +119,7 @@ struct ImportFlowView: View {
         switch kind {
         case .creditCard:
             vm.userSelectedDocHint = .creditCard
-            vm.creditCardFlipOverride = settings.creditCardFlipDefault
+            vm.creditCardFlipOverride = settings.creditCardFlipDefault ? true : nil
             vm.newAccountType = .creditCard
         case .loan:
             vm.userSelectedDocHint = .loan

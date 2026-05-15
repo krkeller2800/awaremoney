@@ -403,6 +403,7 @@ struct AccountDetailView: View {
                         Spacer()
                         if let derived = cachedDerivedBalance {
                             Text(format(amount: derived))
+                                .foregroundStyle(derived < 0 ? .red : .primary)
                         } else {
                             Text("Unavailable")
                                 .foregroundStyle(.secondary)
@@ -431,6 +432,7 @@ struct AccountDetailView: View {
                         if let last = lastBalanceSnapshot(for: account) {
                             VStack(alignment: .trailing, spacing: 2) {
                                 Text(format(amount: last.balance))
+                                    .foregroundStyle(last.balance < 0 ? .red : .primary)
                                 Text(last.asOfDate, style: .date)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

@@ -40,7 +40,7 @@ import UniformTypeIdentifiers
             if let h = hint {
                 switch h {
                 case .creditCard:
-                    self.vm.creditCardFlipOverride = settings.creditCardFlipDefault
+                    self.vm.creditCardFlipOverride = settings.creditCardFlipDefault ? true : nil
                     self.vm.newAccountType = accountType(from: h)
                 default:
                     self.vm.newAccountType = accountType(from: h)
@@ -135,40 +135,59 @@ import UniformTypeIdentifiers
                 augmentedRows.append([fullText])
             }
 
+            let summaryStaged = try? PDFSummaryParser().parse(rows: augmentedRows, headers: augmentedHeaders)
+            let transactionStaged = try? PDFBankTransactionsParser().parse(rows: augmentedRows, headers: augmentedHeaders)
+
             var staged: StagedImport
-            do {
-                let summaryParser = PDFSummaryParser()
-                staged = try summaryParser.parse(rows: augmentedRows, headers: augmentedHeaders)
-            } catch {
-                let parsers = ImportViewModel.defaultParsers()
-                if let parser = parsers.first(where: { $0.canParse(headers: augmentedHeaders) }) {
-                    staged = try parser.parse(rows: augmentedRows, headers: augmentedHeaders)
-                } else {
-                    // Manual fallback: present empty staged so ReviewImportView can be used
-                    await MainActor.run {
-                        if let h = hint {
-                            self.vm.newAccountType = accountType(from: h)
-                        }
-                        self.vm.staged = StagedImport(
-                            parserId: "manual.fallback",
-                            sourceFileName: url.lastPathComponent,
-                            inferredInstitutionName: nil,
-                            suggestedAccountType: self.vm.newAccountType,
-                            transactions: [], holdings: [], balances: []
-                        )
-                        self.vm.mappingSession = nil
-                        self.vm.errorMessage = nil
-                        self.vm.infoMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
+            switch (summaryStaged, transactionStaged) {
+            case let (.some(summary), .some(transactions)):
+                staged = summary
+                staged.parserId = "pdf.summary+transactions"
+                staged.transactions = deduplicateStagedTransactions(transactions.transactions)
+                AMLogging.log("StatementImportCoordinator: merged PDF summary with transactions — tx=\(staged.transactions.count) balances=\(staged.balances.count)", component: "Import")
+            case let (.some(summary), .none):
+                staged = summary
+                AMLogging.log("StatementImportCoordinator: PDF summary parsed without transactions — balances=\(staged.balances.count)", component: "Import")
+            case let (.none, .some(transactions)):
+                staged = transactions
+                staged.transactions = deduplicateStagedTransactions(staged.transactions)
+                AMLogging.log("StatementImportCoordinator: PDF transactions parsed without summary — tx=\(staged.transactions.count)", component: "Import")
+            case (.none, .none):
+                // Manual fallback: present empty staged so ReviewImportView can be used
+                await MainActor.run {
+                    if let h = hint {
+                        self.vm.newAccountType = accountType(from: h)
                     }
-                    return
+                    self.vm.staged = StagedImport(
+                        parserId: "manual.fallback",
+                        sourceFileName: url.lastPathComponent,
+                        inferredInstitutionName: nil,
+                        suggestedAccountType: self.vm.newAccountType,
+                        transactions: [], holdings: [], balances: []
+                    )
+                    self.vm.mappingSession = nil
+                    self.vm.errorMessage = nil
+                    self.vm.infoMessage = "We couldn’t read this PDF. You can still add the account—fill in the fields below." + (UIDevice.type == "iPhone" ? " Tap 'view PDF' for reference." : "")
                 }
+                return
             }
 
             staged.sourceFileName = url.lastPathComponent
 
-            // Normalize balances by context
-            if hint != .some(.creditCard) && hint != .some(.loan) {
-                for i in staged.balances.indices { if staged.balances[i].balance < 0 { staged.balances[i].balance = -staged.balances[i].balance } }
+            // Normalize snapshot signs by account class so review is consistent across statement formats.
+            for i in staged.balances.indices {
+                switch hint {
+                case .some(.creditCard), .some(.loan):
+                    if staged.balances[i].balance > 0 {
+                        staged.balances[i].balance = -staged.balances[i].balance
+                    }
+                case .some(.bank):
+                    if staged.balances[i].balance < 0 {
+                        staged.balances[i].balance = -staged.balances[i].balance
+                    }
+                default:
+                    break
+                }
             }
 
             // Suppress CC coercion if hint says otherwise
@@ -211,6 +230,9 @@ import UniformTypeIdentifiers
             await MainActor.run {
                 if let h = hint {
                     self.vm.newAccountType = accountType(from: h)
+                }
+                if staged.suggestedAccountType == nil {
+                    staged.suggestedAccountType = self.vm.newAccountType
                 }
                 self.vm.staged = staged
                 self.vm.mappingSession = nil
@@ -309,7 +331,23 @@ import UniformTypeIdentifiers
         }
     }
 
-    // MARK: - Helpers (balance de-dup)
+    // MARK: - Helpers (de-dup)
+    private func deduplicateStagedTransactions(_ transactions: [StagedTransaction]) -> [StagedTransaction] {
+        var seen: Set<String> = []
+        var deduplicated: [StagedTransaction] = []
+        deduplicated.reserveCapacity(transactions.count)
+
+        for transaction in transactions where seen.insert(transaction.hashKey).inserted {
+            deduplicated.append(transaction)
+        }
+
+        if deduplicated.count != transactions.count {
+            AMLogging.log("StatementImportCoordinator: removed duplicate staged PDF transactions — before=\(transactions.count) after=\(deduplicated.count)", component: "Import")
+        }
+
+        return deduplicated
+    }
+
     private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {
         if snaps.isEmpty { return snaps }
         var chosen: [String: StagedBalance] = [:]

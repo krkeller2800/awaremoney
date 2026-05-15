@@ -117,18 +117,20 @@ struct ReviewImportView: View {
                     } label: {
                         Image(systemName: "questionmark.circle")
                     }
+                    .accessibilityLabel("What Approve and Save does")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     if (staged.sourceFileName.lowercased().hasSuffix(".pdf") || hasStagedPreviewData) {
-                        Button {
+                        PlanToolbarButton(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Trans", fixedWidth: 90) {
                             AMLogging.log("ReviewImportView: View Statement tapped — filename=\(staged.sourceFileName)", component: "ReviewImportView")
                             showPDFSheet = true
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "doc.text.magnifyingglass")
-                                Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Trans")
-                            }
                         }
+//                        label: {
+//                            HStack(spacing: 6) {
+//                                Text(staged.sourceFileName.lowercased().hasSuffix(".pdf") ? "View PDF" : "View Trans")
+//                                Image(systemName: "doc.text.magnifyingglass")
+//                            }
+//                        }
                         .buttonStyle(.bordered)
                     }
                 }
@@ -322,9 +324,9 @@ struct ReviewImportView: View {
 //                NavigationStack { ContentUnavailableView("No routing info", systemImage: "questionmark.circle") }
 //            }
 //        }
-        .fullScreenCover(isPresented: $showHelpSheet) {
-            NavigationStack { HelpVideosView() }
-                .ignoresSafeArea()
+        .sheet(isPresented: $showHelpSheet) {
+            ReviewImportHelpView()
+                .presentationDetents([.medium])
         }
         .alert("Free Imports Used", isPresented: $showImportLimitAlert) {
             Button("Purchase Lifetime") {
@@ -1234,8 +1236,21 @@ struct ReviewImportView: View {
         if let suggested = staged.suggestedAccountType {
             vm.newAccountType = suggested
         }
-        if vm.newAccountType == .creditCard && vm.creditCardFlipOverride == nil {
-            vm.creditCardFlipOverride = settings.creditCardFlipDefault
+
+        if var currentStaged = vm.staged {
+            if vm.newAccountType == .loan || vm.newAccountType == .creditCard {
+                for index in currentStaged.balances.indices where currentStaged.balances[index].balance > 0 {
+                    currentStaged.balances[index].balance = -currentStaged.balances[index].balance
+                }
+            } else if vm.newAccountType == .checking || vm.newAccountType == .savings || vm.newAccountType == .cash {
+                for index in currentStaged.balances.indices where currentStaged.balances[index].balance < 0 {
+                    currentStaged.balances[index].balance = -currentStaged.balances[index].balance
+                }
+            }
+            vm.staged = currentStaged
+        }
+        if vm.newAccountType == .creditCard && vm.creditCardFlipOverride == nil && settings.creditCardFlipDefault {
+            vm.creditCardFlipOverride = true
         }
         // Prefer upstream VM institution (from router) over parser-inferred; then fall back to parser
         let upstream = vm.userInstitutionName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1881,6 +1896,38 @@ struct ReviewImportView: View {
             UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
         }
         #endif
+    }
+}
+
+private struct ReviewImportHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Approve & Save finishes this import. Until you tap it, nothing on this screen is committed.")
+                }
+
+                Section("When you approve") {
+                    Label("Transactions, balances, and holdings marked for import are saved.", systemImage: "tray.and.arrow.down")
+                    Label("The routing choices on this screen decide which account each item belongs to.", systemImage: "arrow.triangle.branch")
+                    Label("If you create a new account, DebtScope saves that account with the selected type and institution.", systemImage: "plus.circle")
+                    Label("For loans and credit cards, any payment or APR values you entered are saved to the routed account.", systemImage: "percent")
+                }
+
+                Section {
+                    Text("If something does not look right yet, change the routing or fields first. Closing this review without approving leaves the import unsaved.")
+                }
+            }
+            .navigationTitle("Approve & Save")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 

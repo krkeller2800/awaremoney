@@ -50,6 +50,12 @@ struct QAccountsListView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                                 .frame(maxWidth: .infinity, alignment: .trailing)
                         }
+
+                        Text(self.formattedBalanceDate(for: account))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.trailing, UIDevice.type == "iPhone" ? 40 : 25) // reserve space for navigation cue and trailing button
                     .overlay(alignment: .trailing) {
@@ -142,8 +148,12 @@ struct QAccountsListView: View {
 
 // MARK: - Helpers
 private extension QAccountsListView {
+    func latestBalanceSnapshot(for account: Account) -> BalanceSnapshot? {
+        account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first
+    }
+
     func latestBalance(for account: Account) -> Decimal? {
-        return account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first?.balance
+        latestBalanceSnapshot(for: account)?.balance
     }
 
     func formattedBalance(for account: Account) -> String {
@@ -151,6 +161,11 @@ private extension QAccountsListView {
         let nf = NumberFormatter()
         nf.numberStyle = .currency
         return nf.string(from: NSDecimalNumber(decimal: bal)) ?? "\(bal)"
+    }
+
+    func formattedBalanceDate(for account: Account) -> String {
+        guard let date = latestBalanceSnapshot(for: account)?.asOfDate else { return "No balance date" }
+        return "As of \(date.formatted(date: .abbreviated, time: .omitted))"
     }
 
     func formattedAPR(for account: Account) -> String? {

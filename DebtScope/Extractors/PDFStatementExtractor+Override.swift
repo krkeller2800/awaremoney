@@ -1,10 +1,26 @@
 import Foundation
 
 extension PDFStatementExtractor {
-    // Passthrough overload that accepts an optional user override but currently delegates to the existing API.
-    // This provides a single place to honor overrides later without changing call sites again.
     static func parse(url: URL, mode: PDFStatementExtractor.Mode, override: StatementImporter.UserOverride?) throws -> ([[String]], [String]) {
-        AMLogging.log("PDFStatementExtractor+Override: parse invoked with mode=\(mode) override=\(String(describing: override))", component: "PDFStatementExtractor")
-        return try parse(url: url, mode: mode)
+        let mappedOverride: AccountKind? = {
+            switch override {
+            case .creditCard:
+                return .unknown // Credit cards intentionally use the extractor's unknown bucket, then normalize to creditCard downstream.
+            case .loan:
+                return .loan
+            case .bank:
+                return .checking
+            case .brokerage:
+                return .investment
+            case .none:
+                return nil
+            }
+        }()
+
+        AMLogging.log(
+            "PDFStatementExtractor+Override: parse invoked with mode=\(mode) override=\(String(describing: override)) mappedOverride=\(String(describing: mappedOverride))",
+            component: "PDFStatementExtractor"
+        )
+        return try parse(url: url, mode: mode, userOverride: mappedOverride)
     }
 }

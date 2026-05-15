@@ -219,6 +219,10 @@ enum PDFStatementExtractor {
             pattern: #"^((?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))(?:\s+(?:\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{2,4})?))?\s+(.*)$"#,
             options: [.caseInsensitive]
         )
+        let dateOnlyRegex = try NSRegularExpression(
+            pattern: "^" + dateToken + "$",
+            options: [.caseInsensitive]
+        )
 
         // MARK: - Layout-based OCR scaffold (tokens/rows/columns)
         struct LayoutRecognizedToken {
@@ -841,6 +845,51 @@ enum PDFStatementExtractor {
             regex.firstMatch(in: s, options: [], range: NSRange(location: 0, length: s.utf16.count))
         }
 
+        func isDateOnlyLine(_ s: String) -> Bool {
+            firstMatch(dateOnlyRegex, in: s) != nil
+        }
+
+        // Some credit-card PDFs flatten table columns into stacked lines instead of one textual row:
+        // transaction date, optional post date, description line(s), then amount. Rebuild that shape here.
+        func attemptStackedCreditCardRow(in srcLines: [String], start: Int) -> (row: [String], consumed: Int)? {
+            guard Self.documentLooksCreditCard(lines) || Self.documentLooksCreditCardLoose(lines) else { return nil }
+            guard start < srcLines.count, isDateOnlyLine(srcLines[start]) else { return nil }
+
+            var j = start + 1
+            var dateRaw = srcLines[start]
+            if j < srcLines.count, isDateOnlyLine(srcLines[j]) {
+                dateRaw = srcLines[j] // Prefer post date when present.
+                j += 1
+            }
+
+            var descParts: [String] = []
+            var amountStr: String? = nil
+
+            while j < srcLines.count {
+                let line = srcLines[j]
+                if isDateOnlyLine(line) || isPageBreak(line) || isTotalsOrSectionLine(line) || isStatementPeriodLine(line) || isThroughContinuationLine(line) || isAccountMetaLine(line) {
+                    break
+                }
+
+                if firstMatch(amountOnlyRegex, in: line) != nil {
+                    amountStr = sanitizeAmount(line)
+                    j += 1
+                    break
+                }
+
+                if !isNoiseLine(line) {
+                    descParts.append(line)
+                }
+                j += 1
+            }
+
+            guard let amountStr, !descParts.isEmpty else { return nil }
+            let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
+            let desc = cleanDesc(descParts.joined(separator: " "))
+            guard !desc.isEmpty else { return nil }
+            return ([date, desc, amountStr, ""], j - start)
+        }
+
         // Attempt to reconstruct a multi-line row starting at index `start`.
         // Pattern: first line starts with date and description; subsequent lines that do not start with a date
         // are appended to description until an amount token is found (either on a continuation line or as amount-only line).
@@ -1029,6 +1078,17 @@ enum PDFStatementExtractor {
                         else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.log("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
                         else if contextIndicatesInvestment() && !docLooksLoan { currentAccount = .investment; AMLogging.log("PDF context => INVESTMENT at line \(i)", component: "PDFStatementExtractor") }
                     }
+                }
+
+                // Try stacked credit-card rows before the generic multi-line path.
+                if let stacked = attemptStackedCreditCardRow(in: lines, start: i) {
+                    var row = stacked.row
+                    if row.count >= 3 { row[2] = applySectionSign(amount: row[2]) }
+                    row.append(accountLabelForRow())
+                    rows.append(row)
+                    AMLogging.log("PDF stacked credit-card row matched (\(accountLabelForRow())) at line \(i) consuming \(stacked.consumed) lines", component: "PDFStatementExtractor")
+                    i += stacked.consumed
+                    continue
                 }
 
                 // Try multi-line reconstruction before strict single-line match

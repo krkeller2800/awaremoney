@@ -1840,28 +1840,37 @@ final class ImportViewModel: ObservableObject {
             if !unlabeled.isEmpty { groupsToProcess.append((label: "unlabeled", transactions: unlabeled)) }
         }
 
+        var seenHashesByAccountID: [UUID: Set<String>] = [:]
+
         for entry in groupsToProcess {
             guard let account = accountsByLabel[entry.label] else { continue }
             AMLogging.log("Processing group '\(entry.label)' for account: \(account.name) — tx: \(entry.transactions.count)", component: "ImportViewModel")
             let shouldFlip = shouldFlipCreditCardAmounts(for: account, transactions: entry.transactions)
             AMLogging.log("Credit card sign decision (data-driven) — flip: \(shouldFlip) for account: \(account.name)", component: "ImportViewModel")
 
-            // De-dupe set per account
-            let existingHashes = try existingTransactionHashes(for: account, context: context)
+            // De-dupe per account against both previously saved rows and duplicates inside this import.
+            var seenHashes = try seenHashesByAccountID[account.id] ?? existingTransactionHashes(for: account, context: context)
+            var newTransactions: [StagedTransaction] = []
+            newTransactions.reserveCapacity(entry.transactions.count)
 
-            // Compute new transactions for this account
-            let newTransactions = entry.transactions.filter { t in
-                let adjustedAmount = (account.type == .creditCard && shouldFlip) ? -t.amount : t.amount
+            for transaction in entry.transactions {
+                let adjustedAmount = (account.type == .creditCard && shouldFlip) ? -transaction.amount : transaction.amount
                 let saveKey = Hashing.hashKey(
-                    date: t.datePosted,
+                    date: transaction.datePosted,
                     amount: adjustedAmount,
-                    payee: t.payee,
-                    memo: t.memo,
-                    symbol: t.symbol,
-                    quantity: t.quantity
+                    payee: transaction.payee,
+                    memo: transaction.memo,
+                    symbol: transaction.symbol,
+                    quantity: transaction.quantity
                 )
-                return !existingHashes.contains(saveKey)
+                if seenHashes.insert(saveKey).inserted {
+                    newTransactions.append(transaction)
+                } else {
+                    AMLogging.log("Skipping duplicate transaction before save — account=\(account.name) hash=\(saveKey)", component: "ImportViewModel")
+                }
             }
+
+            seenHashesByAccountID[account.id] = seenHashes
 
             for t in newTransactions {
                 let adjustedAmount = (account.type == .creditCard && shouldFlip) ? -t.amount : t.amount
@@ -1972,9 +1981,12 @@ final class ImportViewModel: ObservableObject {
             }
             let rawBalance = b.balance
             let coercedBalance: Decimal = {
-                if account.type == .loan || account.type == .creditCard {
+                switch account.type {
+                case .loan, .creditCard:
                     return rawBalance <= 0 ? rawBalance : -rawBalance
-                } else {
+                case .checking, .savings, .cash:
+                    return rawBalance >= 0 ? rawBalance : -rawBalance
+                default:
                     return rawBalance
                 }
             }()

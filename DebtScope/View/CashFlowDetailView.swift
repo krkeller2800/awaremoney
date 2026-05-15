@@ -47,6 +47,7 @@ struct CashFlowDetailView: View {
 
     private struct ImportedStatementPreview {
         var balance: Decimal?
+        var balanceDate: Date?
         var typicalPayment: Decimal?
         var aprFraction: Decimal?
         var aprScale: Int?
@@ -58,6 +59,7 @@ struct CashFlowDetailView: View {
         let label: String
         let beginningBalance: Decimal?
         let endingBalance: Decimal?
+        let endingBalanceDate: Date?
     }
 
     private static let importTypes: [UTType] = {
@@ -351,6 +353,7 @@ struct CashFlowDetailView: View {
 
         return ImportedStatementPreview(
             balance: latestBalance?.balance.magnitude,
+            balanceDate: latestBalance?.asOfDate,
             typicalPayment: typicalPayment,
             aprFraction: aprFraction,
             aprScale: aprScale,
@@ -444,6 +447,7 @@ struct CashFlowDetailView: View {
 
             return ImportedStatementPreview(
                 balance: latestBalance?.balance.magnitude,
+                balanceDate: latestBalance?.asOfDate,
                 typicalPayment: typicalPayment,
                 aprFraction: aprFraction,
                 aprScale: aprScale,
@@ -476,7 +480,8 @@ struct CashFlowDetailView: View {
                 id: key.lowercased(),
                 label: displayLabel(for: key),
                 beginningBalance: sorted.count > 1 ? sorted.first?.balance.magnitude : nil,
-                endingBalance: sorted.last?.balance.magnitude
+                endingBalance: sorted.last?.balance.magnitude,
+                endingBalanceDate: sorted.last?.asOfDate
             )
         }
     }
@@ -495,7 +500,8 @@ struct CashFlowDetailView: View {
                     beginningBalance: summary.beginningBalance ?? existing?.beginningBalance,
                     // Keep the first discovered ending balance authoritative. Later section parsers
                     // can still enrich missing fields, but should not overwrite summary totals.
-                    endingBalance: existing?.endingBalance ?? summary.endingBalance
+                    endingBalance: existing?.endingBalance ?? summary.endingBalance,
+                    endingBalanceDate: existing?.endingBalanceDate ?? summary.endingBalanceDate
                 )
             }
         }
@@ -589,7 +595,8 @@ struct CashFlowDetailView: View {
                     id: key,
                     label: displayLabel(for: key),
                     beginningBalance: beginningBalance,
-                    endingBalance: endingBalance
+                    endingBalance: endingBalance,
+                    endingBalanceDate: nil
                 )
             }
         }
@@ -745,7 +752,8 @@ struct CashFlowDetailView: View {
                         id: label,
                         label: displayLabel(for: label),
                         beginningBalance: beginningBalance,
-                        endingBalance: endingBalance
+                        endingBalance: endingBalance,
+                        endingBalanceDate: nil
                     )
                 )
             }
@@ -812,7 +820,8 @@ struct CashFlowDetailView: View {
                     id: key,
                     label: displayLabel(for: key),
                     beginningBalance: nil,
-                    endingBalance: endingBalance
+                    endingBalance: endingBalance,
+                    endingBalanceDate: nil
                 )
             )
         }
@@ -1059,7 +1068,6 @@ struct CashFlowDetailView: View {
         let fallbackAPRScale = inferredAPRScale(from: aprPercentInput)
 
         let routedURL = stageURLToCaches(url)
-        lastImportedURL = routedURL
         Task { @MainActor in
             if let fallbackAccountType {
                 vm.newAccountType = fallbackAccountType
@@ -1348,14 +1356,17 @@ struct CashFlowDetailView: View {
             },
             set: { presented in
                 if !presented {
-                    if let url = vm.lastPickedLocalURL {
-                        lastImportedURL = url
-                    }
                     vm.staged = nil
                     vm.mappingSession = nil
+
+                    // Keep the detail pane tied to persisted account data only. A cancelled review
+                    // should not leave the just-picked file visible as though it had been saved.
                     if let id = selectedAccountID {
                         updateLastImportedURL(for: id)
+                    } else {
+                        lastImportedURL = nil
                     }
+
                     if let id = vm.selectedAccountID {
                         externalSelectedAccountID = id
                         let account = accounts.first(where: { $0.id == id })
@@ -1522,12 +1533,14 @@ struct CashFlowDetailView: View {
                 importedAPRFraction: model.preview?.aprFraction,
                 importedAPRScale: model.preview?.aprScale,
                 importedBalance: model.preview?.balance,
+                importedBalanceDate: model.preview?.balanceDate,
                 importedBankBalanceSummaries: model.preview?.bankBalanceSummaries.map {
                     DetectionReviewSheet.ImportedBankBalanceSummary(
                         id: $0.id,
                         label: $0.label,
                         beginningBalance: $0.beginningBalance,
-                        endingBalance: $0.endingBalance
+                        endingBalance: $0.endingBalance,
+                        endingBalanceDate: $0.endingBalanceDate
                     )
                 } ?? [],
                 routeConfirmationText: model.routeConfirmationText,
@@ -1562,12 +1575,14 @@ struct CashFlowDetailView: View {
                 importedAPRFraction: model.preview?.aprFraction,
                 importedAPRScale: model.preview?.aprScale,
                 importedBalance: model.preview?.balance,
+                importedBalanceDate: model.preview?.balanceDate,
                 importedBankBalanceSummaries: model.preview?.bankBalanceSummaries.map {
                     DetectionReviewSheet.ImportedBankBalanceSummary(
                         id: $0.id,
                         label: $0.label,
                         beginningBalance: $0.beginningBalance,
-                        endingBalance: $0.endingBalance
+                        endingBalance: $0.endingBalance,
+                        endingBalanceDate: $0.endingBalanceDate
                     )
                 } ?? [],
                 routeConfirmationText: model.routeConfirmationText,

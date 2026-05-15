@@ -261,6 +261,7 @@ struct DebtPayoffDetailView: View {
         var institution: String?
         var statementType: StatementType?
         var balance: Decimal?
+        var balanceDate: Date?
         var typicalPayment: Decimal?
         var aprFraction: Decimal?
         var aprScale: Int?
@@ -272,6 +273,7 @@ struct DebtPayoffDetailView: View {
         let label: String
         let beginningBalance: Decimal?
         let endingBalance: Decimal?
+        let endingBalanceDate: Date?
     }
     @FocusState private var focusedField: FocusedField?
     private enum FocusedField: Hashable {
@@ -741,7 +743,8 @@ struct DebtPayoffDetailView: View {
                 id: summary.id,
                 label: summary.label,
                 beginningBalance: summary.beginningBalance,
-                endingBalance: summary.endingBalance
+                endingBalance: summary.endingBalance,
+                endingBalanceDate: summary.endingBalanceDate
             )
         }
         DetectionReviewSheet(
@@ -757,6 +760,7 @@ struct DebtPayoffDetailView: View {
             importedAPRFraction: importedPreview?.aprFraction,
             importedAPRScale: importedPreview?.aprScale,
             importedBalance: importedPreview?.balance,
+            importedBalanceDate: importedPreview?.balanceDate,
             importedBankBalanceSummaries: importedBankSummaries,
             routeConfirmationText: model.routeConfirmationText,
             detectedAccounts: $detectedAccounts,
@@ -930,6 +934,7 @@ struct DebtPayoffDetailView: View {
                 institution: fallbackInstitution,
                 statementType: fallbackType,
                 balance: latestBalance?.balance.magnitude,
+                balanceDate: latestBalance?.asOfDate,
                 typicalPayment: typicalPayment,
                 aprFraction: aprFraction,
                 aprScale: aprScale,
@@ -961,7 +966,8 @@ struct DebtPayoffDetailView: View {
                     id: key,
                     label: displayLabel(for: key),
                     beginningBalance: sorted.count > 1 ? sorted.first?.balance.magnitude : nil,
-                    endingBalance: sorted.last?.balance.magnitude
+                    endingBalance: sorted.last?.balance.magnitude,
+                    endingBalanceDate: sorted.last?.asOfDate
                 )
             }
     }
@@ -995,7 +1001,8 @@ struct DebtPayoffDetailView: View {
                     id: key,
                     label: displayLabel(for: key),
                     beginningBalance: summary.beginningBalance ?? existing?.beginningBalance,
-                    endingBalance: existing?.endingBalance ?? summary.endingBalance
+                    endingBalance: existing?.endingBalance ?? summary.endingBalance,
+                    endingBalanceDate: existing?.endingBalanceDate ?? summary.endingBalanceDate
                 )
             }
         }
@@ -1032,7 +1039,7 @@ struct DebtPayoffDetailView: View {
                   let endingBalance = parseAmount(String(text[amountRange])) else {
                 continue
             }
-            summaries.append(BankBalanceSummary(id: key, label: displayLabel(for: key), beginningBalance: nil, endingBalance: endingBalance))
+            summaries.append(BankBalanceSummary(id: key, label: displayLabel(for: key), beginningBalance: nil, endingBalance: endingBalance, endingBalanceDate: nil))
         }
         return summaries.isEmpty ? nil : summaries
     }
@@ -1133,7 +1140,8 @@ struct DebtPayoffDetailView: View {
                     id: key,
                     label: displayLabel(for: key),
                     beginningBalance: beginningBalance,
-                    endingBalance: endingBalance
+                    endingBalance: endingBalance,
+                    endingBalanceDate: nil
                 )
             }
         }

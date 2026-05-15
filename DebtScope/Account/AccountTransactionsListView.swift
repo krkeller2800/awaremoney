@@ -44,6 +44,7 @@ struct AccountTransactionsListView: View {
                             Spacer()
                             VStack(alignment: .trailing, spacing: 2) {
                                 Text(format(amount: snap.balance))
+                                    .foregroundStyle(snap.balance < 0 ? .red : .primary)
                                 if let apr = snap.interestRateAPR {
                                     Text("APR: \(formatAPR(apr, scale: snap.interestRateScale))")
                                         .font(.caption)
@@ -60,7 +61,7 @@ struct AccountTransactionsListView: View {
                                 Text(tx.datePosted, style: .date)
                                 Spacer()
                                 Text(format(amount: tx.amount))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(tx.amount < 0 ? .red : .primary)
                             }
                         }
                     }
