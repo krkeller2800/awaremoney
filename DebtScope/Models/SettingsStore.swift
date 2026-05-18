@@ -49,6 +49,10 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(didInitializeReserveAnchors, forKey: "didInitializeReserveAnchors") }
     }
 
+    @Published var didMigrateBillFundingAllocations: Bool {
+        didSet { UserDefaults.standard.set(didMigrateBillFundingAllocations, forKey: "didMigrateBillFundingAllocations") }
+    }
+
     @Published var lastReserveUpdateMonth: String? {
         didSet { UserDefaults.standard.set(lastReserveUpdateMonth, forKey: "last_reserve_update_month") }
     }
@@ -79,6 +83,7 @@ final class SettingsStore: ObservableObject {
         #endif
 
         self.didInitializeReserveAnchors = UserDefaults.standard.object(forKey: "didInitializeReserveAnchors") as? Bool ?? false
+        self.didMigrateBillFundingAllocations = UserDefaults.standard.object(forKey: "didMigrateBillFundingAllocations") as? Bool ?? false
         self.lastReserveUpdateMonth = UserDefaults.standard.string(forKey: "last_reserve_update_month")
     }
 }

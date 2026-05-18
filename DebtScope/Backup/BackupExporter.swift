@@ -20,6 +20,7 @@ struct DataBackup: Codable {
     let importBatches: [ImportBatchDTO]
     let csvMappings: [CSVColumnMappingDTO]
     let cashFlowItems: [CashFlowItemDTO]
+    let billFundingAllocations: [BillFundingAllocationDTO]?
     let assetLiabilityLinks: [AssetLiabilityLinkDTO]
     let embeddedStatements: [EmbeddedStatementDTO]?
 }
@@ -118,6 +119,16 @@ struct CashFlowItemDTO: Codable {
     let reserveCycleStart: Date?
     let reserveLastSeededCycleStart: Date?
     let reserveAutoEnabled: Bool?
+    let fundingIncomeID: UUID?
+    let fundingAmount: Decimal?
+}
+
+struct BillFundingAllocationDTO: Codable {
+    let id: UUID
+    let billID: UUID
+    let incomeID: UUID
+    let amount: Decimal
+    let createdAt: Date
 }
 
 struct AssetLiabilityLinkDTO: Codable {
@@ -252,6 +263,7 @@ enum BackupExporter {
         let batches: [ImportBatch] = (try? context.fetch(FetchDescriptor<ImportBatch>())) ?? []
         let mappings: [CSVColumnMapping] = (try? context.fetch(FetchDescriptor<CSVColumnMapping>())) ?? []
         let cashFlows: [CashFlowItem] = (try? context.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+        let billFundingAllocations: [BillFundingAllocation] = (try? context.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
         let links: [AssetLiabilityLink] = (try? context.fetch(FetchDescriptor<AssetLiabilityLink>())) ?? []
 
         // Map to DTOs
@@ -351,7 +363,19 @@ enum BackupExporter {
                 reserveBalance: c.reserveBalance,
                 reserveCycleStart: c.reserveCycleStart,
                 reserveLastSeededCycleStart: c.reserveLastSeededCycleStart,
-                reserveAutoEnabled: c.reserveAutoEnabled
+                reserveAutoEnabled: c.reserveAutoEnabled,
+                fundingIncomeID: c.fundingIncomeID,
+                fundingAmount: c.fundingAmount
+            )
+        }
+
+        let fundingDTOs: [BillFundingAllocationDTO] = billFundingAllocations.map { allocation in
+            BillFundingAllocationDTO(
+                id: allocation.id,
+                billID: allocation.billID,
+                incomeID: allocation.incomeID,
+                amount: allocation.amount,
+                createdAt: allocation.createdAt
             )
         }
 
@@ -367,7 +391,7 @@ enum BackupExporter {
         let embeddedStatementDTOs: [EmbeddedStatementDTO]? = includeEmbeddedStatements ? Self.collectStatementPDFs(context: context) : nil
 
         AMLogging.log(
-            "BackupExporter: preparing manifest — accounts=\(accountDTOs.count) tx=\(txDTOs.count) balances=\(balDTOs.count) holdings=\(holdDTOs.count) batches=\(batchDTOs.count) mappings=\(mappingDTOs.count) cashFlows=\(cashDTOs.count) links=\(linkDTOs.count) embedded=\(embeddedStatementDTOs?.count ?? 0)",
+            "BackupExporter: preparing manifest — accounts=\(accountDTOs.count) tx=\(txDTOs.count) balances=\(balDTOs.count) holdings=\(holdDTOs.count) batches=\(batchDTOs.count) mappings=\(mappingDTOs.count) cashFlows=\(cashDTOs.count) fundingAllocations=\(fundingDTOs.count) links=\(linkDTOs.count) embedded=\(embeddedStatementDTOs?.count ?? 0)",
             component: "BackupExporter"
         )
 
@@ -382,7 +406,7 @@ enum BackupExporter {
         )
 
         let payload = DataBackup(
-            version: 2,
+            version: 3,
             generatedAt: Date(),
             settings: settingsDTO,
             accounts: accountDTOs,
@@ -392,6 +416,7 @@ enum BackupExporter {
             importBatches: batchDTOs,
             csvMappings: mappingDTOs,
             cashFlowItems: cashDTOs,
+            billFundingAllocations: fundingDTOs,
             assetLiabilityLinks: linkDTOs,
             embeddedStatements: embeddedStatementDTOs
         )

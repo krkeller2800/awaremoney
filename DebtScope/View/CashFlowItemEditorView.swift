@@ -10,6 +10,8 @@ public struct CashFlowItemEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: SettingsStore
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
+    @Query(sort: [SortDescriptor(\CashFlowItem.name, order: .forward)]) private var cashFlowItems: [CashFlowItem]
+    @Query private var fundingAllocations: [BillFundingAllocation]
 
     // Editable state
     @State private var name: String = ""
@@ -325,8 +327,10 @@ public struct CashFlowItemEditorView: View {
                 )
                 let cycleStart = item.reserveCycleStart ?? inferredStart
 
-                // Fixed-monthly model: monthly = amount / monthsPerCycle
-                let fixedMonthly = (working.amount / Decimal(sig.freqMonths))
+                let reserveTarget = max(0, working.amount - totalFundingForCurrentBill)
+
+                // Fixed-monthly model: monthly = uncovered amount / monthsPerCycle
+                let fixedMonthly = (reserveTarget / Decimal(sig.freqMonths))
 
                 // Expected by the start of the current month
                 let startOfThisMonth = cal.date(from: cal.dateComponents([.year, .month], from: now)) ?? now
@@ -355,6 +359,49 @@ public struct CashFlowItemEditorView: View {
                         Text("None").tag(nil as UUID?)
                         ForEach(accounts, id: \.id) { acct in
                             Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(Optional(acct.id))
+                        }
+                    }
+
+                    if !eligibleFundingIncomes.isEmpty {
+                        Text("Pay from non-monthly income")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        ForEach(eligibleFundingIncomes, id: \.id) { income in
+                            Toggle(isOn: Binding(
+                                get: { allocation(for: income) != nil },
+                                set: { isOn in
+                                    if isOn {
+                                        addAllocation(from: income)
+                                    } else {
+                                        removeAllocation(from: income)
+                                    }
+                                }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(income.name)
+                                    Text("\(formatCurrencyDecimal(availableFunding(for: income, excludingBill: item))) available")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            if let allocation = allocation(for: income) {
+                                LabeledContent("Using from \(income.name)") {
+                                    Text(formatCurrencyDecimal(allocation.amount))
+                                }
+                            }
+                        }
+
+                        if totalFundingForCurrentBill > 0 {
+                            LabeledContent("Covered by income") {
+                                Text(formatCurrencyDecimal(totalFundingForCurrentBill))
+                            }
+                            if reserveTarget > 0 {
+                                LabeledContent("Still save") {
+                                    Text(formatCurrencyDecimal(reserveTarget))
+                                }
+                            }
                         }
                     }
 
@@ -759,6 +806,8 @@ public struct CashFlowItemEditorView: View {
         item.notes = cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         item.ssaWednesday = ssaWednesday
         item.oneTimeSpreadMonthsOverride = oneTimeSpreadMonthsOverride
+        normalizeCurrentBillAllocations()
+        syncLegacyFundingCache()
         try? modelContext.save()
     }
 
@@ -793,11 +842,82 @@ public struct CashFlowItemEditorView: View {
             dayOfMonth: dayOfMonth,
             firstPaymentDate: firstPaymentDate,
             notes: item.notes,
-            ssaWednesday: ssaWednesday
+            ssaWednesday: ssaWednesday,
+            fundingIncomeID: item.fundingIncomeID,
+            fundingAmount: item.fundingAmount
         )
         // Carry over createdAt so date-based logic remains stable
         temp.createdAt = item.createdAt
         return temp
+    }
+
+    private var eligibleFundingIncomes: [CashFlowItem] {
+        cashFlowItems.filter {
+            $0.kind == .income && [.yearly, .semiAnnual, .quarterly, .oneTime].contains($0.frequency)
+        }
+    }
+
+    private var currentBillAllocations: [BillFundingAllocation] {
+        fundingAllocations.filter { $0.billID == item.id }
+    }
+
+    private var totalFundingForCurrentBill: Decimal {
+        currentBillAllocations.reduce(Decimal.zero) { $0 + $1.amount }
+    }
+
+    private func allocation(for income: CashFlowItem) -> BillFundingAllocation? {
+        currentBillAllocations.first(where: { $0.incomeID == income.id })
+    }
+
+    private func allocatedFunding(for income: CashFlowItem, excludingBill: CashFlowItem? = nil) -> Decimal {
+        fundingAllocations
+            .filter { allocation in
+                allocation.incomeID == income.id && allocation.billID != excludingBill?.id
+            }
+            .reduce(Decimal.zero) { $0 + $1.amount }
+    }
+
+    private func availableFunding(for income: CashFlowItem, excludingBill: CashFlowItem? = nil) -> Decimal {
+        max(0, income.amount - allocatedFunding(for: income, excludingBill: excludingBill))
+    }
+
+    private func addAllocation(from income: CashFlowItem) {
+        guard allocation(for: income) == nil else { return }
+        let remainingBillNeed = max(0, amountValue - totalFundingForCurrentBill)
+        let amount = min(availableFunding(for: income, excludingBill: item), remainingBillNeed)
+        guard amount > 0 else { return }
+        modelContext.insert(BillFundingAllocation(billID: item.id, incomeID: income.id, amount: amount))
+        syncLegacyFundingCache(pendingAdditionalAmount: amount, preferredIncomeID: income.id)
+        try? modelContext.save()
+    }
+
+    private func removeAllocation(from income: CashFlowItem) {
+        guard let allocation = allocation(for: income) else { return }
+        modelContext.delete(allocation)
+        syncLegacyFundingCache(removingIncomeID: income.id)
+        try? modelContext.save()
+    }
+
+    private func normalizeCurrentBillAllocations() {
+        var remaining = max(0, amountValue)
+        for allocation in currentBillAllocations.sorted(by: { $0.createdAt < $1.createdAt }) {
+            let capped = min(allocation.amount, remaining)
+            allocation.amount = capped
+            remaining -= capped
+        }
+    }
+
+    private func syncLegacyFundingCache(
+        pendingAdditionalAmount: Decimal = 0,
+        preferredIncomeID: UUID? = nil,
+        removingIncomeID: UUID? = nil
+    ) {
+        let persistedTotal = currentBillAllocations
+            .filter { $0.incomeID != removingIncomeID }
+            .reduce(Decimal.zero) { $0 + $1.amount }
+        let total = persistedTotal + pendingAdditionalAmount
+        item.fundingAmount = total
+        item.fundingIncomeID = preferredIncomeID ?? currentBillAllocations.first(where: { $0.incomeID != removingIncomeID })?.incomeID
     }
 
     @MainActor

@@ -26,6 +26,10 @@ final class CashFlowItem {
     var reserveLastSeededCycleStart: Date? = nil
     var reserveAutoEnabled: Bool = false
 
+    // Optional direct funding from a non-monthly income source.
+    var fundingIncomeID: UUID? = nil
+    var fundingAmount: Decimal = 0
+
     // Optional: link to an account (e.g., paid from or associated account)
     var account: Account?
 
@@ -56,7 +60,9 @@ final class CashFlowItem {
         reserveBalance: Decimal = 0,
         reserveCycleStart: Date? = nil,
         reserveLastSeededCycleStart: Date? = nil,
-        reserveAutoEnabled: Bool = false
+        reserveAutoEnabled: Bool = false,
+        fundingIncomeID: UUID? = nil,
+        fundingAmount: Decimal = 0
     ) {
         self.id = id
         self.kindRaw = kind.rawValue
@@ -74,6 +80,8 @@ final class CashFlowItem {
         self.reserveCycleStart = reserveCycleStart
         self.reserveLastSeededCycleStart = reserveLastSeededCycleStart
         self.reserveAutoEnabled = reserveAutoEnabled
+        self.fundingIncomeID = fundingIncomeID
+        self.fundingAmount = fundingAmount
     }
 
     // Convenience property for legacy code paths

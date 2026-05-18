@@ -62,5 +62,19 @@ final class BillReservePlannerTests: XCTestCase {
         XCTAssertEqual(plan?.monthlyContribution, 0)
         XCTAssertEqual(plan?.seedAmount, 0)
     }
+
+    func testPlanReserveUsesOnlyUncoveredAmountWhenIncomeFundsPartOfBill() throws {
+        var asOfC = DateComponents(); asOfC.year = 2026; asOfC.month = 1; asOfC.day = 1
+        let asOf = Calendar.current.date(from: asOfC)!
+        var dueC = DateComponents(); dueC.year = 2026; dueC.month = 5; dueC.day = 1
+        let due = Calendar.current.date(from: dueC)!
+        let item = makeBill(amount: 600, freq: .yearly, first: due)
+        item.fundingAmount = 240
+
+        let plan = BillReservePlanner.planReserve(for: item, asOf: asOf, currentReserve: 0)
+
+        XCTAssertEqual(plan?.monthlyContribution, 30)
+        XCTAssertEqual(plan?.seedAmount, 240)
+    }
 }
 #endif

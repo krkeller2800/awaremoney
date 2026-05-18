@@ -343,7 +343,7 @@ public struct IncomeScheduler {
             default:           periodMonths = 0
             }
 
-            let total = round2(item.amount)
+            let total = round2(max(0, item.amount - item.fundingAmount))
             let even = round2(total / Decimal(N))
             let remainder = total - (even * Decimal(N - 1))
 
@@ -434,7 +434,7 @@ public struct IncomeScheduler {
             default:           periodMonths = 0
             }
 
-            let total = round2(item.amount)
+            let total = round2(max(0, item.amount - item.fundingAmount))
             let even = round2(total / Decimal(N))
             let remainder = total - (even * Decimal(N - 1))
 

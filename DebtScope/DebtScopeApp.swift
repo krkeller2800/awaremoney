@@ -61,18 +61,7 @@ struct DebtScopeApp: App {
     }
 
     init() {
-        let schema = Schema([
-            Account.self,
-            Transaction.self,
-            Security.self,
-            HoldingSnapshot.self,
-            BalanceSnapshot.self,
-            ImportBatch.self,
-            CSVColumnMapping.self,
-            CashFlowItem.self,
-            AssetLiabilityLink.self,
-            AccountImportMapping.self
-        ])
+        let schema = Schema(DebtScopeSchemaV2.models)
 
         // Ensure Application Support directory exists and build a file URL for the store
         let fm = FileManager.default
@@ -99,6 +88,7 @@ struct DebtScopeApp: App {
 
         runInstitutionMigrationIfNeeded()
         ReserveMigrationService.initializeReserveAnchorsIfNeeded(container: container, settings: settings)
+        BillFundingAllocationMigrationService.migrateLegacyFundingIfNeeded(container: container, settings: settings)
     }
 
     var body: some Scene {
@@ -146,26 +136,20 @@ struct DebtScopeApp: App {
         .modelContainer(container)
     }
 
-    // Build the SwiftData container with a retry after deleting an incompatible store
+    // Build the SwiftData container without ever deleting the user's store on failure.
     private static func buildModelContainer(schema: Schema, storeURL: URL) -> ModelContainer {
         do {
             let configuration = ModelConfiguration(url: storeURL)
-            return try ModelContainer(for: schema, configurations: configuration)
+            return try ModelContainer(
+                for: schema,
+                migrationPlan: DebtScopeMigrationPlan.self,
+                configurations: configuration
+            )
         } catch {
-            let firstError = error
-            AMLogging.error("Initial ModelContainer creation failed: \(firstError)", component: "App")
-            AMLogging.log("Removing store and retrying at path=\(storeURL.path)", component: "App")
-            Self.removeStoreFiles(at: storeURL)
-            do {
-                let configuration = ModelConfiguration(url: storeURL)
-                return try ModelContainer(for: schema, configurations: configuration)
-            } catch {
-                let secondError = error
-                AMLogging.error("Second ModelContainer creation failed: \(secondError)", component: "App")
-                // Run detailed diagnostics to help identify the root cause
-                Self.diagnoseModelContainerFailure(schema: schema, storeURL: storeURL, firstError: firstError, secondError: secondError)
-                fatalError("Failed to create ModelContainer after deleting store: \(secondError)")
-            }
+            AMLogging.error("ModelContainer creation failed: \(error)", component: "App")
+            Self.preserveStoreSnapshotIfPossible(at: storeURL)
+            Self.diagnoseModelContainerFailure(schema: schema, storeURL: storeURL, firstError: error, secondError: error)
+            fatalError("Failed to create ModelContainer without modifying the existing store: \(error)")
         }
     }
 
@@ -217,7 +201,8 @@ struct DebtScopeApp: App {
             CSVColumnMapping.self,
             CashFlowItem.self,
             AssetLiabilityLink.self,
-            AccountImportMapping.self
+            AccountImportMapping.self,
+            BillFundingAllocation.self
         ]
 
         for model in modelTypes {
@@ -232,7 +217,41 @@ struct DebtScopeApp: App {
         }
     }
 
-    // Remove the SQLite store and its sidecar files if present
+    // Preserve a timestamped copy of the store and sidecars before surfacing a startup failure.
+    // This is intentionally non-destructive: if migration fails, user data remains in place.
+    private static func preserveStoreSnapshotIfPossible(at url: URL) {
+        let fm = FileManager.default
+        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let recoveryDirectory = url.deletingLastPathComponent().appendingPathComponent("Recovery", isDirectory: true)
+        do {
+            try fm.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
+        } catch {
+            AMLogging.error("Failed to create recovery directory: \(error)", component: "App")
+            return
+        }
+
+        let candidates = [
+            url,
+            URL(fileURLWithPath: url.path + "-wal"),
+            URL(fileURLWithPath: url.path + "-shm")
+        ]
+
+        for source in candidates where fm.fileExists(atPath: source.path) {
+            let destination = recoveryDirectory.appendingPathComponent("\(source.lastPathComponent).\(timestamp).bak")
+            do {
+                if fm.fileExists(atPath: destination.path) {
+                    try fm.removeItem(at: destination)
+                }
+                try fm.copyItem(at: source, to: destination)
+                AMLogging.always("Preserved recovery copy: \(destination.lastPathComponent)", component: "App")
+            } catch {
+                AMLogging.error("Failed to preserve recovery copy for \(source.lastPathComponent): \(error)", component: "App")
+            }
+        }
+    }
+
+    // Remove the SQLite store and its sidecar files if present.
+    // Kept only as a private utility for deliberate future recovery tooling; normal startup never calls this.
     private static func removeStoreFiles(at url: URL) {
         let fm = FileManager.default
         let base = url

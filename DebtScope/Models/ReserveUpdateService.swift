@@ -67,8 +67,9 @@ final class ReserveUpdateService {
                     if today < nextDueDate || currentStart >= nextDueDate {
                         break
                     }
-                    if bill.reserveBalance >= bill.amount {
-                        bill.reserveBalance = (bill.reserveBalance - bill.amount).rounded(2)
+                    let reserveTarget = max(0, bill.amount - bill.fundingAmount)
+                    if bill.reserveBalance >= reserveTarget {
+                        bill.reserveBalance = (bill.reserveBalance - reserveTarget).rounded(2)
                         anyChanges = true
                         AMLogging.log("ReserveUpdate: settled \(bill.name) on due date \(nextDueDate)", component: "ReserveUpdate")
                     } else {
@@ -106,7 +107,8 @@ final class ReserveUpdateService {
 
     private func planReserve(for bill: CashFlowItem, asOf today: Date, currentReserve: Decimal, currentCycleStart: Date) -> ReservePlan {
         let freqMonths = max(1, bill.frequency.normalized.monthsPerCycle)
-        let monthlyContribution = (bill.amount / Decimal(freqMonths)).rounded(2)
+        let reserveTarget = max(0, bill.amount - bill.fundingAmount)
+        let monthlyContribution = (reserveTarget / Decimal(freqMonths)).rounded(2)
 
         // Seed logic: catch up to what should have been saved by the start of the current calendar month
         let startOfThisMonth = Self.startOfMonth(today)

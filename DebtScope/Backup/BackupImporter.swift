@@ -41,6 +41,8 @@ struct BackupImportSummary: Sendable {
     var csvMappingsUpdated = 0
     var cashFlowsInserted = 0
     var cashFlowsUpdated = 0
+    var billFundingAllocationsInserted = 0
+    var billFundingAllocationsUpdated = 0
     var linksInserted = 0
     var linksUpdated = 0
     var transactionsSkipped = 0
@@ -123,7 +125,7 @@ enum BackupImporter {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let backup = try decoder.decode(DataBackup.self, from: data)
-        AMLogging.log("BackupImporter: data manifest decoded — version=\(backup.version) accounts=\(backup.accounts.count) tx=\(backup.transactions.count) balances=\(backup.balanceSnapshots.count) holdings=\(backup.holdingSnapshots.count) batches=\(backup.importBatches.count) mappings=\(backup.csvMappings.count) cashFlows=\(backup.cashFlowItems.count) links=\(backup.assetLiabilityLinks.count) embedded=\(backup.embeddedStatements?.count ?? 0)", component: "BackupImporter")
+        AMLogging.log("BackupImporter: data manifest decoded — version=\(backup.version) accounts=\(backup.accounts.count) tx=\(backup.transactions.count) balances=\(backup.balanceSnapshots.count) holdings=\(backup.holdingSnapshots.count) batches=\(backup.importBatches.count) mappings=\(backup.csvMappings.count) cashFlows=\(backup.cashFlowItems.count) fundingAllocations=\(backup.billFundingAllocations?.count ?? 0) links=\(backup.assetLiabilityLinks.count) embedded=\(backup.embeddedStatements?.count ?? 0)", component: "BackupImporter")
 
         var summary = BackupImportSummary()
 
@@ -167,6 +169,12 @@ enum BackupImporter {
             return Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
         }()
         var cashMap = existingCashFlows
+
+        let existingFundingAllocations: [UUID: BillFundingAllocation] = {
+            let all = (try? context.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
+            return Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        }()
+        var fundingAllocationMap = existingFundingAllocations
 
         // Accounts (upsert)
         for dto in backup.accounts {
@@ -277,6 +285,10 @@ enum BackupImporter {
                 if let reserveAutoEnabled = dto.reserveAutoEnabled {
                     existing.reserveAutoEnabled = reserveAutoEnabled
                 }
+                existing.fundingIncomeID = dto.fundingIncomeID
+                if let fundingAmount = dto.fundingAmount {
+                    existing.fundingAmount = fundingAmount
+                }
                 summary.cashFlowsUpdated += 1
             } else {
                 let item = CashFlowItem(
@@ -294,11 +306,35 @@ enum BackupImporter {
                     reserveBalance: dto.reserveBalance ?? 0,
                     reserveCycleStart: dto.reserveCycleStart,
                     reserveLastSeededCycleStart: dto.reserveLastSeededCycleStart,
-                    reserveAutoEnabled: dto.reserveAutoEnabled ?? false
+                    reserveAutoEnabled: dto.reserveAutoEnabled ?? false,
+                    fundingIncomeID: dto.fundingIncomeID,
+                    fundingAmount: dto.fundingAmount ?? 0
                 )
                 context.insert(item)
                 cashMap[dto.id] = item
                 summary.cashFlowsInserted += 1
+            }
+        }
+
+        // Bill funding allocations (upsert)
+        for dto in backup.billFundingAllocations ?? [] {
+            if let existing = fundingAllocationMap[dto.id] {
+                existing.billID = dto.billID
+                existing.incomeID = dto.incomeID
+                existing.amount = dto.amount
+                existing.createdAt = dto.createdAt
+                summary.billFundingAllocationsUpdated += 1
+            } else {
+                let allocation = BillFundingAllocation(
+                    id: dto.id,
+                    billID: dto.billID,
+                    incomeID: dto.incomeID,
+                    amount: dto.amount,
+                    createdAt: dto.createdAt
+                )
+                context.insert(allocation)
+                fundingAllocationMap[dto.id] = allocation
+                summary.billFundingAllocationsInserted += 1
             }
         }
 

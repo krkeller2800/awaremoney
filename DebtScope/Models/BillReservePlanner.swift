@@ -67,11 +67,13 @@ public enum BillReservePlanner {
         let next = nextDue(for: item, asOf: asOf)
         let monthsUntil = next.monthsUntilDue
 
+        let reserveTarget = max(0, item.amount - item.fundingAmount)
+
         // If already fully funded
-        if currentReserve >= item.amount { return ReservePlan(monthlyContribution: 0, seedAmount: 0) }
+        if currentReserve >= reserveTarget { return ReservePlan(monthlyContribution: 0, seedAmount: 0) }
 
         // Monthly contribution based on remaining need divided by frequency months
-        let remaining = max(0, item.amount - currentReserve)
+        let remaining = max(0, reserveTarget - currentReserve)
         var monthly = remaining / Decimal(freqMonths)
         monthly = monthly.rounded(scale: 2)
         if monthly < 0 { monthly = 0 }
