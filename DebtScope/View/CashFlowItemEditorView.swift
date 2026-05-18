@@ -30,6 +30,7 @@ public struct CashFlowItemEditorView: View {
     @State private var amountIsFirstResponder: Bool = false
     @State private var notesIsFirstResponder: Bool = false
     @State private var reserveAmountIsFirstResponder: Bool = false
+    @State private var allocationAmountFirstResponderID: UUID? = nil
     @State private var showRebaseConfirm: Bool = false
     @State private var showFrequencyPicker: Bool = false
     @State private var showDayOfMonthPicker: Bool = false
@@ -40,7 +41,7 @@ public struct CashFlowItemEditorView: View {
 
     // Editing state and keyboard navigation
     private var isEditing: Bool {
-        nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || reserveAmountIsFirstResponder || (focusedField != nil)
+        nameIsFirstResponder || amountIsFirstResponder || notesIsFirstResponder || reserveAmountIsFirstResponder || allocationAmountFirstResponderID != nil || (focusedField != nil)
     }
     private var showBottomAccessoryBar: Bool {
         return isEditing
@@ -51,6 +52,7 @@ public struct CashFlowItemEditorView: View {
         if amountIsFirstResponder { return .amount }
         if notesIsFirstResponder { return .notes }
         if reserveAmountIsFirstResponder { return .reserveAmount }
+        if let allocationAmountFirstResponderID { return .allocationAmount(allocationAmountFirstResponderID) }
         if let f = focusedField { return f }
         return nil
     }
@@ -72,6 +74,7 @@ public struct CashFlowItemEditorView: View {
         amountIsFirstResponder = false
         notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
+        allocationAmountFirstResponderID = nil
         focusedField = nil
         #if canImport(UIKit)
         let keyWindow = UIApplication.shared.connectedScenes
@@ -88,6 +91,7 @@ public struct CashFlowItemEditorView: View {
         amountIsFirstResponder = false
         notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
+        allocationAmountFirstResponderID = nil
         focusedField = nil
         #if canImport(UIKit)
         let keyWindow = UIApplication.shared.connectedScenes
@@ -113,7 +117,7 @@ public struct CashFlowItemEditorView: View {
     }
 
     private enum FocusField: Hashable {
-        case name, amount, notes, reserveAmount
+        case name, amount, notes, reserveAmount, allocationAmount(UUID)
     }
 
     private var isReserveFieldVisible: Bool {
@@ -127,6 +131,7 @@ public struct CashFlowItemEditorView: View {
 
     private var focusOrder: [FocusField] {
         var order: [FocusField] = [.name, .amount, .notes]
+        order.append(contentsOf: eligibleFundingIncomes.map { .allocationAmount($0.id) })
         if isReserveFieldVisible { order.append(.reserveAmount) }
         return order
     }
@@ -141,6 +146,7 @@ public struct CashFlowItemEditorView: View {
                     self.amountIsFirstResponder = false
                     self.notesIsFirstResponder = false
                     self.reserveAmountIsFirstResponder = false
+                    self.allocationAmountFirstResponderID = nil
                     self.focusedField = .name
                 }
             case .amount:
@@ -149,6 +155,7 @@ public struct CashFlowItemEditorView: View {
                     self.amountIsFirstResponder = true
                     self.notesIsFirstResponder = false
                     self.reserveAmountIsFirstResponder = false
+                    self.allocationAmountFirstResponderID = nil
                     self.focusedField = .amount
                 }
             case .notes:
@@ -157,6 +164,7 @@ public struct CashFlowItemEditorView: View {
                     self.amountIsFirstResponder = false
                     self.notesIsFirstResponder = true
                     self.reserveAmountIsFirstResponder = false
+                    self.allocationAmountFirstResponderID = nil
                     self.focusedField = .notes
                 }
             case .reserveAmount:
@@ -165,7 +173,17 @@ public struct CashFlowItemEditorView: View {
                     self.amountIsFirstResponder = false
                     self.notesIsFirstResponder = false
                     self.reserveAmountIsFirstResponder = true
+                    self.allocationAmountFirstResponderID = nil
                     self.focusedField = .reserveAmount
+                }
+            case .allocationAmount(let incomeID):
+                DispatchQueue.main.async {
+                    self.nameIsFirstResponder = false
+                    self.amountIsFirstResponder = false
+                    self.notesIsFirstResponder = false
+                    self.reserveAmountIsFirstResponder = false
+                    self.allocationAmountFirstResponderID = incomeID
+                    self.focusedField = .allocationAmount(incomeID)
                 }
             }
         }
@@ -185,6 +203,7 @@ public struct CashFlowItemEditorView: View {
         amountIsFirstResponder = false
         notesIsFirstResponder = false
         reserveAmountIsFirstResponder = false
+        allocationAmountFirstResponderID = nil
         focusedField = nil
         #if canImport(UIKit)
         let keyWindow = UIApplication.shared.connectedScenes
@@ -343,67 +362,110 @@ public struct CashFlowItemEditorView: View {
                 // Next due date (keep existing planner's computation for the date itself)
                 let next = BillReservePlanner.nextDue(for: working, asOf: now)
 
-                Section("Reserve") {
-                    // Linked Account picker (show name and kind)
-                    Picker("Linked Account", selection: Binding<UUID?>(
-                        get: { item.account?.id },
-                        set: { newID in
-                            if let id = newID {
-                                item.account = accounts.first(where: { $0.id == id })
-                            } else {
-                                item.account = nil
-                            }
-                            try? modelContext.save()
-                        }
-                    )) {
-                        Text("None").tag(nil as UUID?)
-                        ForEach(accounts, id: \.id) { acct in
-                            Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(Optional(acct.id))
-                        }
+                Section("Funding") {
+                    LabeledContent("Bill amount") {
+                        Text(formatCurrencyDecimal(amountValue))
                     }
+                    LabeledContent("Covered by non-monthly income") {
+                        Text(formatCurrencyDecimal(totalFundingForCurrentBill))
+                    }
+                    LabeledContent("Left to cover") {
+                        Text(formatCurrencyDecimal(max(0, amountValue - totalFundingForCurrentBill)))
+                    }
+                }
 
-                    if !eligibleFundingIncomes.isEmpty {
-                        Text("Pay from non-monthly income")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                if !eligibleFundingIncomes.isEmpty {
+                    Section("Pay from non-monthly income") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(eligibleFundingIncomes, id: \.id) { income in
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(income.name)
+                                        Text("\(formatCurrencyDecimal(availableFunding(for: income, excludingBill: item))) available")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
 
-                        ForEach(eligibleFundingIncomes, id: \.id) { income in
-                            Toggle(isOn: Binding(
-                                get: { allocation(for: income) != nil },
-                                set: { isOn in
-                                    if isOn {
-                                        addAllocation(from: income)
-                                    } else {
-                                        removeAllocation(from: income)
+                                    Spacer(minLength: 8)
+
+                                    HStack(spacing: 6) {
+                                    #if os(iOS)
+                                    CurrencyAmountField(
+                                        value: Binding<Decimal>(
+                                            get: { allocationAmount(for: income) },
+                                            set: { updateAllocationAmount($0, for: income) }
+                                        ),
+                                        placeholder: "0.00",
+                                        currencyCode: settings.currencyCode,
+                                        isFirstResponder: allocationResponderBinding(for: income),
+                                        onBeginEditing: { focusedField = .allocationAmount(income.id) },
+                                        onEndEditing: { try? modelContext.save() },
+                                        onPrevious: { moveFocus(-1) },
+                                        onNext: { moveFocus(1) },
+                                        onDone: { commitAndDismissKeyboard() }
+                                    )
+                                    .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                                    Button(action: {
+                                        focusedField = .allocationAmount(income.id)
+                                        allocationAmountFirstResponderID = income.id
+                                        selectAllInFirstResponder()
+                                    }) {
+                                        Image(systemName: "pencil")
+                                            .imageScale(.small)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Edit amount from \(income.name)")
+                                    #else
+                                    TextField(
+                                        "0.00",
+                                        value: Binding(
+                                            get: { NSDecimalNumber(decimal: allocationAmount(for: income)) },
+                                            set: { updateAllocationAmount($0.decimalValue, for: income) }
+                                        ),
+                                        formatter: {
+                                            let nf = NumberFormatter(); nf.numberStyle = .currency; nf.currencyCode = settings.currencyCode; return nf
+                                        }()
+                                    )
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
+                                    #endif
                                     }
                                 }
-                            )) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(income.name)
-                                    Text("\(formatCurrencyDecimal(availableFunding(for: income, excludingBill: item))) available")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-
-                            if let allocation = allocation(for: income) {
-                                LabeledContent("Using from \(income.name)") {
-                                    Text(formatCurrencyDecimal(allocation.amount))
-                                }
-                            }
-                        }
-
-                        if totalFundingForCurrentBill > 0 {
-                            LabeledContent("Covered by income") {
-                                Text(formatCurrencyDecimal(totalFundingForCurrentBill))
-                            }
-                            if reserveTarget > 0 {
-                                LabeledContent("Still save") {
-                                    Text(formatCurrencyDecimal(reserveTarget))
-                                }
+                                .padding(.leading, 16)
+                                .padding(.vertical, 1)
                             }
                         }
                     }
+                }
+
+                Section("Reserve") {
+                    if reserveTarget == 0 {
+                        Text("No reserve needed — this bill is fully covered by selected non-monthly income.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Linked Account picker (show name and kind)
+                        Picker("Linked Account", selection: Binding<UUID?>(
+                            get: { item.account?.id },
+                            set: { newID in
+                                if let id = newID {
+                                    item.account = accounts.first(where: { $0.id == id })
+                                } else {
+                                    item.account = nil
+                                }
+                                try? modelContext.save()
+                            }
+                        )) {
+                            Text("None").tag(nil as UUID?)
+                            ForEach(accounts, id: \.id) { acct in
+                                Text("\(acct.name) — \(acct.type.rawValue.capitalized)").tag(Optional(acct.id))
+                            }
+                        }
+
+                        LabeledContent("Still save") {
+                            Text(formatCurrencyDecimal(reserveTarget))
+                        }
 
                     // Inline reserve balance editor
                     LabeledContent("Reserve balance") {
@@ -498,6 +560,7 @@ public struct CashFlowItemEditorView: View {
                     }
 
                     Button("Mark this year paid…") { showRebaseConfirm = true }
+                    }
                 }
             }
         }
@@ -881,20 +944,39 @@ public struct CashFlowItemEditorView: View {
         max(0, income.amount - allocatedFunding(for: income, excludingBill: excludingBill))
     }
 
-    private func addAllocation(from income: CashFlowItem) {
-        guard allocation(for: income) == nil else { return }
-        let remainingBillNeed = max(0, amountValue - totalFundingForCurrentBill)
-        let amount = min(availableFunding(for: income, excludingBill: item), remainingBillNeed)
-        guard amount > 0 else { return }
-        modelContext.insert(BillFundingAllocation(billID: item.id, incomeID: income.id, amount: amount))
-        syncLegacyFundingCache(pendingAdditionalAmount: amount, preferredIncomeID: income.id)
-        try? modelContext.save()
+    private func allocationAmount(for income: CashFlowItem) -> Decimal {
+        allocation(for: income)?.amount ?? 0
     }
 
-    private func removeAllocation(from income: CashFlowItem) {
-        guard let allocation = allocation(for: income) else { return }
-        modelContext.delete(allocation)
-        syncLegacyFundingCache(removingIncomeID: income.id)
+    private func allocationResponderBinding(for income: CashFlowItem) -> Binding<Bool> {
+        Binding(
+            get: { allocationAmountFirstResponderID == income.id },
+            set: { isFirstResponder in
+                allocationAmountFirstResponderID = isFirstResponder ? income.id : nil
+            }
+        )
+    }
+
+    private func maxAllocatableAmount(for income: CashFlowItem) -> Decimal {
+        let otherFundingForBill = max(0, totalFundingForCurrentBill - allocationAmount(for: income))
+        let remainingBillNeed = max(0, amountValue - otherFundingForBill)
+        return min(availableFunding(for: income, excludingBill: item), remainingBillNeed)
+    }
+
+    private func updateAllocationAmount(_ newValue: Decimal, for income: CashFlowItem) {
+        let capped = min(max(0, newValue), maxAllocatableAmount(for: income))
+        let previousAmount = allocationAmount(for: income)
+        if let allocation = allocation(for: income) {
+            if capped == 0 {
+                modelContext.delete(allocation)
+            } else {
+                allocation.amount = capped
+            }
+        } else if capped > 0 {
+            modelContext.insert(BillFundingAllocation(billID: item.id, incomeID: income.id, amount: capped))
+        }
+        item.fundingAmount = max(0, totalFundingForCurrentBill - previousAmount + capped)
+        item.fundingIncomeID = item.fundingAmount > 0 ? income.id : currentBillAllocations.first?.incomeID
         try? modelContext.save()
     }
 
