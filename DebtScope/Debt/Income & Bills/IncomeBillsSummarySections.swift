@@ -4,6 +4,7 @@ import SwiftData
 struct IncomeBillsSummarySections: View {
     let items: [CashFlowItem]
     @EnvironmentObject private var settings: SettingsStore
+    @Query private var fundingAllocations: [BillFundingAllocation]
 
     // MARK: - Computed data
     private var incomes: [CashFlowItem] { items.filter { $0.isIncome } }
@@ -45,7 +46,8 @@ struct IncomeBillsSummarySections: View {
             incomes: items,
             start: currentMonthStart,
             months: 1,
-            oneTimeDefaultSpreadMonths: 12 // or an @AppStorage default if you prefer
+            oneTimeDefaultSpreadMonths: 12, // or an @AppStorage default if you prefer
+            incomeFundingAllocations: IncomeScheduler.incomeFundingAllocationTotals(from: fundingAllocations)
         )[currentMonthStart] ?? 0
 
         return recurring + spread

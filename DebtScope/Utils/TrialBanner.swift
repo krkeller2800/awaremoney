@@ -73,7 +73,7 @@ struct TrialBanner: View {
     }
 
     private var shouldShow: Bool {
-        return !purchases.isPurchased && purchases.canUseFreeImport
+        return !purchases.hasPremiumAccess && purchases.canUseFreeImport
     }
 
     private var message: String {

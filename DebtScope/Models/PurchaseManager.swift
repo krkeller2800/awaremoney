@@ -82,8 +82,49 @@ final class PurchaseManager: ObservableObject {
     @Published var userMessage: String? = nil
     @Published private(set) var freeImportsUsed: Int = 0
 
-    // Derived entitlement: purchased OR still has a free import available.
-    var isPremiumUnlocked: Bool { isPurchased || canUseFreeImport }
+    #if DEBUG
+    enum DebugPremiumOverride: String, CaseIterable, Identifiable {
+        case useStoreKit
+        case forcePremiumOn
+        case forcePremiumOff
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .useStoreKit: return "Use StoreKit"
+            case .forcePremiumOn: return "Force Premium On"
+            case .forcePremiumOff: return "Force Premium Off"
+            }
+        }
+    }
+
+    private let debugPremiumOverrideKey = "DebugPremiumOverride"
+    @Published var debugPremiumOverride: DebugPremiumOverride = .useStoreKit {
+        didSet {
+            UserDefaults.standard.set(debugPremiumOverride.rawValue, forKey: debugPremiumOverrideKey)
+        }
+    }
+    #endif
+
+    /// The entitlement the rest of the app should honor. In debug builds this can be overridden for QA.
+    var hasPremiumAccess: Bool {
+        #if DEBUG
+        switch debugPremiumOverride {
+        case .useStoreKit:
+            return isPurchased
+        case .forcePremiumOn:
+            return true
+        case .forcePremiumOff:
+            return false
+        }
+        #else
+        return isPurchased
+        #endif
+    }
+
+    // Derived entitlement: premium access OR still has a free import available.
+    var isPremiumUnlocked: Bool { hasPremiumAccess || canUseFreeImport }
 
     var canUseFreeImport: Bool {
         freeImportsRemaining > 0
@@ -98,7 +139,7 @@ final class PurchaseManager: ObservableObject {
     }
 
     var freeImportStatusText: String {
-        if isPurchased {
+        if hasPremiumAccess {
             return "Lifetime access active"
         }
         let remaining = freeImportsRemaining
@@ -119,7 +160,7 @@ final class PurchaseManager: ObservableObject {
 
     @discardableResult
     func recordCompletedImportIfNeeded() -> Bool {
-        if isPurchased { return true }
+        if hasPremiumAccess { return true }
         guard canUseFreeImport else { return false }
         setFreeImportsUsed(freeImportsUsed + 1)
         return true
@@ -138,6 +179,12 @@ final class PurchaseManager: ObservableObject {
     // MARK: - Init
     init() {
         freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
+        #if DEBUG
+        if let storedOverride = UserDefaults.standard.string(forKey: debugPremiumOverrideKey),
+           let override = DebugPremiumOverride(rawValue: storedOverride) {
+            debugPremiumOverride = override
+        }
+        #endif
         Task { await configure() }
     }
 

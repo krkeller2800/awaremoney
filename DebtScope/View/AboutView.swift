@@ -77,7 +77,7 @@ struct AboutView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(purchases.isPurchased)
+                        .disabled(purchases.hasPremiumAccess)
                     }
                     .padding(.top, 10)
 

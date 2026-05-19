@@ -59,6 +59,7 @@ public enum DebtPayoffEngine {
         debts: [DebtInput],
         monthlyBudget: Decimal,
         strategy: PayoffStrategy,
+        reinvestmentRate: Decimal = 1,
         startDate: Date,
         maxMonths: Int = 600
     ) throws -> DebtPlanResult {
@@ -96,6 +97,8 @@ public enum DebtPayoffEngine {
         var payoffOrder: [UUID] = []
         var months: [DebtMonthResult] = []
         var totalInterest: Decimal = 0
+        var releasedBudgetReduction: Decimal = 0
+        let clampedReinvestmentRate = min(max(reinvestmentRate, 0), 1)
 
         func openDebts() -> [UUID] {
             balances.filter { $0.value > 0 }.map { $0.key }
@@ -162,7 +165,8 @@ public enum DebtPayoffEngine {
             }
             let sumBasePayments = basePayments.values.reduce(0, +)
 
-            var extraBudget = (monthlyBudget - sumBasePayments).clampedLowerBound(0)
+            let effectiveMonthlyBudget = (monthlyBudget - releasedBudgetReduction).clampedLowerBound(0)
+            var extraBudget = (effectiveMonthlyBudget - sumBasePayments).clampedLowerBound(0)
 
             var payments: [UUID: Decimal] = basePayments
 
@@ -272,6 +276,8 @@ public enum DebtPayoffEngine {
                 if oldBal > 0 && newBal == 0 && payoffDates[id] == nil {
                     payoffDates[id] = monthDate
                     payoffOrder.append(id)
+                    let retiredPayment = minPayments[id] ?? 0
+                    releasedBudgetReduction += (retiredPayment * (1 - clampedReinvestmentRate)).rounded(2)
                 }
             }
 
@@ -303,6 +309,7 @@ public enum DebtPayoffEngine {
         debts: [DebtInput],
         budgetByMonth: [Date: Decimal],
         strategy: PayoffStrategy,
+        reinvestmentRate: Decimal = 1,
         startDate: Date,
         maxMonths: Int = 600
     ) throws -> DebtPlanResult {
@@ -326,6 +333,7 @@ public enum DebtPayoffEngine {
             monthlyBudget: base,
             extrasByMonth: extras,
             strategy: strategy,
+            reinvestmentRate: reinvestmentRate,
             startDate: startDate,
             maxMonths: maxMonths
         )
@@ -336,6 +344,7 @@ public enum DebtPayoffEngine {
         monthlyBudget: Decimal,
         extrasByMonth: [Date: Decimal],
         strategy: PayoffStrategy,
+        reinvestmentRate: Decimal = 1,
         startDate: Date,
         maxMonths: Int = 600
     ) throws -> DebtPlanResult {
@@ -374,6 +383,8 @@ public enum DebtPayoffEngine {
         var payoffOrder: [UUID] = []
         var months: [DebtMonthResult] = []
         var totalInterest: Decimal = 0
+        var releasedBudgetReduction: Decimal = 0
+        let clampedReinvestmentRate = min(max(reinvestmentRate, 0), 1)
 
         func openDebts() -> [UUID] { balances.filter { $0.value > 0 }.map { $0.key } }
 
@@ -419,7 +430,7 @@ public enum DebtPayoffEngine {
             // Compute effective budget for this month
             let monthKey = calendar.date(from: calendar.dateComponents([.year, .month], from: monthDate))!
             let extra = extrasByMonth[monthKey] ?? 0
-            let effectiveMonthlyBudget = (monthlyBudget + extra).rounded(2)
+            let effectiveMonthlyBudget = ((monthlyBudget + extra) - releasedBudgetReduction).clampedLowerBound(0).rounded(2)
 
             // Base payments: min(minPayment, balance)
             var basePayments: [UUID: Decimal] = [:]
@@ -531,6 +542,8 @@ public enum DebtPayoffEngine {
                 if oldBal > 0 && newBal == 0 && payoffDates[id] == nil {
                     payoffDates[id] = monthDate
                     payoffOrder.append(id)
+                    let retiredPayment = minPayments[id] ?? 0
+                    releasedBudgetReduction += (retiredPayment * (1 - clampedReinvestmentRate)).rounded(2)
                 }
             }
 

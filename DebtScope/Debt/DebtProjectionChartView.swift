@@ -20,6 +20,7 @@ struct DebtProjectionChartView: View {
     
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     
     // Added as per instructions
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -735,7 +736,7 @@ struct DebtProjectionChartView: View {
                     }
                     if !cfDebts.isEmpty {
                         let cfBudget = effectiveBudget(for: net, debts: cfDebts, strategy: strategy)
-                        if let cfPlan = try? DebtPayoffEngine.plan(debts: cfDebts, monthlyBudget: cfBudget, strategy: strategy, startDate: cfStartDate) {
+                        if let cfPlan = try? DebtPayoffEngine.plan(debts: cfDebts, monthlyBudget: cfBudget, strategy: strategy, reinvestmentRate: Decimal(debtPaymentReinvestmentRate), startDate: cfStartDate) {
                             // Capture balances for December of the year before the selected year (end-of-year carry forward into the selected year)
                             let targetYear = year - 1
                             let decDate = endOfMonth(year: targetYear, month: 12)
@@ -803,6 +804,7 @@ struct DebtProjectionChartView: View {
         // IncomeScheduler budget schedule for variable budget path
         let schedule: [Date: Decimal]
         do {
+            let allocations = try modelContext.fetch(FetchDescriptor<BillFundingAllocation>())
             schedule = IncomeScheduler.budgetByMonth(
                 items: try modelContext.fetch(FetchDescriptor<CashFlowItem>()),
                 start: {
@@ -812,7 +814,8 @@ struct DebtProjectionChartView: View {
                 months: 60,
                 includeSpreads: includeNonMonthlyIncomeSpreads,
                 oneTimeDefaultSpreadMonths: [3,6,12].contains(oneTimeIncomeDefaultSpreadMonths) ? oneTimeIncomeDefaultSpreadMonths : 12,
-                baselineSource: baselineSource
+                baselineSource: baselineSource,
+                incomeFundingAllocations: IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
             )
         } catch {
             schedule = [:]
@@ -830,6 +833,7 @@ struct DebtProjectionChartView: View {
                     debts: debts,
                     budgetByMonth: schedule,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: startDate
                 )
             } else {
@@ -838,6 +842,7 @@ struct DebtProjectionChartView: View {
                     debts: debts,
                     monthlyBudget: budget,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: startDate
                 )
             }

@@ -70,7 +70,7 @@ struct PaywallView: View {
 
     private var allowanceStatus: some View {
         Group {
-            if purchases.isPurchased {
+            if purchases.hasPremiumAccess {
                 Label("Purchased — Thank you!", systemImage: "checkmark.seal.fill")
                     .foregroundStyle(.green)
             } else if purchases.canUseFreeImport {
@@ -98,7 +98,7 @@ struct PaywallView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(purchases.isPurchasing || purchases.isPurchased)
+                .disabled(purchases.isPurchasing || purchases.hasPremiumAccess)
             } else {
                 VStack(spacing: 8) {
                     if isActivelyLoading {

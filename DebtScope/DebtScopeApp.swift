@@ -137,14 +137,12 @@ struct DebtScopeApp: App {
     }
 
     // Build the SwiftData container without ever deleting the user's store on failure.
+    // Existing released stores were created before the app adopted a SchemaMigrationPlan,
+    // so the live startup path must remain compatible with that legacy unversioned store.
     private static func buildModelContainer(schema: Schema, storeURL: URL) -> ModelContainer {
         do {
             let configuration = ModelConfiguration(url: storeURL)
-            return try ModelContainer(
-                for: schema,
-                migrationPlan: DebtScopeMigrationPlan.self,
-                configurations: configuration
-            )
+            return try ModelContainer(for: schema, configurations: configuration)
         } catch {
             AMLogging.error("ModelContainer creation failed: \(error)", component: "App")
             Self.preserveStoreSnapshotIfPossible(at: storeURL)

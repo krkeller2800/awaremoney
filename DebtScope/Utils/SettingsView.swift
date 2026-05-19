@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showResetAlert = false
     @State private var showResetResultAlert = false
     @State private var resetResultMessage: String? = nil
+    @State private var resetSuccessMessage: String? = nil
     @State private var showPaywall = false
 
     // A small curated list of common currencies; can expand later.
@@ -54,7 +55,7 @@ struct SettingsView: View {
                     Button("Upgrade to Premium") {
                         showPaywall = true
                     }
-                    .disabled(purchases.isPurchased)
+                    .disabled(purchases.hasPremiumAccess)
                     Button("Restore Purchases") {
                         Task { await purchases.restorePurchases() }
                     }
@@ -90,6 +91,14 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
+                    Picker("Premium Entitlement", selection: $purchases.debugPremiumOverride) {
+                        ForEach(PurchaseManager.DebugPremiumOverride.allCases) { override in
+                            Text(override.title).tag(override)
+                        }
+                    }
+
+                    LabeledContent("StoreKit Purchase", value: purchases.isPurchased ? "Active" : "Inactive")
+                    LabeledContent("Effective Premium", value: purchases.hasPremiumAccess ? "Active" : "Inactive")
                     LabeledContent("Free Imports Used", value: "\(purchases.freeImportsUsed) of \(purchases.freeImportLimit)")
 
                     Button("Reset Free Imports") {
@@ -101,6 +110,19 @@ struct SettingsView: View {
                 #endif
             }
             .navigationTitle("Settings")
+            .overlay(alignment: .top) {
+                if let resetSuccessMessage {
+                    Label(resetSuccessMessage, systemImage: "checkmark.circle.fill")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.thinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(duration: 0.3), value: resetSuccessMessage)
             .alert(
                 "Reset App Data?",
                 isPresented: $showResetAlert
@@ -163,12 +185,23 @@ struct SettingsView: View {
             NotificationCenter.default.post(name: .transactionsDidChange, object: nil)
             NotificationCenter.default.post(name: .accountsDidChange, object: nil)
 
-            resetResultMessage = "All data has been removed and settings were reset to defaults."
-            showResetResultAlert = true
+            showResetSuccessMessage("App data reset")
         } catch {
             resetResultMessage = "Reset failed: \(error.localizedDescription)"
             showResetResultAlert = true
             AMLogging.error("Reset failed: \(error.localizedDescription)", component: "SettingsView")
+        }
+    }
+
+    fileprivate func showResetSuccessMessage(_ message: String) {
+        resetSuccessMessage = message
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                if resetSuccessMessage == message {
+                    resetSuccessMessage = nil
+                }
+            }
         }
     }
 

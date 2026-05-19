@@ -137,6 +137,36 @@ enum BackupImporter {
         settings.useNetForDebtBudgetDefault = backup.settings.useNetForDebtBudgetDefault
         settings.showHintBars = backup.settings.showHintBars
         settings.hapticsEnabled = backup.settings.hapticsEnabled
+
+        let defaults = UserDefaults.standard
+        if let value = backup.settings.baselineBudgetSourceRaw {
+            defaults.set(value, forKey: "baselineBudgetSourceRaw")
+        }
+        if let value = backup.settings.useFixedDebtBudget {
+            defaults.set(value, forKey: "useFixedDebtBudget")
+        }
+        if let value = backup.settings.debtBudgetOverrideAmount {
+            defaults.set(value, forKey: "debtBudgetOverrideAmount")
+        }
+        if let value = backup.settings.lastFixedDebtBudgetAmount {
+            defaults.set(value, forKey: "lastFixedDebtBudgetAmount")
+        }
+        if let value = backup.settings.includeNonMonthlyIncomeSpreads {
+            defaults.set(value, forKey: "includeNonMonthlyIncomeSpreads")
+        }
+        if let value = backup.settings.oneTimeIncomeDefaultSpreadMonths {
+            defaults.set(value, forKey: "oneTimeIncomeDefaultSpreadMonths")
+        }
+        if let value = backup.settings.debtPlanStartModeRaw {
+            defaults.set(value, forKey: "debtPlanStartModeRaw")
+        }
+        if let value = backup.settings.debtPlanStartDateEpoch {
+            defaults.set(value, forKey: "debtPlanStartDate")
+        }
+        if let value = backup.settings.debtPaymentReinvestmentRate {
+            defaults.set(value, forKey: "debtPaymentReinvestmentRate")
+        }
+
         summary.settingsUpdated = true
 
         // Preload existing objects into maps by id

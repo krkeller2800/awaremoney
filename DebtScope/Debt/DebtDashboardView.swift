@@ -60,6 +60,7 @@ struct DebtDashboardView: View {
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -614,6 +615,7 @@ struct DebtDetailView: View {
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -806,18 +808,22 @@ struct DebtDetailView: View {
             // Match Summary/Chart: if recurring net or spreads are enabled, use a per‑month schedule; otherwise use fixed monthly
             if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
                 let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+                let allocations = (try? modelContext.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
+                let incomeFunding = IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
                 let schedule = IncomeScheduler.budgetByMonth(
                     items: items,
                     start: normalizedStart,
                     months: 60,
                     includeSpreads: includeNonMonthlyIncomeSpreads,
                     oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
-                    baselineSource: baselineSource
+                    baselineSource: baselineSource,
+                    incomeFundingAllocations: incomeFunding
                 )
                 plan = try DebtPayoffEngine.plan(
                     debts: debts,
                     budgetByMonth: schedule,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: normalizedStart
                 )
             } else {
@@ -833,6 +839,7 @@ struct DebtDetailView: View {
                     debts: debts,
                     monthlyBudget: fixedBudget,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: normalizedStart
                 )
             }

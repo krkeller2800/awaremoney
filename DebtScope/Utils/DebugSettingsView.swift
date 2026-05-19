@@ -6,6 +6,7 @@ import Combine
 struct DebugSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var purchases = PurchaseManager.shared
     @State private var verboseEnabled: Bool = AMLogConfig.verbose
     @State private var categoryStates: [String: Bool] = [:]
     @State private var dynamicCategories: [String] = []
@@ -63,6 +64,17 @@ struct DebugSettingsView: View {
                     Text("Filter logs in Console by subsystem/category. Category overrides affect AMLogging.log only.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Premium Testing") {
+                    Picker("Premium Entitlement", selection: $purchases.debugPremiumOverride) {
+                        ForEach(PurchaseManager.DebugPremiumOverride.allCases) { override in
+                            Text(override.title).tag(override)
+                        }
+                    }
+
+                    LabeledContent("StoreKit Purchase", value: purchases.isPurchased ? "Active" : "Inactive")
+                    LabeledContent("Effective Premium", value: purchases.hasPremiumAccess ? "Active" : "Inactive")
                 }
 
                 Section("Import Allowance") {

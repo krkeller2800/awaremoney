@@ -22,6 +22,7 @@ struct DebtPayoffView: View {
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
+    @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
     @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
@@ -275,18 +276,22 @@ struct DebtPayoffView: View {
             // Use monthly schedule when using recurring net or spreads; otherwise fixed budget
             if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
                 let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+                let allocations = (try? modelContext.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
+                let incomeFunding = IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
                 let schedule = IncomeScheduler.budgetByMonth(
                     items: items,
                     start: normalizedStart,
                     months: 60,
                     includeSpreads: includeNonMonthlyIncomeSpreads,
                     oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
-                    baselineSource: baselineSource()
+                    baselineSource: baselineSource(),
+                    incomeFundingAllocations: incomeFunding
                 )
                 plan = try DebtPayoffEngine.plan(
                     debts: debts,
                     budgetByMonth: schedule,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: normalizedStart
                 )
             } else {
@@ -302,6 +307,7 @@ struct DebtPayoffView: View {
                     debts: debts,
                     monthlyBudget: fixedBudget,
                     strategy: strategy,
+                    reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                     startDate: normalizedStart
                 )
             }

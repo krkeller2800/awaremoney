@@ -23,13 +23,15 @@ enum PlanBudgetDisplay {
             let fixed = Decimal(debtBudgetOverrideAmount)
             if includeNonMonthlyIncomeSpreads {
                 let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+                let allocations = incomeFundingAllocationTotals(modelContext: modelContext)
                 let schedule = IncomeScheduler.budgetByMonth(
                     items: items,
                     start: startMonth,
                     months: 12,
                     includeSpreads: true,
                     oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
-                    baselineSource: .fixedAmount(fixed)
+                    baselineSource: .fixedAmount(fixed),
+                    incomeFundingAllocations: allocations
                 )
                 // Fallback to the raw fixed amount if schedule is missing the month
                 return schedule[startMonth] ?? fixed
@@ -41,13 +43,15 @@ enum PlanBudgetDisplay {
         // Recurring Net baseline: compute the available amount for the month.
         if baselineBudgetSourceRaw == "recurringNet" {
             let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
+            let allocations = incomeFundingAllocationTotals(modelContext: modelContext)
             let schedule = IncomeScheduler.budgetByMonth(
                 items: items,
                 start: startMonth,
                 months: 12,
                 includeSpreads: includeNonMonthlyIncomeSpreads,
                 oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
-                baselineSource: .recurringNet
+                baselineSource: .recurringNet,
+                incomeFundingAllocations: allocations
             )
             return schedule[startMonth]
         }
@@ -58,5 +62,12 @@ enum PlanBudgetDisplay {
 
     private static func sanitizedDefaultSpread(_ v: Int) -> Int {
         [3, 6, 12].contains(v) ? v : 12
+    }
+
+    private static func incomeFundingAllocationTotals(modelContext: ModelContext) -> [UUID: Decimal] {
+        let allocations = (try? modelContext.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
+        return allocations.reduce(into: [UUID: Decimal]()) { totals, allocation in
+            totals[allocation.incomeID, default: 0] += allocation.amount
+        }
     }
 }

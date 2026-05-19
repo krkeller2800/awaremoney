@@ -366,7 +366,7 @@ public struct CashFlowItemEditorView: View {
                     LabeledContent("Bill amount") {
                         Text(formatCurrencyDecimal(amountValue))
                     }
-                    LabeledContent("Covered by non-monthly income") {
+                    LabeledContent("Income applied") {
                         Text(formatCurrencyDecimal(totalFundingForCurrentBill))
                     }
                     LabeledContent("Left to cover") {
@@ -916,7 +916,9 @@ public struct CashFlowItemEditorView: View {
 
     private var eligibleFundingIncomes: [CashFlowItem] {
         cashFlowItems.filter {
-            $0.kind == .income && [.yearly, .semiAnnual, .quarterly, .oneTime].contains($0.frequency)
+            $0.kind == .income &&
+            [.yearly, .semiAnnual, .quarterly, .oneTime].contains($0.frequency) &&
+            isIncomeEligibleForCurrentBill($0)
         }
     }
 
@@ -958,6 +960,7 @@ public struct CashFlowItemEditorView: View {
     }
 
     private func maxAllocatableAmount(for income: CashFlowItem) -> Decimal {
+        guard isIncomeEligibleForCurrentBill(income) else { return 0 }
         let otherFundingForBill = max(0, totalFundingForCurrentBill - allocationAmount(for: income))
         let remainingBillNeed = max(0, amountValue - otherFundingForBill)
         return min(availableFunding(for: income, excludingBill: item), remainingBillNeed)
@@ -983,10 +986,79 @@ public struct CashFlowItemEditorView: View {
     private func normalizeCurrentBillAllocations() {
         var remaining = max(0, amountValue)
         for allocation in currentBillAllocations.sorted(by: { $0.createdAt < $1.createdAt }) {
+            guard let income = cashFlowItems.first(where: { $0.id == allocation.incomeID }),
+                  isIncomeEligibleForCurrentBill(income) else {
+                modelContext.delete(allocation)
+                continue
+            }
             let capped = min(allocation.amount, remaining)
             allocation.amount = capped
             remaining -= capped
         }
+    }
+
+    private func isIncomeEligibleForCurrentBill(_ income: CashFlowItem) -> Bool {
+        guard let billDueDate = resolvedDueDate(for: buildWorkingItem()),
+              let incomePayDate = eligibleOccurrenceDate(for: income, onOrBefore: billDueDate) else {
+            return false
+        }
+
+        let calendar = Calendar.current
+        return calendar.component(.year, from: incomePayDate) == calendar.component(.year, from: billDueDate) &&
+            incomePayDate <= billDueDate
+    }
+
+    private func resolvedDueDate(for bill: CashFlowItem) -> Date? {
+        if let first = bill.firstPaymentDate {
+            return first
+        }
+        if let day = bill.dayOfMonth {
+            return clampedDate(inYearOf: Date(), monthOf: Date(), day: day)
+        }
+        return bill.createdAt
+    }
+
+    private func resolvedPayDate(for income: CashFlowItem) -> Date? {
+        if let first = income.firstPaymentDate {
+            return first
+        }
+        if let day = income.dayOfMonth {
+            return clampedDate(inYearOf: Date(), monthOf: Date(), day: day)
+        }
+        return income.createdAt
+    }
+
+    private func eligibleOccurrenceDate(for income: CashFlowItem, onOrBefore dueDate: Date) -> Date? {
+        guard let anchor = resolvedPayDate(for: income) else { return nil }
+        let calendar = Calendar.current
+        let dueYear = calendar.component(.year, from: dueDate)
+
+        switch income.frequency {
+        case .oneTime:
+            return calendar.component(.year, from: anchor) == dueYear && anchor <= dueDate ? anchor : nil
+        case .yearly, .semiAnnual, .quarterly:
+            let monthsPerCycle = income.frequency.monthsPerCycle
+            var occurrence = anchor
+            while occurrence < dueDate,
+                  let next = calendar.date(byAdding: .month, value: monthsPerCycle, to: occurrence),
+                  next <= dueDate {
+                occurrence = next
+            }
+            return calendar.component(.year, from: occurrence) == dueYear && occurrence <= dueDate ? occurrence : nil
+        default:
+            return nil
+        }
+    }
+
+    private func clampedDate(inYearOf yearSource: Date, monthOf monthSource: Date, day: Int) -> Date? {
+        let calendar = Calendar.current
+        var comps = DateComponents()
+        comps.year = calendar.component(.year, from: yearSource)
+        comps.month = calendar.component(.month, from: monthSource)
+        let firstOfMonth = calendar.date(from: comps) ?? monthSource
+        let maxDay = calendar.range(of: .day, in: .month, for: firstOfMonth)?.count ?? day
+        comps.day = min(max(day, 1), maxDay)
+        return calendar.date(from: comps)
     }
 
     private func syncLegacyFundingCache(

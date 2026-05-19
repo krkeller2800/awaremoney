@@ -33,6 +33,15 @@ struct SettingsBackup: Codable {
     let useNetForDebtBudgetDefault: Bool
     let showHintBars: Bool
     let hapticsEnabled: Bool
+    let baselineBudgetSourceRaw: String?
+    let useFixedDebtBudget: Bool?
+    let debtBudgetOverrideAmount: Double?
+    let lastFixedDebtBudgetAmount: Double?
+    let includeNonMonthlyIncomeSpreads: Bool?
+    let oneTimeIncomeDefaultSpreadMonths: Int?
+    let debtPlanStartModeRaw: String?
+    let debtPlanStartDateEpoch: Double?
+    let debtPaymentReinvestmentRate: Double?
 }
 
 struct AccountDTO: Codable {
@@ -395,6 +404,7 @@ enum BackupExporter {
             component: "BackupExporter"
         )
 
+        let defaults = UserDefaults.standard
         let settingsDTO = SettingsBackup(
             currencyCode: settings.currencyCode,
             importAutoApplyMappings: settings.importAutoApplyMappings,
@@ -402,11 +412,20 @@ enum BackupExporter {
             defaultPayoffStrategyRaw: settings.defaultPayoffStrategyRaw,
             useNetForDebtBudgetDefault: settings.useNetForDebtBudgetDefault,
             showHintBars: settings.showHintBars,
-            hapticsEnabled: settings.hapticsEnabled
+            hapticsEnabled: settings.hapticsEnabled,
+            baselineBudgetSourceRaw: defaults.string(forKey: "baselineBudgetSourceRaw") ?? "recurringNet",
+            useFixedDebtBudget: defaults.bool(forKey: "useFixedDebtBudget"),
+            debtBudgetOverrideAmount: defaults.double(forKey: "debtBudgetOverrideAmount"),
+            lastFixedDebtBudgetAmount: defaults.double(forKey: "lastFixedDebtBudgetAmount"),
+            includeNonMonthlyIncomeSpreads: defaults.object(forKey: "includeNonMonthlyIncomeSpreads") as? Bool ?? true,
+            oneTimeIncomeDefaultSpreadMonths: defaults.object(forKey: "oneTimeIncomeDefaultSpreadMonths") as? Int ?? 12,
+            debtPlanStartModeRaw: defaults.string(forKey: "debtPlanStartModeRaw") ?? "currentInputs",
+            debtPlanStartDateEpoch: defaults.double(forKey: "debtPlanStartDate"),
+            debtPaymentReinvestmentRate: defaults.object(forKey: "debtPaymentReinvestmentRate") as? Double ?? 1
         )
 
         let payload = DataBackup(
-            version: 3,
+            version: 4,
             generatedAt: Date(),
             settings: settingsDTO,
             accounts: accountDTOs,

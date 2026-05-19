@@ -29,6 +29,7 @@ final class PayoffPlanProvider {
         let baselineRaw = UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") ?? "recurringNet"
         let useFixedDebtBudget = UserDefaults.standard.bool(forKey: "useFixedDebtBudget")
         let debtBudgetOverrideAmount = UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount")
+        let debtPaymentReinvestmentRate = UserDefaults.standard.object(forKey: "debtPaymentReinvestmentRate") as? Double ?? 1
 
         let debts: [DebtInput] = liabilities.map { acct in
             let bal = absDecimal(latestBalance(acct))
@@ -52,12 +53,14 @@ final class PayoffPlanProvider {
                 oneTimeDefaultSpreadMonths: sanitizedSpread(defaultSpread),
                 baselineSource: baselineRaw == "fixed" && useFixedDebtBudget && debtBudgetOverrideAmount > 0
                     ? .fixedAmount(Decimal(debtBudgetOverrideAmount))
-                    : .recurringNet
+                    : .recurringNet,
+                incomeFundingAllocations: incomeFundingAllocationTotals()
             )
             return try DebtPayoffEngine.plan(
                 debts: debts,
                 budgetByMonth: schedule,
                 strategy: strategy,
+                reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                 startDate: startMonth
             )
         } else {
@@ -75,6 +78,7 @@ final class PayoffPlanProvider {
                 debts: debts,
                 monthlyBudget: budget,
                 strategy: strategy,
+                reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
                 startDate: startMonth
             )
         }
@@ -117,6 +121,13 @@ final class PayoffPlanProvider {
 
     private func allCashFlowItems() -> [CashFlowItem] {
         do { return try context.fetch(FetchDescriptor<CashFlowItem>()) } catch { return [] }
+    }
+
+    private func incomeFundingAllocationTotals() -> [UUID: Decimal] {
+        let allocations = (try? context.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
+        return allocations.reduce(into: [UUID: Decimal]()) { totals, allocation in
+            totals[allocation.incomeID, default: 0] += allocation.amount
+        }
     }
 
     private func normalizeToMonth(_ date: Date) -> Date {

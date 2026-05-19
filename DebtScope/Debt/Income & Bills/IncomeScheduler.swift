@@ -3,6 +3,12 @@ import SwiftUI
 import Charts
 
 public struct IncomeScheduler {
+    static func incomeFundingAllocationTotals(from allocations: [BillFundingAllocation]) -> [UUID: Decimal] {
+        allocations.reduce(into: [UUID: Decimal]()) { totals, allocation in
+            totals[allocation.incomeID, default: 0] += allocation.amount
+        }
+    }
+
     public enum BaselineSource {
         case recurringNet
         case fixedAmount(Decimal)
@@ -15,6 +21,7 @@ public struct IncomeScheduler {
         includeSpreads: Bool,
         oneTimeDefaultSpreadMonths: Int,
         baselineSource: BaselineSource,
+        incomeFundingAllocations: [UUID: Decimal] = [:],
         clampNegativeToZero: Bool = false
     ) -> [Date: Decimal] {
         let baseline = baselineByMonth(items: items, start: start, months: months, baselineSource: baselineSource)
@@ -28,7 +35,8 @@ public struct IncomeScheduler {
                 incomes: items,
                 start: start,
                 months: months,
-                oneTimeDefaultSpreadMonths: oneTimeDefaultSpreadMonths
+                oneTimeDefaultSpreadMonths: oneTimeDefaultSpreadMonths,
+                incomeFundingAllocations: incomeFundingAllocations
             )
             let bills = items.filter { $0.kind == .bill }
             billSpreads = billSpreadsByMonth(
@@ -99,7 +107,8 @@ public struct IncomeScheduler {
         incomes: [CashFlowItem],
         start: Date,
         months: Int,
-        oneTimeDefaultSpreadMonths: Int
+        oneTimeDefaultSpreadMonths: Int,
+        incomeFundingAllocations: [UUID: Decimal] = [:]
     ) -> [Date: Decimal] {
         let firstOfMonth = startOfMonth(start)
         let monthStarts = buildMonthStarts(from: firstOfMonth, count: months)
@@ -143,7 +152,9 @@ public struct IncomeScheduler {
             default:           periodMonths = 0
             }
             
-            let amount = round2(item.amount)
+            let allocatedToBills = incomeFundingAllocations[item.id] ?? 0
+            let amount = round2(max(0, item.amount - allocatedToBills))
+            guard amount > 0 else { continue }
             let even = round2(amount / Decimal(N))
             let remainder = amount - (even * Decimal(N - 1))
             
@@ -209,7 +220,8 @@ public struct IncomeScheduler {
         items: [CashFlowItem],
         start: Date,
         months: Int,
-        oneTimeDefaultSpreadMonths: Int
+        oneTimeDefaultSpreadMonths: Int,
+        incomeFundingAllocations: [UUID: Decimal] = [:]
     ) -> [Date: [IncomeContribution]] {
         let firstOfMonth = startOfMonth(start)
         let monthStarts = buildMonthStarts(from: firstOfMonth, count: months)
@@ -250,7 +262,9 @@ public struct IncomeScheduler {
             default:           periodMonths = 0
             }
 
-            let total = round2(item.amount)
+            let allocatedToBills = incomeFundingAllocations[item.id] ?? 0
+            let total = round2(max(0, item.amount - allocatedToBills))
+            guard total > 0 else { continue }
             let even = round2(total / Decimal(N))
             let remainder = total - (even * Decimal(N - 1))
 
