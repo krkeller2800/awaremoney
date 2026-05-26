@@ -16,15 +16,15 @@ This comes from the existing income and bills schedule, including recurring net,
 
 ### Discretionary Reserve
 
-User-entered monthly amount to keep available instead of committing to debt payoff.
+User-entered monthly target for cash the user would like to leave available after planned debt payments.
 
-This is an input. It should not be called discretionary income because it is not income. It is cash held back from the debt payoff budget.
+This is an input. It should not be called discretionary income because it is not income. It is a reserve target/cap, not a separate bill and not an exact amount that must be preserved every month.
 
 Recommended UI label: `Discretionary Reserve`.
 
 ### Available For Debt
 
-Amount passed into the payoff plan after respecting the discretionary reserve.
+Amount passed into the payoff plan after respecting the discretionary reserve when the app is deriving the debt budget from available cash.
 
 Formula:
 
@@ -32,7 +32,7 @@ Formula:
 Available For Debt = max(0, Available Cash - Discretionary Reserve)
 ```
 
-If this amount is below required minimum payments, the plan should report the same kind of feasibility problem it already reports for insufficient budget.
+If this amount is below required minimum payments in recurring-net mode, the plan should report the same kind of feasibility problem it already reports for insufficient budget. In fixed-budget mode, the fixed amount remains the intended debt payoff budget; reserve handling is reported through discretionary remaining and below-target rows.
 
 ### Planned Debt Payment
 
@@ -52,12 +52,25 @@ Discretionary Remaining = Available Cash - Planned Debt Payment
 
 This is a result, not a direct user input. It changes depending on strategy, budget source, non-monthly spreads, payoff order, and reinvestment rate.
 
+### Below Reserve Target
+
+Calculated gap between the user's reserve target and the amount the selected plan actually leaves available.
+
+Formula:
+
+```text
+Below Reserve Target = max(0, Discretionary Reserve - Discretionary Remaining)
+```
+
+This is a warning/reporting value, not a plan blocker. It communicates that the current plan leaves less cash than the user would prefer without implying the math is invalid.
+
 ## Recommended UX
 
 Use two separate concepts in the UI:
 
-- `Discretionary Reserve`: user input, the amount to protect each month.
+- `Discretionary Reserve`: user input, the target amount to leave available when possible.
 - `Discretionary Remaining`: calculated result, the amount actually left after the selected plan's debt payment.
+- `Below Reserve Target`: calculated gap when the selected plan leaves less than the reserve target.
 
 Avoid a single editable field named `Discretionary Income`; it creates ambiguity because users cannot tell whether they are editing cash-flow income, a reserve target, or a calculated leftover.
 
@@ -95,7 +108,7 @@ Discretionary Reserve
 Suggested helper language:
 
 ```text
-Amount to keep available before extra debt payoff.
+Target cash to leave after planned debt payment.
 ```
 
 ### Deliverable
@@ -110,9 +123,10 @@ Goal: make every payoff plan calculation use the same budget rules.
 
 ```text
 Available Cash = income/bills schedule output
-Available For Debt = max(0, Available Cash - Discretionary Reserve)
+Available For Debt = max(0, Available Cash - Discretionary Reserve) // recurring-net derived budgets
 Planned Debt Payment = sum of DebtPlanResult month payments
 Discretionary Remaining = Available Cash - Planned Debt Payment
+Below Reserve Target = max(0, Discretionary Reserve - Discretionary Remaining)
 ```
 
 ### Files Likely Touched
@@ -139,7 +153,7 @@ For fixed monthly budget mode, clarify semantics before implementation:
 - Preferred: fixed amount represents the debt payoff budget, and discretionary reserve is displayed against available cash for feasibility.
 - Alternative: fixed amount represents available cash before reserve, and reserve reduces it before payoff.
 
-Recommendation: preserve existing fixed-budget behavior by treating fixed budget as the intended debt payoff budget. Use discretionary reserve primarily with recurring-net/available-cash planning, and show warnings when fixed debt budget plus reserve exceeds available cash.
+Recommendation: preserve existing fixed-budget behavior by treating fixed budget as the intended debt payoff budget. Use discretionary reserve primarily with recurring-net/available-cash planning. In fixed-budget mode, report whether the plan leaves cash below the reserve target instead of treating the reserve as an additional hard expense.
 
 ### Feasibility UI Additions
 
@@ -149,6 +163,9 @@ Add or update rows in the current plan math:
 - `Discretionary Reserve`
 - `Available For Debt`
 - `Minimums Due This Month`
+- `Planned Debt Payment`
+- `Discretionary Remaining`
+- `Below Reserve Target`, if applicable
 - `Shortfall`, if applicable
 
 ### Plan By Month Additions
@@ -191,12 +208,15 @@ Show one row per month with plan-level totals:
 
 - Month
 - Available Cash
-- Discretionary Reserve
+- Discretionary Reserve Target
 - Available For Debt
 - Total Debt Payment
 - Interest
 - Ending Debt Balance
 - Discretionary Remaining
+- Below Reserve Target
+
+For recurring-net plans, `Available For Debt` is the reserve-adjusted amount sent to the payoff engine. For fixed-budget plans, `Available For Debt` should display the fixed debt payoff budget for that month, while `Discretionary Remaining` and `Below Reserve Target` report whether the actual plan payment leaves the target cash available.
 
 Each month row can expand to account-level details:
 
@@ -222,6 +242,17 @@ Include an account picker or filter. Show the selected account's monthly rows:
 Use `DebtPlanResult.months` from `DebtPayoffEngine`.
 
 Do not create separate independent amortization calculations for each card when displaying snowball or avalanche plans.
+
+Use the same budget schedule inputs as the selected payoff plan to reconstruct display-only cash columns:
+
+```text
+Available Cash = income/bills schedule output
+Planned Debt Payment = sum of DebtPlanResult month payments
+Discretionary Remaining = Available Cash - Planned Debt Payment
+Below Reserve Target = max(0, Discretionary Reserve - Discretionary Remaining)
+```
+
+Do not calculate `Below Reserve Target` from fixed budget plus reserve. The fixed budget is the user's intended debt payoff budget; the reserve is a target for the cash left after the actual plan payment.
 
 ### Starting Balance Reconstruction
 
@@ -255,10 +286,11 @@ After implementation checkpoints, verify:
 - Reserve set to zero preserves current behavior.
 - Reserve larger than available cash produces an understandable feasibility problem.
 - Reserve reducing available cash below minimum payments produces a shortfall.
+- Fixed-budget mode treats reserve as a target and reports `Below Reserve Target` instead of blocking the plan because fixed budget plus reserve exceeds available cash.
 - Recurring-net mode shows changing discretionary remaining when monthly budgets vary.
 - Fixed-budget behavior remains intentional and clearly labeled.
 - Account payoff detail and Debt Summary agree on first-month payment and payoff date.
-- Amortization schedule totals match `DebtPlanResult.totalInterest` and per-month payment sums.
+- Amortization schedule totals match `DebtPlanResult.totalInterest` and per-month payment sums, and its discretionary rows match the selected plan settings math.
 
 ## Handoff Prompt For Future Conversations
 

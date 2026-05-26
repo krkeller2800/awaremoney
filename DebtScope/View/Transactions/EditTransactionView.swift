@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct EditTransactionView: View {
     @Bindable var transaction: Transaction
@@ -21,7 +24,7 @@ struct EditTransactionView: View {
         self._transaction = Bindable(transaction)
         _payee = State(initialValue: transaction.payee)
         _memo = State(initialValue: transaction.memo ?? "")
-        _amountInput = State(initialValue: EditTransactionView.formatAmountForInput(transaction.amount))
+        _amountInput = State(initialValue: "")
         _date = State(initialValue: transaction.datePosted)
     }
     
@@ -47,9 +50,13 @@ struct EditTransactionView: View {
             }
 
             Section("Amount & Date") {
-                TextField("0.00", text: $amountInput)
+                TextField(formatCurrency(0), text: $amountInput)
                     .keyboardType(.decimalPad)
                     .focused($focusedField, equals: .amount)
+                    .onTapGesture {
+                        focusedField = .amount
+                        selectAllInFirstResponder()
+                    }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 Text("Editing amount/date will be preserved across batch replacement unless you choose 'Accept new' during conflict resolution.")
                     .font(.footnote)
@@ -58,6 +65,18 @@ struct EditTransactionView: View {
         }
         .navigationTitle("Edit Transaction")
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            if amountInput.isEmpty {
+                amountInput = formatCurrency(transaction.amount)
+            }
+        }
+        .onChange(of: focusedField) { oldValue, newValue in
+            if newValue == .amount {
+                selectAllInFirstResponder()
+            } else if oldValue == .amount {
+                formatAmountInputIfPossible()
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
@@ -142,6 +161,9 @@ struct EditTransactionView: View {
 
     private func commitKeyboard() {
         // Ending focus commits current text field edits and dismisses the keyboard
+        if focusedField == .amount {
+            formatAmountInputIfPossible()
+        }
         focusedField = nil
     }
 
@@ -152,8 +174,7 @@ struct EditTransactionView: View {
     }
 
     private var hasManualAmountOrDateChanges: Bool {
-        let sanitized = sanitizedAmount(amountInput)
-        let newAmount = Decimal(string: sanitized)
+        let newAmount = parseAmountInput(amountInput)
         let amountChanged = (newAmount != nil) && (newAmount! != transaction.amount)
         let dateChanged = date != transaction.datePosted
         return amountChanged || dateChanged
@@ -176,8 +197,9 @@ struct EditTransactionView: View {
             if transaction.originalDate == nil { transaction.originalDate = transaction.datePosted }
 
             // Update fields
-            if let newAmount = Decimal(string: sanitizedAmount(amountInput)) {
+            if let newAmount = parseAmountInput(amountInput) {
                 transaction.amount = newAmount
+                amountInput = formatCurrency(newAmount)
             }
             transaction.datePosted = date
             transaction.isUserEdited = true
@@ -216,8 +238,13 @@ struct EditTransactionView: View {
 
     // MARK: - Helpers
 
-    private func sanitizedAmount(_ s: String) -> String {
-        s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    private func parseAmountInput(_ text: String) -> Decimal? {
+        MoneyParsing.parseDecimalInput(text, currencyCode: settings.currencyCode)
+    }
+
+    private func formatAmountInputIfPossible() {
+        guard let amount = parseAmountInput(amountInput) else { return }
+        amountInput = formatCurrency(amount)
     }
 
     private func formatCurrency(_ amount: Decimal) -> String {
@@ -227,12 +254,12 @@ struct EditTransactionView: View {
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
-    private static func formatAmountForInput(_ amount: Decimal) -> String {
-        let nf = NumberFormatter()
-        nf.numberStyle = .decimal
-        nf.minimumFractionDigits = 0
-        nf.maximumFractionDigits = 2
-        return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
+    private func selectAllInFirstResponder(after delay: TimeInterval = 0.05) {
+        #if canImport(UIKit)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
+        }
+        #endif
     }
 }
 

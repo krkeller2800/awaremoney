@@ -21,6 +21,7 @@ struct DebtProjectionChartView: View {
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
     
     // Added as per instructions
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -805,7 +806,7 @@ struct DebtProjectionChartView: View {
         let schedule: [Date: Decimal]
         do {
             let allocations = try modelContext.fetch(FetchDescriptor<BillFundingAllocation>())
-            schedule = IncomeScheduler.budgetByMonth(
+            let availableCashSchedule = IncomeScheduler.budgetByMonth(
                 items: try modelContext.fetch(FetchDescriptor<CashFlowItem>()),
                 start: {
                     let comps = DateComponents(year: year, month: startMonth, day: 1)
@@ -816,6 +817,11 @@ struct DebtProjectionChartView: View {
                 oneTimeDefaultSpreadMonths: [3,6,12].contains(oneTimeIncomeDefaultSpreadMonths) ? oneTimeIncomeDefaultSpreadMonths : 12,
                 baselineSource: baselineSource,
                 incomeFundingAllocations: IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
+            )
+            schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                availableCashSchedule,
+                discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount),
+                appliesReserve: baselineBudgetSourceRaw == "recurringNet"
             )
         } catch {
             schedule = [:]
@@ -906,6 +912,12 @@ struct DebtProjectionChartView: View {
         if useFixedDebtBudget, debtBudgetOverrideAmount > 0 {
             return Decimal(debtBudgetOverrideAmount)
         }
+        let availableForDebt = baselineBudgetSourceRaw == "recurringNet"
+            ? PlanBudgetDisplay.availableForDebt(
+                availableCash: net,
+                discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount)
+            )
+            : net
         
         if strategy == .minimumsOnly {
             return debts?.reduce(Decimal(0)) { partialResult, debt in
@@ -913,18 +925,18 @@ struct DebtProjectionChartView: View {
             } ?? Decimal(0)
         }
         
-        if settings.useNetForDebtBudgetDefault && net > 0 {
-            return net
+        if settings.useNetForDebtBudgetDefault && availableForDebt > 0 {
+            return availableForDebt
         }
         
         if let debts = debts, !debts.isEmpty {
             let sumMin = debts.reduce(Decimal(0)) { partialResult, debt in
                 partialResult + debt.minPayment
             }
-            return max(net, sumMin)
+            return max(availableForDebt, sumMin)
         }
         
-        return net
+        return availableForDebt
     }
     
     private func formatCurrencyDecimal(_ value: Decimal) -> String {
@@ -949,6 +961,7 @@ struct DebtProjectionChartView: View {
         return formatter.shortMonthSymbols[(month - 1) % 12]
     }
 }
+
 
 private struct ViewHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -1145,4 +1158,3 @@ struct DebtProjectionChartView_Previews: PreviewProvider {
             .environmentObject({ let store = SettingsStore(); store.currencyCode = "USD"; return store }())
     }
 }
-

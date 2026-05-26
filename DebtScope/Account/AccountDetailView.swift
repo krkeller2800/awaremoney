@@ -110,28 +110,16 @@ struct AccountDetailView: View {
                     Text("This will permanently delete the property and all associated balances and transactions.")
                 }
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        if isRegularWidth {
-                            EmptyView()
-                        } else {
-                            NavigationLink {
-                                AccountTransactionsListView(accountID: account.id)
-                            } label: {
-                                Label("Transactions", systemImage: "list.bullet")
-                            }
-                            .simultaneousGesture(TapGesture().onEnded {
-                                AMLogging.log("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
-                            })
-                        }
-                    }
-                    if UIDevice.type == "iPhone" {
-                        ToolbarItem(placement: (account.type == .property) ? .topBarLeading : .topBarTrailing) {
-                            PlanToolbarButton("Help", systemImage: "questionmark.circle", fixedWidth: 90) {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        if UIDevice.type == "iPhone" {
+                            Button {
                                 showHelpSheet = true
+                            } label: {
+                                Image(systemName: "questionmark.circle")
                             }
+                            .accessibilityLabel("Help")
                         }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
+
                         if account.type == .property {
                             Button(role: .destructive) {
                                 showDeleteAlert = true
@@ -481,6 +469,9 @@ struct AccountDetailView: View {
                 }
                 .padding(.top, 0)
                 .padding(.trailing, 50)
+                .simultaneousGesture(TapGesture().onEnded {
+                    AMLogging.log("Transactions button tapped for accountID=\(account.id)", component: "AccountDetailView")
+                })
             }
         }
     }

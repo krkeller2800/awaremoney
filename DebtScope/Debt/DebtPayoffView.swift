@@ -23,6 +23,7 @@ struct DebtPayoffView: View {
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
     @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
@@ -118,17 +119,18 @@ struct DebtPayoffView: View {
                             let payment = month.payments[id] ?? 0
                             let interest = month.interest[id] ?? 0
 
-                            // Prior month balance is the starting point for this month.
-                            // For the first plan month, reconstruct the starting balance using:
-                            // start = after + payment - interest
-                            let priorBal: Decimal = {
-                                if index > 0 {
-                                    let prevMonth = rows[index - 1].1
-                                    return prevMonth.balances[id] ?? 0
-                                } else {
-                                    return afterBal + payment - interest
-                                }
+                            let previousEndingBalances: [UUID: Decimal] = {
+                                guard index > 0 else { return [:] }
+                                let prevMonth = rows[index - 1].1
+                                return [id: prevMonth.balances[id] ?? 0]
                             }()
+                            let priorBal = DebtAmortizationScheduleRows.startingBalance(
+                                accountID: id,
+                                endingBalance: afterBal,
+                                payment: payment,
+                                interest: interest,
+                                previousEndingBalances: previousEndingBalances
+                            )
 
                             DisclosureGroup {
                                 VStack(alignment: .trailing, spacing: 6) {
@@ -278,7 +280,7 @@ struct DebtPayoffView: View {
                 let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
                 let allocations = (try? modelContext.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
                 let incomeFunding = IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
-                let schedule = IncomeScheduler.budgetByMonth(
+                let availableCashSchedule = IncomeScheduler.budgetByMonth(
                     items: items,
                     start: normalizedStart,
                     months: 60,
@@ -286,6 +288,11 @@ struct DebtPayoffView: View {
                     oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
                     baselineSource: baselineSource(),
                     incomeFundingAllocations: incomeFunding
+                )
+                let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                    availableCashSchedule,
+                    discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount),
+                    appliesReserve: baselineBudgetSourceRaw == "recurringNet"
                 )
                 plan = try DebtPayoffEngine.plan(
                     debts: debts,
@@ -518,4 +525,3 @@ struct DebtPayoffView: View {
 #Preview {
     Text("Preview requires model data")
 }
-

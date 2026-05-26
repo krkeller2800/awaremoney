@@ -91,6 +91,13 @@ struct PDFBankTransactionsParser: StatementParser {
         }
 
         AMLogging.log("Parsed items count: \(items.count)", component: LOG_COMPONENT)
+        let looksLikeCreditCardActivity = items.contains { item in
+            let lower = item.desc.lowercased()
+            return lower.contains("payment thank you") ||
+                lower.contains("purchase interest charge") ||
+                lower.contains("cardmember") ||
+                lower.contains("card member")
+        }
 
         // Determine a suggested account type from account labels in the PDF
         let accountLabels: Set<String> = Set(items.compactMap { $0.account?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
@@ -145,7 +152,8 @@ struct PDFBankTransactionsParser: StatementParser {
         // Build staged transactions; default include=true, propagate sourceAccountLabel
         for i in 0..<items.count {
             let it = items[i]
-            let amount = (i < signedAmounts.count) ? signedAmounts[i] : it.amount
+            let inferredAmount = (i < signedAmounts.count) ? signedAmounts[i] : it.amount
+            let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, isCreditCardActivity: looksLikeCreditCardActivity)
             let hashKey = Hashing.hashKey(date: it.date, amount: amount, payee: it.desc, memo: nil, symbol: nil, quantity: nil)
             let tx = StagedTransaction(
                 datePosted: it.date,
@@ -199,6 +207,28 @@ struct PDFBankTransactionsParser: StatementParser {
         }
         return nil
     }
+
+    private func normalizeCreditCardActivityAmount(_ amount: Decimal, description: String, isCreditCardActivity: Bool) -> Decimal {
+        guard isCreditCardActivity else { return amount }
+
+        let lower = description.lowercased()
+        let paymentTokens = [
+            "payment thank you",
+            "payment received",
+            "online payment",
+            "autopay",
+            "auto pay",
+            "cardmember serv",
+            "card member serv"
+        ]
+        let creditTokens = ["refund", "return", "credit"]
+
+        if paymentTokens.contains(where: { lower.contains($0) }) || creditTokens.contains(where: { lower.contains($0) }) {
+            return -amount.magnitude
+        }
+
+        return amount.magnitude
+    }
     
     private func isHeaderOrTotal(_ desc: String) -> Bool {
         let s = desc.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -220,6 +250,10 @@ struct PDFBankTransactionsParser: StatementParser {
             }
         }
         normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if lower.contains("interest charge") {
+            return false
+        }
 
         // Exact/normalized section headers commonly seen in bank PDFs
         let sectionHeaders: Set<String> = [

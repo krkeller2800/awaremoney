@@ -47,12 +47,14 @@ struct DebtSummaryView: View {
     @State private var accounts: [Account] = []
     @State private var embeddedPlannerIsEditing = false
     @State private var showDebtChart = false
+    @State private var showDebtSchedule = false
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("lastFixedDebtBudgetAmount") private var lastFixedDebtBudgetAmount: Double = 0
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
     @AppStorage("oneTimeIncomeDefaultSpreadMonths") private var oneTimeIncomeDefaultSpreadMonths: Int = 12
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet" // or "fixed"
@@ -154,6 +156,48 @@ struct DebtSummaryView: View {
         )
         return schedule
     }
+
+    private func amortizationScheduleMonthCount() -> Int {
+        max(1, currentPlan?.months.count ?? 120)
+    }
+
+    private func amortizationAvailableCashSchedule() -> [Date: Decimal] {
+        budgetSchedule(
+            start: appliedStartMonth(),
+            months: amortizationScheduleMonthCount(),
+            baselineOverride: baselineSource
+        )
+    }
+
+    private func amortizationAvailableForDebtSchedule() -> [Date: Decimal] {
+        let startMonth = appliedStartMonth()
+        let monthCount = amortizationScheduleMonthCount()
+        let availableCashSchedule = budgetSchedule(
+            start: startMonth,
+            months: monthCount,
+            baselineOverride: baselineSource
+        )
+
+        if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
+            return PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                availableCashSchedule,
+                discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount),
+                appliesReserve: baselineBudgetSourceRaw == "recurringNet"
+            )
+        }
+
+        let fixedBudget = appliedBudget ?? currentPlan?.months.first?.payments.values.reduce(0, +) ?? 0
+        return monthlySchedule(start: startMonth, months: monthCount, amount: fixedBudget)
+    }
+
+    private func monthlySchedule(start: Date, months: Int, amount: Decimal) -> [Date: Decimal] {
+        let calendar = Calendar.current
+        return (0..<months).reduce(into: [:]) { schedule, offset in
+            if let month = calendar.date(byAdding: .month, value: offset, to: start) {
+                schedule[normalizeToMonth(month)] = amount
+            }
+        }
+    }
     
     // MARK: - Feasibility pre-check for the current temp plan
     private func feasibilityForTempPlan() -> (available: Decimal, minimums: Decimal, shortfall: Decimal) {
@@ -161,7 +205,13 @@ struct DebtSummaryView: View {
         let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
         // Build a 12-month schedule and use the first month for feasibility
         let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
-        let availableThisMonth = schedule[startMonth] ?? 0
+        let availableCashThisMonth = schedule[startMonth] ?? 0
+        let availableThisMonth = baselineBudgetSourceRaw == "recurringNet"
+            ? PlanBudgetDisplay.availableForDebt(
+                availableCash: availableCashThisMonth,
+                discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount)
+            )
+            : availableCashThisMonth
 
         let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
 
@@ -264,6 +314,12 @@ struct DebtSummaryView: View {
                         .accessibilityIdentifier("debtSummaryDoneButton")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    PlanToolbarButton("Schedule", fixedWidth: 90) {
+                        showDebtSchedule = true
+                    }
+                    .accessibilityIdentifier("showDebtScheduleButton")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     PlanToolbarButton("Chart", fixedWidth: 70) {
                         showDebtChart = true
@@ -276,6 +332,17 @@ struct DebtSummaryView: View {
                     .environment(\.modelContext, modelContext)
                     .environmentObject(settings)
                     .applySheetSizing()
+            }
+            .sheet(isPresented: $showDebtSchedule) {
+                DebtAmortizationScheduleView(
+                    plan: currentPlan,
+                    accounts: accounts,
+                    availableCashByMonth: amortizationAvailableCashSchedule(),
+                    availableForDebtByMonth: amortizationAvailableForDebtSchedule(),
+                    discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount)
+                )
+                .environmentObject(settings)
+                .applySheetSizing()
             }
             .task { recomputeAppliedState() }
             .task { await load() }
@@ -294,6 +361,8 @@ struct DebtSummaryView: View {
             .onChange(of: baselineBudgetSourceRaw) { _, _ in recomputeAppliedState() }
             .onChange(of: useFixedDebtBudget) { _, _ in recomputeAppliedState() }
             .onChange(of: debtBudgetOverrideAmount) { _, _ in recomputeAppliedState() }
+            .onChange(of: debtDiscretionaryReserveAmount) { _, _ in recomputeAppliedState() }
+            .onChange(of: debtPaymentReinvestmentRate) { _, _ in recomputeAppliedState() }
             .onChange(of: debtPlanStartModeRaw) { _, _ in recomputeAppliedState() }
             .onChange(of: debtPlanStartDateEpoch) { _, _ in recomputeAppliedState() }
 
@@ -468,9 +537,10 @@ struct DebtSummaryView: View {
             baselineBudgetSourceRaw: baselineBudgetSourceRaw,
             useFixedDebtBudget: useFixedDebtBudget,
             debtBudgetOverrideAmount: debtBudgetOverrideAmount,
-            includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
-            oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
-        ), avail > 0 {
+                includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
+                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
+                discretionaryReserveAmount: debtDiscretionaryReserveAmount
+            ), avail > 0 {
             return " • Adj Budget: \(formatAmount(avail))"
         }
         return ""
@@ -788,10 +858,15 @@ struct DebtSummaryView: View {
             // Match the sheet’s logic: if we're using recurring net or including spreads,
             // build a per-month schedule; otherwise use a fixed monthly budget.
             if includeNonMonthlyIncomeSpreads || baselineBudgetSourceRaw == "recurringNet" {
-                let schedule = budgetSchedule(
+                let availableCashSchedule = budgetSchedule(
                     start: startMonth,
                     months: 120,
                     baselineOverride: baselineSource
+                )
+                let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                    availableCashSchedule,
+                    discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount),
+                    appliesReserve: baselineBudgetSourceRaw == "recurringNet"
                 )
                 currentPlan = try DebtPayoffEngine.plan(
                     debts: debts,
@@ -1067,6 +1142,7 @@ struct DebtPlanSheetView: View {
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
 
     // Local planning state (mirrors the sheet in DebtSummaryView)
     private enum PlanMode: String, CaseIterable { case currentInputs = "Start now", projectedAtDate = "Start on date" }
@@ -1075,6 +1151,7 @@ struct DebtPlanSheetView: View {
 
     @State private var tempStrategy: PayoffStrategy = .minimumsOnly
     @State private var tempMonthlyBudget: String = ""
+    @State private var tempDiscretionaryReserve: String = ""
     @State private var tempDebtPaymentReinvestmentRate: Double = 1
     
     // NEW: Buffer plan settings locally; do not persist until Set Plan
@@ -1091,7 +1168,7 @@ struct DebtPlanSheetView: View {
 
     // Keyboard handling
     @FocusState private var focusedField: FocusField?
-    private enum FocusField: Hashable { case monthlyBudget }
+    private enum FocusField: Hashable { case monthlyBudget, discretionaryReserve }
     private var isEditing: Bool { focusedField != nil }
     private var shouldShowPlanLandscapeHint: Bool {
         #if os(iOS)
@@ -1279,6 +1356,14 @@ struct DebtPlanSheetView: View {
         return max(0, budget - recurringNetAvailableForTempPlan())
     }
 
+    private var discretionaryReserveAmount: Decimal {
+        let trimmed = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let amount = parseCurrencyInput(trimmed),
+              amount > 0 else { return 0 }
+        return amount
+    }
+
     private func isRecurringIncomeForPlan(_ frequency: PaymentFrequency) -> Bool {
         switch frequency.normalized {
         case .monthly, .semimonthly, .biweekly, .weekly, .socialSecurity:
@@ -1340,7 +1425,13 @@ struct DebtPlanSheetView: View {
     private func feasibilityForTempPlan() -> (available: Decimal, minimums: Decimal, shortfall: Decimal) {
         let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
         let schedule = budgetSchedule(start: startMonth, months: 12, baselineOverride: tempBaselineSource())
-        let availableThisMonth = schedule[startMonth] ?? 0
+        let availableCashThisMonth = schedule[startMonth] ?? 0
+        let availableThisMonth = tempBaselineBudgetSourceRaw == "recurringNet"
+            ? PlanBudgetDisplay.availableForDebt(
+                availableCash: availableCashThisMonth,
+                discretionaryReserve: discretionaryReserveAmount
+            )
+            : availableCashThisMonth
         let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
         let filteredAccounts = accounts.filter { acct in
             let baseBal = absDecimal(latestBalance(acct))
@@ -1412,6 +1503,29 @@ struct DebtPlanSheetView: View {
             if newValue == .currentInputs { tempPlanDate = Date() }
             autoApplyEmbeddedPlanIfPossible()
         }
+    }
+
+    private var discretionaryReserveInput: some View {
+        LabeledContent {
+            TextField("$0.00", text: $tempDiscretionaryReserve)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.numbersAndPunctuation)
+                .focused($focusedField, equals: .discretionaryReserve)
+                .selectAllOnFocus()
+                .submitLabel(.done)
+                .onSubmit { commitAndDismissKeyboard() }
+                .onChange(of: tempDiscretionaryReserve) { _, _ in
+                    autoApplyEmbeddedPlanIfPossible()
+                }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Discretionary Reserve")
+                Text("How much money you want after paying bills and loans")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .id("discretionaryReserveField")
     }
 
     private func embeddedSection<Content: View, Footer: View>(
@@ -1515,6 +1629,8 @@ struct DebtPlanSheetView: View {
                 }
                 .opacity(budgetFieldIsEditable ? 1 : 0.45)
                 .id("monthlyBudgetField")
+
+                discretionaryReserveInput
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -1711,6 +1827,9 @@ struct DebtPlanSheetView: View {
                             }
                             .opacity(budgetFieldIsEditable ? 1 : 0.45)
                             .id("monthlyBudgetField")
+
+                            discretionaryReserveInput
+
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("Reinvest paid-off payments")
@@ -1973,6 +2092,12 @@ struct DebtPlanSheetView: View {
             tempIncludeNonMonthlyIncomeSpreads = includeNonMonthlyIncomeSpreads
             tempOneTimeIncomeDefaultSpreadMonths = oneTimeIncomeDefaultSpreadMonths
             tempDebtPaymentReinvestmentRate = debtPaymentReinvestmentRate
+            if debtDiscretionaryReserveAmount > 0 {
+                let savedReserve = NSDecimalNumber(value: debtDiscretionaryReserveAmount).decimalValue
+                tempDiscretionaryReserve = formatAmount(savedReserve)
+            } else {
+                tempDiscretionaryReserve = ""
+            }
             syncDisplayedBudgetForCurrentMode()
         }
         .onChange(of: settings.defaultPayoffStrategyRaw) { _, newValue in
@@ -2178,6 +2303,135 @@ struct DebtPlanSheetView: View {
         }
     }
 
+    private struct FutureReserveStatus {
+        let month: Date
+        let discretionaryRemaining: Decimal
+        let reserveGap: Decimal
+    }
+
+    private struct NextPayoffImpact {
+        let date: Date
+        let accountNames: [String]
+        let discretionaryIncrease: Decimal
+        let futureReserveStatus: FutureReserveStatus?
+    }
+
+    private func previewPlanForTempSettings(startMonth: Date) -> DebtPlanResult? {
+        let parsedBudget: Decimal? = {
+            if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return parseCurrencyInput(tempMonthlyBudget)
+        }()
+        guard tempStrategy == .minimumsOnly || parsedBudget != nil else { return nil }
+        guard feasibilityForTempPlan().shortfall == 0 else { return nil }
+
+        let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
+        let debts: [DebtInput] = accounts.compactMap { account in
+            let baseBalance = absDecimal(latestBalance(account))
+            let balance = shouldProjectBalances
+                ? absProjectedOrBase(for: account, planDate: startMonth, base: baseBalance)
+                : baseBalance
+            guard balance > 0 else { return nil }
+            return DebtInput(
+                id: account.id,
+                name: account.name,
+                apr: account.loanTerms?.apr,
+                balance: balance,
+                minPayment: monthlyPayment(for: account, balance: balance)
+            )
+        }
+        guard !debts.isEmpty else { return nil }
+
+        let availableCashSchedule = budgetSchedule(start: startMonth, months: 600, baselineOverride: tempBaselineSource())
+        let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+            availableCashSchedule,
+            discretionaryReserve: discretionaryReserveAmount,
+            appliesReserve: tempBaselineBudgetSourceRaw == "recurringNet"
+        )
+
+        do {
+            if tempIncludeNonMonthlyIncomeSpreads || tempBaselineBudgetSourceRaw == "recurringNet" {
+                return try DebtPayoffEngine.plan(
+                    debts: debts,
+                    budgetByMonth: schedule,
+                    strategy: tempStrategy,
+                    reinvestmentRate: Decimal(tempDebtPaymentReinvestmentRate),
+                    startDate: startMonth
+                )
+            } else {
+                let budgetToUse = parsedBudget ?? debts.reduce(0) { $0 + $1.minPayment }
+                return try DebtPayoffEngine.plan(
+                    debts: debts,
+                    monthlyBudget: budgetToUse,
+                    strategy: tempStrategy,
+                    reinvestmentRate: Decimal(tempDebtPaymentReinvestmentRate),
+                    startDate: startMonth
+                )
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    private func nextPayoffImpact(for plan: DebtPlanResult?, startMonth: Date) -> NextPayoffImpact? {
+        guard let plan else { return nil }
+        let calendar = Calendar.current
+        let normalizedStartMonth = normalizeToMonth(startMonth)
+        let payoffDatesByAccount = plan.payoffDates.reduce(into: [UUID: Date]()) { result, item in
+            result[item.key] = normalizeToMonth(item.value)
+        }
+        guard let nextPayoffMonth = payoffDatesByAccount.values
+            .filter({ $0 >= normalizedStartMonth })
+            .sorted()
+            .first else {
+            return nil
+        }
+
+        let paidOffAccountIDs = payoffDatesByAccount
+            .filter { calendar.isDate($0.value, equalTo: nextPayoffMonth, toGranularity: .month) }
+            .map(\.key)
+        let paidOffAccounts = accounts.filter { paidOffAccountIDs.contains($0.id) }
+        let payoffMonthIndex = plan.months.firstIndex { calendar.isDate($0.date, equalTo: nextPayoffMonth, toGranularity: .month) }
+        let releasedPayments = paidOffAccountIDs.reduce(Decimal(0)) { total, accountID in
+            let payoffMonthPayment = payoffMonthIndex.map { plan.months[$0].payments[accountID] ?? 0 } ?? 0
+            let previousPayment = payoffMonthIndex.flatMap { index in
+                index > 0 ? plan.months[index - 1].payments[accountID] : nil
+            } ?? 0
+            return total + max(payoffMonthPayment, previousPayment).rounded(2)
+        }
+        let reinvestmentRate = Decimal(tempDebtPaymentReinvestmentRate)
+        let discretionaryIncrease = (releasedPayments * (1 - reinvestmentRate)).rounded(2)
+        let futureReserveStatus: FutureReserveStatus? = {
+            guard let monthAfterPayoff = calendar.date(byAdding: .month, value: 1, to: nextPayoffMonth),
+                  let futurePlanMonth = plan.months.first(where: { calendar.isDate($0.date, equalTo: monthAfterPayoff, toGranularity: .month) }) else {
+                return nil
+            }
+            let futureMonth = normalizeToMonth(monthAfterPayoff)
+            let futureCashSchedule = budgetSchedule(start: startMonth, months: max(2, plan.months.count + 1), baselineOverride: .recurringNet)
+            let futureAvailableCash = futureCashSchedule[futureMonth] ?? 0
+            let futureDebtPayment = futurePlanMonth.payments.values.reduce(0, +)
+            let futureDiscretionaryRemaining = (futureAvailableCash - futureDebtPayment).rounded(2)
+            let futureReserveGap = PlanBudgetDisplay.reserveGap(
+                discretionaryReserve: discretionaryReserveAmount,
+                discretionaryRemaining: futureDiscretionaryRemaining
+            ).rounded(2)
+            return FutureReserveStatus(
+                month: futureMonth,
+                discretionaryRemaining: futureDiscretionaryRemaining,
+                reserveGap: futureReserveGap
+            )
+        }()
+        let accountNames = paidOffAccounts
+            .map(\.name)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+
+        return NextPayoffImpact(
+            date: nextPayoffMonth,
+            accountNames: accountNames,
+            discretionaryIncrease: discretionaryIncrease,
+            futureReserveStatus: futureReserveStatus
+        )
+    }
+
     @ViewBuilder
     private var currentPlanMathRows: some View {
         let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
@@ -2186,10 +2440,24 @@ struct DebtPlanSheetView: View {
         let fixedBudgetExcess = fixedBudgetExcessForTempPlan()
         let fixedBudget = parseCurrencyInput(tempMonthlyBudget) ?? 0
         let availableCash = recurringNetAvailableForTempPlan()
+        let discretionaryReserve = discretionaryReserveAmount
         let breakdown = nonMonthlyAdjustmentBreakdown(for: startMonth)
+        let availableForDebt = tempBaselineBudgetSourceRaw == "recurringNet"
+            ? PlanBudgetDisplay.availableForDebt(availableCash: availableCash, discretionaryReserve: discretionaryReserve)
+            : feas.available
+        let plannedDebtPayment = currentPlan?.months.first?.payments.values.reduce(0, +) ?? availableForDebt
+        let discretionaryRemaining = availableCash - plannedDebtPayment
+        let reserveGap = PlanBudgetDisplay.reserveGap(
+            discretionaryReserve: discretionaryReserve,
+            discretionaryRemaining: discretionaryRemaining
+        )
         let planAdjustment = tempBaselineBudgetSourceRaw == "fixed"
             ? feas.available - fixedBudget
-            : feas.available - availableCash
+            : availableCash - recurringMonthlyIncomeForPlan + recurringMonthlyBillsForPlan
+        let previewPlan = previewPlanForTempSettings(startMonth: startMonth)
+        let nextPayoffImpact = nextPayoffImpact(for: previewPlan, startMonth: startMonth)
+            ?? nextPayoffImpact(for: currentPlan, startMonth: startMonth)
+        let hasPayoffPlan = currentPlan != nil || previewPlan != nil
         let planSummary: String = {
             if tempPlanMode == .projectedAtDate {
                 return "Start on \(tempPlanDate.formatted(date: .abbreviated, time: .omitted)) • \(tempStrategyDisplay)\(tempBudgetText)"
@@ -2219,6 +2487,10 @@ struct DebtPlanSheetView: View {
             LabeledContent("Fixed Budget") { Text(formatAmount(fixedBudget)) }
         }
 
+        expandableAmountRow("Discretionary Reserve", value: discretionaryReserve) {
+            Text("How much money you want after paying bills and loans")
+        }
+
         expandableAmountRow("Net Non-Monthly Adjustment", value: planAdjustment) {
             formulaRow("Income Set Aside", amount: breakdown.incomeSetAside, signed: true)
             formulaRow("Bill Reserve", amount: -breakdown.billReserve, signed: true)
@@ -2229,9 +2501,13 @@ struct DebtPlanSheetView: View {
             Text("Income Set Aside minus Bill Reserve for this plan month.")
         }
 
-        expandableAmountRow("Available for Debt This Month", value: feas.available) {
+        expandableAmountRow("Available for Debt This Month", value: availableForDebt) {
             formulaRow(tempBaselineBudgetSourceRaw == "fixed" ? "Fixed Budget" : "Available Cash", amount: tempBaselineBudgetSourceRaw == "fixed" ? fixedBudget : availableCash)
-            formulaRow("Net Non-Monthly Adjustment", amount: planAdjustment, signed: true)
+            if tempBaselineBudgetSourceRaw == "recurringNet" {
+                formulaRow("Discretionary Reserve", amount: -discretionaryReserve, signed: true)
+            } else {
+                formulaRow("Net Non-Monthly Adjustment", amount: planAdjustment, signed: true)
+            }
             Text("This is the amount the payoff plan can use this month.")
         }
 
@@ -2248,18 +2524,82 @@ struct DebtPlanSheetView: View {
             Text("System calculated: sum of required minimum payments on active debts this month.")
         }
 
+        expandableAmountRow("Planned Debt Payment", value: plannedDebtPayment) {
+            Text("Actual total debt payment assigned by the selected payoff plan this month.")
+        }
+
+        expandableAmountRow("Discretionary Remaining", value: discretionaryRemaining, valueColor: discretionaryRemaining < 0 ? .red : .primary) {
+            formulaRow("Available Cash This Month", amount: availableCash)
+            formulaRow("Planned Debt Payment", amount: -plannedDebtPayment, signed: true)
+            Text("Available cash left after the selected plan's actual debt payment.")
+        }
+
+        if reserveGap > 0 {
+            expandableAmountRow("Below Reserve Target This Month", value: reserveGap, valueColor: .red) {
+                formulaRow("Discretionary Reserve", amount: discretionaryReserve)
+                formulaRow("Discretionary Remaining", amount: discretionaryRemaining)
+                Text("This is how far the selected plan leaves this month below the reserve target.")
+            }
+        }
+
+        Text("Future Payoff Impact")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 8)
+
+        if let nextPayoffImpact {
+            if let futureReserveStatus = nextPayoffImpact.futureReserveStatus {
+                LabeledContent("First Month After Payoff") {
+                    Text(futureReserveStatus.month.formatted(.dateTime.month(.abbreviated).year()))
+                }
+                expandableAmountRow("Monthly Increase After Next Payoff", value: nextPayoffImpact.discretionaryIncrease) {
+                    if !nextPayoffImpact.accountNames.isEmpty {
+                        LabeledContent(nextPayoffImpact.accountNames.count == 1 ? "Paid-Off Account" : "Paid-Off Accounts") {
+                            Text(nextPayoffImpact.accountNames.joined(separator: ", "))
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    Text("Future monthly increase beginning in the first full month after the next payoff. This is separate from this month's reserve gap.")
+                }
+                expandableAmountRow(
+                    "Projected Discretionary Remaining",
+                    value: futureReserveStatus.discretionaryRemaining,
+                    valueColor: futureReserveStatus.discretionaryRemaining < 0 ? .red : .primary
+                ) {
+                    Text("Projected cash left after the planned debt payment in the first full month after the next payoff.")
+                }
+                if futureReserveStatus.reserveGap > 0 {
+                    expandableAmountRow("Projected Reserve Gap After Payoff", value: futureReserveStatus.reserveGap, valueColor: .red) {
+                        formulaRow("Discretionary Reserve", amount: discretionaryReserve)
+                        formulaRow("Projected Discretionary Remaining", amount: futureReserveStatus.discretionaryRemaining)
+                        Text("Projected gap in the first full month after the next payoff.")
+                    }
+                }
+            } else {
+                LabeledContent("First Month After Payoff") {
+                    Text("No following month in plan")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            LabeledContent("First Month After Payoff") {
+                Text(hasPayoffPlan ? "No payoff in plan horizon" : "Unavailable")
+                    .foregroundStyle(.secondary)
+            }
+        }
+
         if fixedBudgetExcess > 0 {
-            expandableAmountRow("Over Available Cash", value: fixedBudgetExcess, valueColor: .red) {
+            expandableAmountRow("Fixed Budget Over Available Cash", value: fixedBudgetExcess, valueColor: .red) {
                 formulaRow("Fixed Budget", amount: fixedBudget)
                 formulaRow("Available Cash This Month", amount: -availableCash, signed: true)
-                Text("This is how much the fixed budget exceeds available cash.")
+                Text("The fixed debt budget is higher than available cash before considering the reserve target.")
             }
         }
 
         if isInfeasible {
             expandableAmountRow("Shortfall", value: feas.shortfall, valueColor: .red) {
                 formulaRow("Minimums Due", amount: feas.minimums)
-                formulaRow("Available for Debt", amount: -feas.available, signed: true)
+                formulaRow("Available for Debt", amount: -availableForDebt, signed: true)
                 Text("Minimum payments are higher than the plan budget available this month.")
             }
             Button("Switch to Minimums Only") { tempStrategy = .minimumsOnly }
@@ -2340,6 +2680,7 @@ struct DebtPlanSheetView: View {
             if tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
             return parseCurrencyInput(tempMonthlyBudget)
         }()
+        let parsedDiscretionaryReserve = discretionaryReserveAmount
 
         if tempStrategy != .minimumsOnly && parsedBudget == nil {
             budgetValidationError = "Please enter a valid budget amount or select the Minimums Only strategy."
@@ -2351,11 +2692,9 @@ struct DebtPlanSheetView: View {
         let fixedBudgetExcess = fixedBudgetExcessForTempPlan(parsedBudget: parsedBudget)
         if fixedBudgetExcess > 0 {
             let excessText = formatAmount(fixedBudgetExcess)
-            let message = "Your fixed budget is \(excessText) more than the cash available this month. Lower the budget or switch to Recurring Net."
+            let message = "Your fixed budget is \(excessText) more than the cash available this month."
             budgetValidationError = message
             planErrorMessage = message
-            if showAlerts { showPlanErrorAlert = true }
-            return false
         }
 
         let shouldProjectBalances = usesProjectedBalances(mode: tempPlanMode, date: tempPlanDate)
@@ -2377,7 +2716,12 @@ struct DebtPlanSheetView: View {
         }
 
         let startDateForPlan = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
-        let schedule = budgetSchedule(start: startDateForPlan, months: 60, baselineOverride: tempBaselineSource())
+        let availableCashSchedule = budgetSchedule(start: startDateForPlan, months: 60, baselineOverride: tempBaselineSource())
+        let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+            availableCashSchedule,
+            discretionaryReserve: parsedDiscretionaryReserve,
+            appliesReserve: tempBaselineBudgetSourceRaw == "recurringNet"
+        )
 
         do {
             let planResult: DebtPlanResult
@@ -2411,7 +2755,7 @@ struct DebtPlanSheetView: View {
             includeNonMonthlyIncomeSpreads = tempIncludeNonMonthlyIncomeSpreads
             oneTimeIncomeDefaultSpreadMonths = tempOneTimeIncomeDefaultSpreadMonths
             debtPaymentReinvestmentRate = tempDebtPaymentReinvestmentRate
-
+            debtDiscretionaryReserveAmount = NSDecimalNumber(decimal: parsedDiscretionaryReserve).doubleValue
             if tempBaselineBudgetSourceRaw == "fixed" {
                 if tempStrategy != .minimumsOnly {
                     if let b = parsedBudget, b > 0 {
@@ -2462,6 +2806,13 @@ struct DebtPlanSheetView: View {
     private func commitAndDismissKeyboard() {
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
+        let trimmedReserve = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedReserve = parseCurrencyInput(trimmedReserve)
+        if let reserve = parsedReserve, reserve > 0 {
+            tempDiscretionaryReserve = formatAmount(reserve)
+        } else if trimmedReserve.isEmpty || parsedReserve == nil || (parsedReserve ?? 0) <= 0 {
+            tempDiscretionaryReserve = ""
+        }
         focusedField = nil
         autoApplyEmbeddedPlanIfPossible()
         #if canImport(UIKit)

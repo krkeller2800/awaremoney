@@ -84,7 +84,9 @@ struct AccountTransactionsListView: View {
 
             Section(header: Text("Transactions")) {
                 ForEach(rows) { row in
-                    NavigationLink(destination: EditTransactionContainer(transactionID: row.id)) {
+                    NavigationLink {
+                        EditTransactionContainer(transactionID: row.id)
+                    } label: {
                         HStack(alignment: .firstTextBaseline) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(row.payee).font(.body)
@@ -181,19 +183,35 @@ struct AccountTransactionsListView: View {
 }
 private struct EditTransactionContainer: View {
     let transactionID: UUID
-    @Query private var txs: [Transaction]
-
-    init(transactionID: UUID) {
-        self.transactionID = transactionID
-        _txs = Query(filter: #Predicate<Transaction> { $0.id == transactionID }, sort: [])
-    }
+    @Environment(\.modelContext) private var modelContext
+    @State private var transaction: Transaction?
+    @State private var didLoad = false
 
     var body: some View {
-        if let tx = txs.first {
-            EditTransactionView(transaction: tx)
-        } else {
-            ContentUnavailableView("Transaction not found", systemImage: "exclamationmark.triangle")
+        Group {
+            if let transaction {
+                EditTransactionView(transaction: transaction)
+            } else if didLoad {
+                ContentUnavailableView("Transaction not found", systemImage: "exclamationmark.triangle")
+            } else {
+                ProgressView()
+            }
         }
+        .task(id: transactionID) {
+            loadTransaction()
+        }
+    }
+
+    private func loadTransaction() {
+        do {
+            let id = transactionID
+            let predicate = #Predicate<Transaction> { $0.id == id }
+            let descriptor = FetchDescriptor<Transaction>(predicate: predicate)
+            transaction = try modelContext.fetch(descriptor).first
+        } catch {
+            transaction = nil
+        }
+        didLoad = true
     }
 }
 

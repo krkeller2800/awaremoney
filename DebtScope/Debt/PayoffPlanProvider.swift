@@ -30,6 +30,9 @@ final class PayoffPlanProvider {
         let useFixedDebtBudget = UserDefaults.standard.bool(forKey: "useFixedDebtBudget")
         let debtBudgetOverrideAmount = UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount")
         let debtPaymentReinvestmentRate = UserDefaults.standard.object(forKey: "debtPaymentReinvestmentRate") as? Double ?? 1
+        let discretionaryReserve = PlanBudgetDisplay.discretionaryReserve(
+            from: UserDefaults.standard.double(forKey: "debtDiscretionaryReserveAmount")
+        )
 
         let debts: [DebtInput] = liabilities.map { acct in
             let bal = absDecimal(latestBalance(acct))
@@ -45,7 +48,7 @@ final class PayoffPlanProvider {
         let startMonth = normalizeToMonth(startDate)
 
         if includeSpreads || baselineRaw == "recurringNet" {
-            let schedule = IncomeScheduler.budgetByMonth(
+            let availableCashSchedule = IncomeScheduler.budgetByMonth(
                 items: allCashFlowItems(),
                 start: startMonth,
                 months: 60,
@@ -55,6 +58,11 @@ final class PayoffPlanProvider {
                     ? .fixedAmount(Decimal(debtBudgetOverrideAmount))
                     : .recurringNet,
                 incomeFundingAllocations: incomeFundingAllocationTotals()
+            )
+            let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                availableCashSchedule,
+                discretionaryReserve: discretionaryReserve,
+                appliesReserve: baselineRaw == "recurringNet"
             )
             return try DebtPayoffEngine.plan(
                 debts: debts,
@@ -94,9 +102,14 @@ final class PayoffPlanProvider {
         }()
         let useFixedDebtBudget = UserDefaults.standard.bool(forKey: "useFixedDebtBudget")
         let debtBudgetOverrideAmount = UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount")
+        let discretionaryReserveAmount = UserDefaults.standard.double(forKey: "debtDiscretionaryReserveAmount")
         var budgetText = ""
-        if useFixedDebtBudget && debtBudgetOverrideAmount > 0, let formatted = currency(Decimal(debtBudgetOverrideAmount), code: settings.currencyCode) {
-            budgetText = " • Adj Budget: \(formatted)"
+        if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
+            if let formatted = currency(Decimal(debtBudgetOverrideAmount), code: settings.currencyCode) {
+                budgetText = " • Adj Budget: \(formatted)"
+            }
+        } else if discretionaryReserveAmount > 0, let formatted = currency(PlanBudgetDisplay.discretionaryReserve(from: discretionaryReserveAmount), code: settings.currencyCode) {
+            budgetText = " • Reserve: \(formatted)"
         }
         return "Start now • \(strategyText)\(budgetText)"
     }

@@ -56,7 +56,11 @@ struct BankCSVParser: StatementParser {
             let memo = value(row, map, key: "memo")
 
             // Amount logic
-            let amount = try parseAmount(row: row, map: map)
+            let amount = signedAmountForCreditCardType(
+                try parseAmount(row: row, map: map),
+                type: value(row, map, key: "type"),
+                suggestedType: suggestedType
+            )
 
             // Optional running balance column (e.g., Chase CSVs)
             if hasBalanceColumn, let balStr = value(row, map, key: "balance"),
@@ -155,6 +159,27 @@ struct BankCSVParser: StatementParser {
         if let d = debitStr, let dec = Decimal(string: sanitizeAmount(d)) { return -dec }
         if let c = creditStr, let dec = Decimal(string: sanitizeAmount(c)) { return dec }
         throw ImportError.parseFailure("Missing amount")
+    }
+
+    private func signedAmountForCreditCardType(_ amount: Decimal, type: String?, suggestedType: Account.AccountType) -> Decimal {
+        guard suggestedType == .creditCard,
+              let type = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !type.isEmpty else {
+            return amount
+        }
+
+        let magnitude = amount.magnitude
+        let paymentTokens = ["payment", "pmt", "credit", "refund", "return", "reversal"]
+        if paymentTokens.contains(where: { type.contains($0) }) {
+            return -magnitude
+        }
+
+        let chargeTokens = ["sale", "purchase", "fee", "interest", "charge", "advance"]
+        if chargeTokens.contains(where: { type.contains($0) }) {
+            return magnitude
+        }
+
+        return amount
     }
 
     private func sanitizeAmount(_ s: String) -> String {

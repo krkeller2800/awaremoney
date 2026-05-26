@@ -61,6 +61,7 @@ struct DebtDashboardView: View {
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
     
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -138,7 +139,8 @@ struct DebtDashboardView: View {
                 useFixedDebtBudget: useFixedDebtBudget,
                 debtBudgetOverrideAmount: debtBudgetOverrideAmount,
                 includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
-                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
+                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
+                discretionaryReserveAmount: debtDiscretionaryReserveAmount
             ), avail > 0 {
                 return " • Adj Budget: \(formatAmount(avail))"
             }
@@ -616,6 +618,7 @@ struct DebtDetailView: View {
     @AppStorage("useFixedDebtBudget") private var useFixedDebtBudget: Bool = false
     @AppStorage("debtBudgetOverrideAmount") private var debtBudgetOverrideAmount: Double = 0
     @AppStorage("debtPaymentReinvestmentRate") private var debtPaymentReinvestmentRate: Double = 1
+    @AppStorage("debtDiscretionaryReserveAmount") private var debtDiscretionaryReserveAmount: Double = 0
     
     @AppStorage("baselineBudgetSourceRaw") private var baselineBudgetSourceRaw: String = "recurringNet"
     @AppStorage("includeNonMonthlyIncomeSpreads") private var includeNonMonthlyIncomeSpreads: Bool = true
@@ -810,7 +813,7 @@ struct DebtDetailView: View {
                 let items = (try? modelContext.fetch(FetchDescriptor<CashFlowItem>())) ?? []
                 let allocations = (try? modelContext.fetch(FetchDescriptor<BillFundingAllocation>())) ?? []
                 let incomeFunding = IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
-                let schedule = IncomeScheduler.budgetByMonth(
+                let availableCashSchedule = IncomeScheduler.budgetByMonth(
                     items: items,
                     start: normalizedStart,
                     months: 60,
@@ -818,6 +821,11 @@ struct DebtDetailView: View {
                     oneTimeDefaultSpreadMonths: sanitizedDefaultSpread(oneTimeIncomeDefaultSpreadMonths),
                     baselineSource: baselineSource,
                     incomeFundingAllocations: incomeFunding
+                )
+                let schedule = PlanBudgetDisplay.reserveAdjustedBudgetSchedule(
+                    availableCashSchedule,
+                    discretionaryReserve: PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount),
+                    appliesReserve: baselineBudgetSourceRaw == "recurringNet"
                 )
                 plan = try DebtPayoffEngine.plan(
                     debts: debts,
@@ -876,7 +884,8 @@ struct DebtDetailView: View {
                 useFixedDebtBudget: useFixedDebtBudget,
                 debtBudgetOverrideAmount: debtBudgetOverrideAmount,
                 includeNonMonthlyIncomeSpreads: includeNonMonthlyIncomeSpreads,
-                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths
+                oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
+                discretionaryReserveAmount: debtDiscretionaryReserveAmount
             ), avail > 0 {
                 return " • Adj Budget: \(formatAmount(avail))"
             }
@@ -1388,4 +1397,3 @@ private struct PlanBanner: View {
 #Preview {
     Text("Preview requires model data")
 }
-

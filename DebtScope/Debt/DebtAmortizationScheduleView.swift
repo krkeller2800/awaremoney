@@ -297,22 +297,22 @@ enum DebtAmortizationScheduleRows {
                 return lhs.accountName.localizedCaseInsensitiveCompare(rhs.accountName) == .orderedAscending
             }
 
-            let totalDebtPayment = month.payments.values.reduce(0, +).rounded(2)
-            let interest = month.interest.values.reduce(0, +).rounded(2)
-            let endingDebtBalance = month.balances.values.reduce(0, +).rounded(2)
-            let availableCash = (normalizedAvailableCash[monthKey] ?? normalizedAvailableForDebt[monthKey] ?? totalDebtPayment).rounded(2)
-            let availableForDebt = (normalizedAvailableForDebt[monthKey] ?? totalDebtPayment).rounded(2)
-            let discretionaryRemaining = (availableCash - totalDebtPayment).rounded(2)
+            let totalDebtPayment = month.payments.values.reduce(0, +).rounded(scale: 2)
+            let interest = month.interest.values.reduce(0, +).rounded(scale: 2)
+            let endingDebtBalance = month.balances.values.reduce(0, +).rounded(scale: 2)
+            let availableCash = (normalizedAvailableCash[monthKey] ?? normalizedAvailableForDebt[monthKey] ?? totalDebtPayment).rounded(scale: 2)
+            let availableForDebt = (normalizedAvailableForDebt[monthKey] ?? totalDebtPayment).rounded(scale: 2)
+            let discretionaryRemaining = (availableCash - totalDebtPayment).rounded(scale: 2)
             let belowReserveTarget = PlanBudgetDisplay.reserveGap(
                 discretionaryReserve: discretionaryReserve,
                 discretionaryRemaining: discretionaryRemaining
-            ).rounded(2)
+            ).rounded(scale: 2)
 
             return DebtAmortizationMonthRow(
                 id: monthKey,
                 month: monthKey,
                 availableCash: availableCash,
-                discretionaryReserve: discretionaryReserve.rounded(2),
+                discretionaryReserve: discretionaryReserve.rounded(scale: 2),
                 availableForDebt: availableForDebt,
                 totalDebtPayment: totalDebtPayment,
                 interest: interest,
@@ -332,9 +332,9 @@ enum DebtAmortizationScheduleRows {
         previousEndingBalances: [UUID: Decimal]
     ) -> Decimal {
         if let previousEndingBalance = previousEndingBalances[accountID] {
-            return previousEndingBalance.rounded(2)
+            return previousEndingBalance.rounded(scale: 2)
         }
-        return (endingBalance + payment - interest).rounded(2)
+        return (endingBalance + payment - interest).rounded(scale: 2)
     }
 
     private static func normalize(schedule: [Date: Decimal], calendar: Calendar) -> [Date: Decimal] {
