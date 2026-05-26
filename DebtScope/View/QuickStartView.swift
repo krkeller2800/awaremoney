@@ -23,6 +23,262 @@ struct QuickStartPendingImport: Equatable {
     let institution: String?
 }
 
+private struct QuickStartReviewItem: Identifiable, Equatable, Codable {
+    let id: UUID
+    let url: URL
+    var type: StatementType?
+    var institution: String?
+    let addedAt: Date
+    let managedFileName: String?
+
+    init(
+        id: UUID = UUID(),
+        url: URL,
+        type: StatementType?,
+        institution: String?,
+        addedAt: Date = Date(),
+        managedFileName: String? = nil
+    ) {
+        self.id = id
+        self.url = url
+        self.type = type
+        self.institution = institution
+        self.addedAt = addedAt
+        self.managedFileName = managedFileName
+    }
+}
+
+private struct QuickStartReviewState: Codable {
+    var items: [QuickStartReviewItem]
+    var selectedItemID: UUID?
+}
+
+private enum QuickStartReviewStorage {
+    static let defaultsKey = "quick_start_review_state"
+
+    static func loadState() -> QuickStartReviewState? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else {
+            AMLogging.log(
+                "QuickStartReviewStorage load: no defaults key bundle=\(Bundle.main.bundleIdentifier ?? "nil")",
+                component: "Import"
+            )
+            return nil
+        }
+
+        do {
+            let state = try JSONDecoder().decode(QuickStartReviewState.self, from: data)
+            AMLogging.log(
+                "QuickStartReviewStorage load: decoded items=\(state.items.count) selected=\(state.selectedItemID?.uuidString ?? "nil") bundle=\(Bundle.main.bundleIdentifier ?? "nil")",
+                component: "Import"
+            )
+            return state
+        } catch {
+            AMLogging.error(
+                "QuickStartReviewStorage load: decode failed bytes=\(data.count) error=\(error.localizedDescription)",
+                component: "Import"
+            )
+            return nil
+        }
+    }
+
+    static func saveState(_ state: QuickStartReviewState) {
+        if let data = try? JSONEncoder().encode(state) {
+            UserDefaults.standard.set(data, forKey: defaultsKey)
+            UserDefaults.standard.synchronize()
+            AMLogging.log(
+                "QuickStartReviewStorage save: items=\(state.items.count) selected=\(state.selectedItemID?.uuidString ?? "nil") bytes=\(data.count) bundle=\(Bundle.main.bundleIdentifier ?? "nil")",
+                component: "Import"
+            )
+        } else {
+            AMLogging.error(
+                "QuickStartReviewStorage save: encode failed items=\(state.items.count)",
+                component: "Import"
+            )
+        }
+    }
+
+    static func stageForReview(_ sourceURL: URL, id: UUID) -> URL {
+        guard let directoryURL = reviewDirectoryURL(create: true) else {
+            AMLogging.error(
+                "QuickStartReviewStorage stage: no review directory source=\(sourceURL.lastPathComponent)",
+                component: "Import"
+            )
+            return sourceURL
+        }
+        let sourceURL = sourceURL.standardizedFileURL
+
+        if isManagedReviewURL(sourceURL) {
+            AMLogging.log(
+                "QuickStartReviewStorage stage: already managed file=\(sourceURL.lastPathComponent) readable=\(FileManager.default.isReadableFile(atPath: sourceURL.path)) path=\(sourceURL.path)",
+                component: "Import"
+            )
+            return sourceURL
+        }
+
+        let destinationURL = directoryURL
+            .appendingPathComponent("\(id.uuidString)-\(sourceURL.lastPathComponent)")
+            .standardizedFileURL
+
+        if FileManager.default.isReadableFile(atPath: destinationURL.path) {
+            AMLogging.log(
+                "QuickStartReviewStorage stage: destination exists file=\(destinationURL.lastPathComponent) readable=true path=\(destinationURL.path)",
+                component: "Import"
+            )
+            return destinationURL
+        }
+
+        let didStartSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartSecurityScope {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            AMLogging.log(
+                "QuickStartReviewStorage stage: copied source=\(sourceURL.lastPathComponent) destination=\(destinationURL.lastPathComponent) reviewDir=\(directoryURL.path)",
+                component: "Import"
+            )
+            return destinationURL
+        } catch {
+            do {
+                let data = try Data(contentsOf: sourceURL)
+                try data.write(to: destinationURL, options: .atomic)
+                AMLogging.log(
+                    "QuickStartReviewStorage stage: data-wrote source=\(sourceURL.lastPathComponent) destination=\(destinationURL.lastPathComponent) bytes=\(data.count) reviewDir=\(directoryURL.path)",
+                    component: "Import"
+                )
+                return destinationURL
+            } catch {
+                AMLogging.error(
+                    "QuickStartReviewStorage: failed to stage review file=\(sourceURL.lastPathComponent) error=\(error.localizedDescription)",
+                    component: "Import"
+                )
+                return sourceURL
+            }
+        }
+    }
+
+    static func migratedItemIfReadable(_ item: QuickStartReviewItem) -> QuickStartReviewItem? {
+        guard let readableURL = readableURL(for: item) else {
+            AMLogging.log(
+                "QuickStartReviewStorage migrate: dropping unreadable id=\(item.id) managedFile=\(item.managedFileName ?? "nil") oldPath=\(item.url.path)",
+                component: "Import"
+            )
+            return nil
+        }
+        let durableURL = stageForReview(readableURL, id: item.id)
+        let managedFileName = managedFileName(for: durableURL)
+        AMLogging.log(
+            "QuickStartReviewStorage migrate: id=\(item.id) from=\(readableURL.path) to=\(durableURL.path) managedFile=\(managedFileName ?? "nil") readable=\(FileManager.default.isReadableFile(atPath: durableURL.path))",
+            component: "Import"
+        )
+        return QuickStartReviewItem(
+            id: item.id,
+            url: durableURL,
+            type: item.type,
+            institution: item.institution,
+            addedAt: item.addedAt,
+            managedFileName: managedFileName
+        )
+    }
+
+    static func managedFileName(for url: URL) -> String? {
+        isManagedReviewURL(url.standardizedFileURL) ? url.lastPathComponent : nil
+    }
+
+    static func removeManagedFile(_ url: URL) {
+        let fileURL = url.standardizedFileURL
+        guard isManagedReviewURL(fileURL) else {
+            AMLogging.log(
+                "QuickStartReviewStorage remove: skipped unmanaged path=\(fileURL.path)",
+                component: "Import"
+            )
+            return
+        }
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+            AMLogging.log(
+                "QuickStartReviewStorage remove: deleted path=\(fileURL.path)",
+                component: "Import"
+            )
+        } catch {
+            AMLogging.error(
+                "QuickStartReviewStorage remove: failed path=\(fileURL.path) error=\(error.localizedDescription)",
+                component: "Import"
+            )
+        }
+    }
+
+    private static func reviewDirectoryURL(create: Bool) -> URL? {
+        do {
+            let appSupportURL = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: create
+            )
+            let directoryURL = appSupportURL
+                .appendingPathComponent("NeedsReviewStatements", isDirectory: true)
+                .standardizedFileURL
+            if create {
+                try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            }
+            return directoryURL
+        } catch {
+            AMLogging.error(
+                "QuickStartReviewStorage: failed to resolve review directory error=\(error.localizedDescription)",
+                component: "Import"
+            )
+            return nil
+        }
+    }
+
+    private static func isManagedReviewURL(_ url: URL) -> Bool {
+        guard let directoryURL = reviewDirectoryURL(create: false) else { return false }
+        return url.standardizedFileURL.path.hasPrefix(directoryURL.standardizedFileURL.path + "/")
+    }
+
+    private static func readableURL(for item: QuickStartReviewItem) -> URL? {
+        if let managedFileName = item.managedFileName,
+           let currentManagedURL = currentManagedURL(fileName: managedFileName),
+           FileManager.default.isReadableFile(atPath: currentManagedURL.path) {
+            AMLogging.log(
+                "QuickStartReviewStorage readableURL: resolved managedFile=\(managedFileName) path=\(currentManagedURL.path)",
+                component: "Import"
+            )
+            return currentManagedURL
+        }
+
+        if FileManager.default.isReadableFile(atPath: item.url.path) {
+            AMLogging.log(
+                "QuickStartReviewStorage readableURL: old absolute path still readable path=\(item.url.path)",
+                component: "Import"
+            )
+            return item.url
+        }
+
+        let legacyFileName = item.url.lastPathComponent
+        if let currentManagedURL = currentManagedURL(fileName: legacyFileName),
+           FileManager.default.isReadableFile(atPath: currentManagedURL.path) {
+            AMLogging.log(
+                "QuickStartReviewStorage readableURL: recovered legacy fileName=\(legacyFileName) path=\(currentManagedURL.path)",
+                component: "Import"
+            )
+            return currentManagedURL
+        }
+
+        return nil
+    }
+
+    private static func currentManagedURL(fileName: String) -> URL? {
+        guard !fileName.isEmpty,
+              let directoryURL = reviewDirectoryURL(create: false) else { return nil }
+        return directoryURL.appendingPathComponent(fileName).standardizedFileURL
+    }
+}
+
 struct QuickStartView: View {
     @StateObject private var vm: ImportViewModel
     @State private var coordinator: StatementImportCoordinator
@@ -46,6 +302,9 @@ struct QuickStartView: View {
     @State private var showImportProgress = false
     @State private var importIsTakingLonger = false
     @State private var quickStartPending: QuickStartPendingImport? = nil
+    @State private var reviewItems: [QuickStartReviewItem] = []
+    @State private var selectedReviewItemID: UUID? = nil
+    @State private var didLoadPersistedReviewState = false
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
     fileprivate enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
@@ -92,6 +351,84 @@ struct QuickStartView: View {
         }
 
         selection = topicFor(statementType: statementType) ?? selection
+    }
+
+    private func appendStatementForReview(url: URL, type: StatementType?, institution: String?) {
+        AMLogging.log(
+            "QuickStartReview append: incoming=\(url.path) type=\(String(describing: type)) institution=\(institution ?? "nil") existingCount=\(reviewItems.count)",
+            component: "Import"
+        )
+        let existingIndex = reviewItems.firstIndex { $0.url.path == url.path }
+        if let existingIndex {
+            reviewItems[existingIndex].type = type ?? reviewItems[existingIndex].type
+            reviewItems[existingIndex].institution = institution ?? reviewItems[existingIndex].institution
+            selectedReviewItemID = reviewItems[existingIndex].id
+        } else {
+            let id = UUID()
+            let durableURL = QuickStartReviewStorage.stageForReview(url, id: id)
+            let item = QuickStartReviewItem(
+                id: id,
+                url: durableURL,
+                type: type,
+                institution: institution,
+                managedFileName: QuickStartReviewStorage.managedFileName(for: durableURL)
+            )
+            reviewItems.append(item)
+            selectedReviewItemID = item.id
+        }
+    }
+
+    private func loadPersistedReviewStateIfNeeded() {
+        guard !didLoadPersistedReviewState else { return }
+        didLoadPersistedReviewState = true
+
+        AMLogging.log(
+            "QuickStartReview loadIfNeeded: begin bundle=\(Bundle.main.bundleIdentifier ?? "nil")",
+            component: "Import"
+        )
+
+        guard let state = QuickStartReviewStorage.loadState() else {
+            AMLogging.log(
+                "QuickStartReview loadIfNeeded: no state",
+                component: "Import"
+            )
+            return
+        }
+
+        let readableItems = state.items.compactMap { item in
+            QuickStartReviewStorage.migratedItemIfReadable(item)
+        }
+        reviewItems = readableItems
+        AMLogging.log(
+            "QuickStartReview loadIfNeeded: restored readable=\(readableItems.count) original=\(state.items.count) selected=\(selectedReviewItemID?.uuidString ?? "nil")",
+            component: "Import"
+        )
+
+        if let selectedItemID = state.selectedItemID,
+           readableItems.contains(where: { $0.id == selectedItemID }) {
+            self.selectedReviewItemID = selectedItemID
+        } else {
+            self.selectedReviewItemID = readableItems.first?.id
+        }
+    }
+
+    private func persistReviewState() {
+        guard didLoadPersistedReviewState else {
+            AMLogging.log(
+                "QuickStartReview persist: skipped before load items=\(reviewItems.count)",
+                component: "Import"
+            )
+            return
+        }
+        let state = QuickStartReviewState(
+            items: reviewItems,
+            selectedItemID: selectedReviewItemID
+        )
+        AMLogging.log(
+            "QuickStartReview persist: items=\(reviewItems.count) selected=\(selectedReviewItemID?.uuidString ?? "nil")",
+            component: "Import"
+        )
+        QuickStartReviewStorage.saveState(state)
     }
 
     private static let importTypes: [UTType] = {
@@ -151,6 +488,11 @@ struct QuickStartView: View {
         }
 
         DispatchQueue.main.async {
+            if topic == .statementReview {
+                appendStatementForReview(url: url, type: type, institution: institution)
+                return
+            }
+
             let pending = QuickStartPendingImport(
                 url: url,
                 type: type,
@@ -529,7 +871,9 @@ struct QuickStartView: View {
             StatementReviewDetailView(
                 vm: vm,
                 coordinator: coordinator,
-                pendingExternal: $quickStartPending
+                pendingExternal: $quickStartPending,
+                reviewItems: $reviewItems,
+                selectedReviewItemID: $selectedReviewItemID
             )
         case .incomeBills:
             QuickStartIncomeBillsDetailView(planSheetMode: $planSheetMode)
@@ -708,7 +1052,7 @@ struct QuickStartView: View {
         } message: {
             Text(importReadyWarningMessage ?? "We couldn't open the import review. Please try again.")
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
                 AMLogging.log(
@@ -716,8 +1060,13 @@ struct QuickStartView: View {
                     component: "Import"
                 )
 
-                if let url = urls.first {
-                    queueImportAfterImporterDismissal(url: url, type: nil, institution: nil)
+                if let firstURL = urls.first {
+                    queueImportAfterImporterDismissal(url: firstURL, type: nil, institution: nil)
+                    for url in urls.dropFirst() {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            queueImport(url: url, type: nil, institution: nil)
+                        }
+                    }
                 }
 
             case .failure(let error):
@@ -739,6 +1088,15 @@ struct QuickStartView: View {
                 )
                 importRouter.quickStartPendingImport = nil
             }
+        }
+        .onAppear {
+            loadPersistedReviewStateIfNeeded()
+        }
+        .onChange(of: reviewItems) { _, _ in
+            persistReviewState()
+        }
+        .onChange(of: selectedReviewItemID) { _, _ in
+            persistReviewState()
         }
     }
 
@@ -800,6 +1158,16 @@ struct QuickStartView: View {
                                 .foregroundStyle(.primary)
                                 .padding(.leading, 12)
                             Spacer()
+                            if topic == .statementReview, !reviewItems.isEmpty {
+                                Text("\(reviewItems.count)")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .monospacedDigit()
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(Color.accentColor))
+                                    .accessibilityLabel("\(reviewItems.count) statements need review")
+                            }
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.tertiary)
@@ -1486,6 +1854,8 @@ private struct StatementReviewDetailView: View {
     @ObservedObject var vm: ImportViewModel
     let coordinator: StatementImportCoordinator
     @Binding var pendingExternal: QuickStartPendingImport?
+    @Binding var reviewItems: [QuickStartReviewItem]
+    @Binding var selectedReviewItemID: UUID?
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     
     @Environment(\.modelContext) private var modelContext
@@ -1506,6 +1876,7 @@ private struct StatementReviewDetailView: View {
     @State private var showPDFPreview = false
     @State private var showImportReviewSheet = false
     @State private var showTransactionPreview = false
+    @State private var showDiscardConfirmation = false
     
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
@@ -1530,34 +1901,87 @@ private struct StatementReviewDetailView: View {
     }
 
     private var unknownStatementForm: some View {
-        ManualAccountFormPanel(
-            selectedType: $selectedType,
-            editedInstitution: $editedInstitution,
-            bankSubtype: $bankSubtype,
-            monthlyPaymentInput: $monthlyPaymentInput,
-            aprPercentInput: $aprPercentInput,
-            balanceInput: $balanceInput,
-            balanceDate: $balanceDate,
-            onSave: {
-                handleUnknownStatementSave()
-            },
-            hasSavedAccount: savedAccountID != nil,
-            saveButtonTitle: unknownStatementSaveButtonTitle,
-            savedButtonTitle: isTransactionImportFile ? "Import Ready" : "Account Added",
-            showsSaveButton: !isTransactionImportFile,
-            showsExistingAccountPicker: isTransactionImportFile,
-            existingAccounts: existingAccountsForUnknownTransactionImport,
-            selectedExistingAccountID: $selectedExistingAccountID
-         )
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                quickStartTypeBar
+
+                Button(role: .destructive) {
+                    showDiscardConfirmation = true
+                } label: {
+                    Label("Discard Statement", systemImage: "trash")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 24)
+                .disabled(reviewURL == nil)
+            }
+
+            ManualAccountFormPanel(
+                selectedType: $selectedType,
+                editedInstitution: $editedInstitution,
+                bankSubtype: $bankSubtype,
+                monthlyPaymentInput: $monthlyPaymentInput,
+                aprPercentInput: $aprPercentInput,
+                balanceInput: $balanceInput,
+                balanceDate: $balanceDate,
+                onSave: {
+                    handleUnknownStatementSave()
+                },
+                hasSavedAccount: savedAccountID != nil,
+                saveButtonTitle: unknownStatementSaveButtonTitle,
+                savedButtonTitle: isTransactionImportFile ? "Import Ready" : "Account Added",
+                showsSaveButton: !isTransactionImportFile,
+                showsExistingAccountPicker: isTransactionImportFile,
+                existingAccounts: existingAccountsForUnknownTransactionImport,
+                selectedExistingAccountID: $selectedExistingAccountID
+             )
+        }
+    }
+
+    private var quickStartTypeBar: some View {
+        HStack(spacing: 8) {
+            ForEach(StatementType.allCases, id: \.self) { type in
+                Button {
+                    selectedType = type
+                    if type != .bank {
+                        bankSubtype = nil
+                    }
+                    updateSelectedReviewItem(type: type, institution: enteredInstitutionName)
+                } label: {
+                    Text(shortDisplayName(for: type))
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selectedType == type ? .white : .primary)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(selectedType == type ? Color.accentColor : Color.secondary.opacity(0.12))
+                )
+                .accessibilityLabel("\(displayName(for: type)) statement")
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
     }
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Review statements that could not be confidently classified.")
+            Text("Review statements needing attention.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal)
+
+            if !reviewItems.isEmpty {
+                reviewSelectionBar
+                    .padding(.horizontal)
+            }
             
             if let saveMessage {
                 Label(
@@ -1614,7 +2038,7 @@ private struct StatementReviewDetailView: View {
                     ContentUnavailableView(
                         "No Statement",
                         systemImage: "doc.text.magnifyingglass",
-                        description: Text("Open a statement to review the PDF and import details here.")
+                        description: Text(reviewItems.isEmpty ? "Open a statement to review the PDF and import details here." : "Select a statement from the review list.")
                     )
                 }
             }
@@ -1681,6 +2105,18 @@ private struct StatementReviewDetailView: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Discard this statement?",
+            isPresented: $showDiscardConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Statement", role: .destructive) {
+                discardSelectedReviewItem()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the statement from Needs Review.")
+        }
         .task(id: pendingExternal?.id) {
             guard let pending = pendingExternal else { return }
 
@@ -1691,12 +2127,11 @@ private struct StatementReviewDetailView: View {
 
             if pending.type == nil {
                 await MainActor.run {
-                    reviewURL = pending.url
-                    vm.lastPickedLocalURL = pending.url
-                    saveMessage = nil
-                    saveMessageIsError = false
-                    savedAccountID = nil
-                    selectedExistingAccountID = nil
+                    addOrSelectReviewItem(
+                        url: pending.url,
+                        type: pending.type,
+                        institution: pending.institution
+                    )
                     pendingExternal = nil
                 }
 
@@ -1716,13 +2151,16 @@ private struct StatementReviewDetailView: View {
             )
 
             await MainActor.run {
-                reviewURL = pending.url
-                saveMessage = nil
-                saveMessageIsError = false
-                savedAccountID = nil
-                selectedExistingAccountID = nil
+                addOrSelectReviewItem(
+                    url: pending.url,
+                    type: pending.type,
+                    institution: pending.institution
+                )
                 pendingExternal = nil
             }
+        }
+        .onChange(of: selectedReviewItemID, initial: true) { _, id in
+            loadSelectedReviewItem(id)
         }
         .onChange(of: selectedExistingAccountID) { _, newValue in
             applySelectedExistingAccount(newValue)
@@ -1732,6 +2170,187 @@ private struct StatementReviewDetailView: View {
         }
         .onChange(of: bankSubtype) { _, _ in
             clearSelectedExistingAccountIfNeeded()
+        }
+        .onChange(of: editedInstitution) { _, newValue in
+            updateSelectedReviewItem(type: selectedType, institution: newValue)
+        }
+    }
+
+    private var reviewSelectionBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(reviewItems) { item in
+                    Button {
+                        selectedReviewItemID = item.id
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 6) {
+                                Image(systemName: selectedReviewItemID == item.id ? "doc.text.fill" : "doc.text")
+                                    .foregroundStyle(selectedReviewItemID == item.id ? .white : .blue)
+                                Text(item.url.deletingPathExtension().lastPathComponent)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
+                            }
+
+                            Text(accountSummary(for: item))
+                                .font(.caption2)
+                                .foregroundStyle(selectedReviewItemID == item.id ? .white.opacity(0.85) : .secondary)
+                                .lineLimit(1)
+
+                            HStack(spacing: 5) {
+                                ForEach(StatementType.allCases, id: \.self) { type in
+                                    Text(shortDisplayName(for: type))
+                                        .font(.caption2.weight(.bold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .foregroundStyle(item.type == type ? .white : .secondary)
+                                        .background(
+                                            Capsule()
+                                                .fill(item.type == type ? Color.accentColor : Color.secondary.opacity(0.14))
+                                        )
+                                }
+                            }
+                        }
+                        .frame(width: 220, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(selectedReviewItemID == item.id ? Color.accentColor : Color.secondary.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(item.url.lastPathComponent), \(accountSummary(for: item))")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func addOrSelectReviewItem(url: URL, type: StatementType?, institution: String?) {
+        if let index = reviewItems.firstIndex(where: { $0.url.path == url.path }) {
+            reviewItems[index].type = type ?? reviewItems[index].type
+            reviewItems[index].institution = institution ?? reviewItems[index].institution
+            selectedReviewItemID = reviewItems[index].id
+        } else {
+            let id = UUID()
+            let durableURL = QuickStartReviewStorage.stageForReview(url, id: id)
+            let item = QuickStartReviewItem(
+                id: id,
+                url: durableURL,
+                type: type,
+                institution: institution,
+                managedFileName: QuickStartReviewStorage.managedFileName(for: durableURL)
+            )
+            reviewItems.append(item)
+            selectedReviewItemID = item.id
+        }
+
+        loadSelectedReviewItem(selectedReviewItemID)
+    }
+
+    private func loadSelectedReviewItem(_ id: UUID?) {
+        let selectedItem = id.flatMap { selectedID in
+            reviewItems.first { $0.id == selectedID }
+        } ?? reviewItems.first
+
+        guard let selectedItem else {
+            reviewURL = nil
+            return
+        }
+
+        if selectedReviewItemID != selectedItem.id {
+            selectedReviewItemID = selectedItem.id
+        }
+
+        reviewURL = selectedItem.url
+        vm.lastPickedLocalURL = selectedItem.url
+        selectedType = selectedItem.type
+        editedInstitution = selectedItem.institution ?? ""
+        bankSubtype = nil
+        saveMessage = nil
+        saveMessageIsError = false
+        savedAccountID = nil
+        selectedExistingAccountID = nil
+    }
+
+    private func updateSelectedReviewItem(type: StatementType?, institution: String?) {
+        guard let selectedReviewItemID,
+              let index = reviewItems.firstIndex(where: { $0.id == selectedReviewItemID })
+        else { return }
+
+        reviewItems[index].type = type
+        reviewItems[index].institution = institution?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? institution
+            : nil
+    }
+
+    private func discardSelectedReviewItem() {
+        guard let selectedReviewItemID,
+              let index = reviewItems.firstIndex(where: { $0.id == selectedReviewItemID })
+        else { return }
+
+        let removed = reviewItems.remove(at: index)
+        QuickStartReviewStorage.removeManagedFile(removed.url)
+
+        let nextIndex = min(index, reviewItems.count - 1)
+        if reviewItems.indices.contains(nextIndex) {
+            self.selectedReviewItemID = reviewItems[nextIndex].id
+            loadSelectedReviewItem(reviewItems[nextIndex].id)
+        } else {
+            self.selectedReviewItemID = nil
+            clearCurrentReviewState()
+        }
+
+        saveMessage = "Statement discarded."
+        saveMessageIsError = false
+    }
+
+    private func clearCurrentReviewState() {
+        reviewURL = nil
+        vm.lastPickedLocalURL = nil
+        selectedType = nil
+        editedInstitution = ""
+        bankSubtype = nil
+        savedAccountID = nil
+        selectedExistingAccountID = nil
+        showPDFPreview = false
+        showTransactionPreview = false
+        showImportReviewSheet = false
+    }
+
+    private func accountSummary(for item: QuickStartReviewItem) -> String {
+        let institution = item.institution?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let type = item.type.map { displayName(for: $0) } ?? "Needs type"
+
+        if let statementType = item.type,
+           let institution,
+           !institution.isEmpty,
+           let match = matchingExistingAccount(type: toAccountType(statementType, bankSubtype: nil), institution: institution) {
+            return "\(match.name) - \(type)"
+        }
+
+        if let institution, !institution.isEmpty {
+            return "\(institution) - \(type)"
+        }
+
+        return "Account not selected - \(type)"
+    }
+
+    private func displayName(for type: StatementType) -> String {
+        switch type {
+        case .creditCard: return "Credit Card"
+        case .bank: return "Bank"
+        case .brokerage: return "Brokerage"
+        case .loan: return "Loan"
+        }
+    }
+
+    private func shortDisplayName(for type: StatementType) -> String {
+        switch type {
+        case .creditCard: return "Card"
+        case .bank: return "Bank"
+        case .brokerage: return "Broker"
+        case .loan: return "Loan"
         }
     }
     
