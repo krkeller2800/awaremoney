@@ -297,14 +297,20 @@ struct DebtSummaryView: View {
                     VStack(spacing: 0) {
                         Text("Debt Summary")
                             .font(.headline)
+                            .lineLimit(1)
+                            .allowsTightening(true)
+                            .minimumScaleFactor(isPhone ? 0.8 : 1)
                         Text(planSubtitleText)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(isPhone ? 1 : 2)
+                            .allowsTightening(true)
+                            .minimumScaleFactor(isPhone ? 0.75 : 1)
+                            .fixedSize(horizontal: false, vertical: !isPhone)
                             .layoutPriority(1)
                     }
+                    .frame(minWidth: isPhone ? 260 : nil)
                 }
                 if !embeddedInNavigation {
                     ToolbarItem(placement: .topBarLeading) {

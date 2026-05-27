@@ -1902,19 +1902,7 @@ private struct StatementReviewDetailView: View {
 
     private var unknownStatementForm: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 10) {
-                quickStartTypeBar
-
-                Button(role: .destructive) {
-                    showDiscardConfirmation = true
-                } label: {
-                    Label("Discard Statement", systemImage: "trash")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal, 24)
-                .disabled(reviewURL == nil)
-            }
+            quickStartTypeBar
 
             ManualAccountFormPanel(
                 selectedType: $selectedType,
@@ -2001,7 +1989,7 @@ private struct StatementReviewDetailView: View {
                             unknownStatementForm
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                                 .padding()
-
+                            
                             Button {
                                 if isTransactionImportFile {
                                     importUnknownTransactionFile()
@@ -2022,16 +2010,18 @@ private struct StatementReviewDetailView: View {
                         }
                     } else {
                         HStack(spacing: 0) {
-                            unknownStatementForm
-                                .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
-                                .padding()
-                            
+                            VStack {
+                                unknownStatementForm
+                                    .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+                                    .padding()
+                            }
                             Divider()
                             
                             PDFPreview(url: url)
                                 .id(url.path)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .background(.quaternary.opacity(0.05))
+                                
                         }
                     }
                 } else {
@@ -2046,6 +2036,17 @@ private struct StatementReviewDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 32)
         .background(.background)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(role: .destructive) {
+                    showDiscardConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(reviewURL == nil)
+                .accessibilityLabel("Discard Statement")
+            }
+        }
         .sheet(isPresented: isImportSheetPresented) {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
