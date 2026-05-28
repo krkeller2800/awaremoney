@@ -328,67 +328,35 @@ public struct CashFlowItemEditorView: View {
     }
 
     @ViewBuilder
-    private func ReserveAutomationSection() -> some View {
+    private func FundingSection() -> some View {
         if item.kind == .bill {
-            let working = buildWorkingItem()
-            // Only show automation UI for reserve-eligible (non-monthly) bills
-            if working.frequency.normalized.isReserveEligible {
-                let now = Date()
-                let cal = Calendar.current
-
-                // Compute schedule signature and cycle start (prefer persisted start if available)
-                let sig = currentScheduleSignature()
-                let inferredStart = ReserveUpdateService.previousDueDateForSchedule(
-                    anchorMonth: sig.anchorMonth,
-                    day: sig.dueDay,
-                    frequencyMonths: sig.freqMonths,
-                    asOf: now
-                )
-                let cycleStart = item.reserveCycleStart ?? inferredStart
-
-                let reserveTarget = max(0, working.amount - totalFundingForCurrentBill)
-
-                // Fixed-monthly model: monthly = uncovered amount / monthsPerCycle
-                let fixedMonthly = (reserveTarget / Decimal(sig.freqMonths))
-
-                // Expected by the start of the current month
-                let startOfThisMonth = cal.date(from: cal.dateComponents([.year, .month], from: now)) ?? now
-                let sIndex = cal.component(.year, from: cycleStart) * 12 + cal.component(.month, from: cycleStart)
-                let eIndex = cal.component(.year, from: startOfThisMonth) * 12 + cal.component(.month, from: startOfThisMonth)
-                let monthsElapsed = max(0, eIndex - sIndex)
-                let expectedByStartOfThisMonth = fixedMonthly * Decimal(monthsElapsed)
-                let fixedSeed = max(0, (expectedByStartOfThisMonth - item.reserveBalance))
-
-                // Next due date (keep existing planner's computation for the date itself)
-                let next = BillReservePlanner.nextDue(for: working, asOf: now)
-
-                Section("Funding") {
-                    LabeledContent("Bill amount") {
-                        Text(formatCurrencyDecimal(amountValue))
-                    }
-                    LabeledContent("Income applied") {
-                        Text(formatCurrencyDecimal(totalFundingForCurrentBill))
-                    }
-                    LabeledContent("Left to cover") {
-                        Text(formatCurrencyDecimal(max(0, amountValue - totalFundingForCurrentBill)))
-                    }
+            Section("Funding") {
+                LabeledContent("Bill amount") {
+                    Text(formatCurrencyDecimal(amountValue))
                 }
+                LabeledContent("Income applied") {
+                    Text(formatCurrencyDecimal(totalFundingForCurrentBill))
+                }
+                LabeledContent("Left to cover") {
+                    Text(formatCurrencyDecimal(max(0, amountValue - totalFundingForCurrentBill)))
+                }
+            }
 
-                if !eligibleFundingIncomes.isEmpty {
-                    Section("Pay from non-monthly income") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(eligibleFundingIncomes, id: \.id) { income in
-                                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(income.name)
-                                        Text("\(formatCurrencyDecimal(availableFunding(for: income, excludingBill: item))) available")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+            if !eligibleFundingIncomes.isEmpty {
+                Section("Pay from non-monthly income") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(eligibleFundingIncomes, id: \.id) { income in
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(income.name)
+                                    Text("\(formatCurrencyDecimal(availableFunding(for: income, excludingBill: item))) available")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
 
-                                    Spacer(minLength: 8)
+                                Spacer(minLength: 8)
 
-                                    HStack(spacing: 6) {
+                                HStack(spacing: 6) {
                                     #if os(iOS)
                                     CurrencyAmountField(
                                         value: Binding<Decimal>(
@@ -430,14 +398,52 @@ public struct CashFlowItemEditorView: View {
                                     .multilineTextAlignment(.trailing)
                                     .frame(minWidth: 100, idealWidth: 120, maxWidth: 160, alignment: .trailing)
                                     #endif
-                                    }
                                 }
-                                .padding(.leading, 16)
-                                .padding(.vertical, 1)
                             }
+                            .padding(.leading, 16)
+                            .padding(.vertical, 1)
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ReserveAutomationSection() -> some View {
+        if item.kind == .bill {
+            let working = buildWorkingItem()
+            // Only show automation UI for reserve-eligible (non-monthly) bills
+            if working.frequency.normalized.isReserveEligible {
+                let now = Date()
+                let cal = Calendar.current
+
+                // Compute schedule signature and cycle start (prefer persisted start if available)
+                let sig = currentScheduleSignature()
+                let inferredStart = ReserveUpdateService.previousDueDateForSchedule(
+                    anchorMonth: sig.anchorMonth,
+                    day: sig.dueDay,
+                    frequencyMonths: sig.freqMonths,
+                    asOf: now
+                )
+                let cycleStart = item.reserveCycleStart ?? inferredStart
+
+                let reserveTarget = max(0, working.amount - totalFundingForCurrentBill)
+
+                // Fixed-monthly model: monthly = uncovered amount / monthsPerCycle
+                let fixedMonthly = (reserveTarget / Decimal(sig.freqMonths))
+
+                // Expected by the start of the current month
+                let startOfThisMonth = cal.date(from: cal.dateComponents([.year, .month], from: now)) ?? now
+                let sIndex = cal.component(.year, from: cycleStart) * 12 + cal.component(.month, from: cycleStart)
+                let eIndex = cal.component(.year, from: startOfThisMonth) * 12 + cal.component(.month, from: startOfThisMonth)
+                let monthsElapsed = max(0, eIndex - sIndex)
+                let expectedByStartOfThisMonth = fixedMonthly * Decimal(monthsElapsed)
+                let fixedSeed = max(0, (expectedByStartOfThisMonth - item.reserveBalance))
+
+                // Next due date (keep existing planner's computation for the date itself)
+                let next = BillReservePlanner.nextDue(for: working, asOf: now)
+
 
                 Section("Reserve") {
                     if reserveTarget == 0 {
@@ -717,6 +723,7 @@ public struct CashFlowItemEditorView: View {
                 }
             }
             ReserveSummarySectionInline()
+            FundingSection()
             ReserveAutomationSection()
         }
         .navigationTitle("Edit \(item.kind == .income ? "Income" : "Bill")")

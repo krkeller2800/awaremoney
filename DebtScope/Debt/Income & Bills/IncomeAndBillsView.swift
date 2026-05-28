@@ -382,18 +382,11 @@ struct IncomeAndBillsView: View {
                 } else {
                     Section("Income") {
                         ForEach(incomes) { item in
-                            NavigationLink(destination: EditCashFlowItemView(
-                                item: item,
-                                onSave: {
-                                    try? modelContext.save()
-                                },
-                                onDelete: {
-                                    modelContext.delete(item)
-                                    try? modelContext.save()
+                            row(for: item)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    activeSheet = .edit(item: item)
                                 }
-                            )) {
-                                row(for: item)
-                            }
                         }
                         .onDelete { indexSet in
                             delete(items: indexSet.map { incomes[$0] })

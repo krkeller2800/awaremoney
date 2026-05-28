@@ -356,6 +356,8 @@ enum BackupExporter {
             )
         }
 
+        let cashFlowExportIDs = Dictionary(uniqueKeysWithValues: cashFlows.map { ($0.id, surrogateID(for: $0)) })
+
         let cashDTOs: [CashFlowItemDTO] = cashFlows.map { c in
             CashFlowItemDTO(
                 id: surrogateID(for: c),
@@ -373,16 +375,20 @@ enum BackupExporter {
                 reserveCycleStart: c.reserveCycleStart,
                 reserveLastSeededCycleStart: c.reserveLastSeededCycleStart,
                 reserveAutoEnabled: c.reserveAutoEnabled,
-                fundingIncomeID: c.fundingIncomeID,
+                fundingIncomeID: c.fundingIncomeID.flatMap { cashFlowExportIDs[$0] },
                 fundingAmount: c.fundingAmount
             )
         }
 
-        let fundingDTOs: [BillFundingAllocationDTO] = billFundingAllocations.map { allocation in
-            BillFundingAllocationDTO(
+        let fundingDTOs: [BillFundingAllocationDTO] = billFundingAllocations.compactMap { allocation in
+            guard let billID = cashFlowExportIDs[allocation.billID],
+                  let incomeID = cashFlowExportIDs[allocation.incomeID] else {
+                return nil
+            }
+            return BillFundingAllocationDTO(
                 id: allocation.id,
-                billID: allocation.billID,
-                incomeID: allocation.incomeID,
+                billID: billID,
+                incomeID: incomeID,
                 amount: allocation.amount,
                 createdAt: allocation.createdAt
             )
