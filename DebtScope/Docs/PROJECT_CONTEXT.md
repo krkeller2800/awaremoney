@@ -78,6 +78,65 @@ Key objects: - ImportViewModel - Routing service - Parsers
 
 Rule: Use selectedAccountID (UUID), not Account references.
 
+### Current Import Intake Flow
+
+All primary statement intake paths should route through
+`StatementIntakeResolver` before deciding where the import goes. This was
+introduced to prevent document-open imports and the blue Import button from
+drifting into different behavior.
+
+Entry points:
+
+-   Files/document tap: `RootView` stages the URL and sends a
+    `QuickStartPendingImport` without pre-classifying the PDF.
+-   Blue Import button: `QuickStartView.queueImport` calls
+    `StatementIntakeResolver.resolve(...)`.
+-   Cash Flow local import: `CashFlowDetailView.handleImport` also calls
+    `StatementIntakeResolver.resolve(...)`.
+
+`StatementIntakeResolver` is responsible for staging, running
+`StatementIntakeClassifier`, running fallback parser-based inference, choosing
+the final `StatementType`, and logging the final decision.
+
+Important resolver policy:
+
+-   Detection is advisory.
+-   A weak `.creditCard` classifier result can be overridden to `.bank` only
+    when fallback parsing finds strong deposit/bank evidence such as checking,
+    savings, deposit account, or certificate account signals.
+-   The fallback parser must not be forced into credit-card mode when the
+    classifier guessed credit card; otherwise bank PDFs containing credit-card
+    payment descriptions can be routed incorrectly.
+
+Key resolver log:
+
+`StatementIntakeResolver resolved source=... classifier=... fallback=... final=...`
+
+### PDF Bank Import Review
+
+Bank PDFs use a two-stage review:
+
+1.  `DetectionReviewSheet` shows the Import Ready screen and always uses the
+    top-right `Continue` action.
+2.  `ReviewImportView` shows the full Review Import screen. Its bottom action
+    is `Approve & Save`.
+
+If a user reports seeing "Save", they are usually already on
+`ReviewImportView`, not the initial Import Ready screen. The important question
+is whether `vm.staged.transactions` survived into Review Import.
+
+`StatementImportCoordinator` merges `PDFSummaryParser` balances with
+`PDFBankTransactionsParser` transactions. For Cash Flow, after Continue,
+`CashFlowDetailView.applyDetectedAccountSelections(...)` filters staged data by
+the detected account selections. It now has a defensive guard: if parsed
+transactions exist but selection-label filtering would drop all of them, the
+transactions are preserved and a log is emitted.
+
+Key Cash Flow filter logs:
+
+-   `CashFlow detected-account filter — selected=... parserLabels=... kept=... balances x->y transactions x->y`
+-   `CashFlow detected-account filter preserved transactions after label mismatch — selected=... rawTransactionLabels=...`
+
 ------------------------------------------------------------------------
 
 ## State Ownership

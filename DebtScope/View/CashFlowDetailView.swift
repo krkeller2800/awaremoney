@@ -31,6 +31,7 @@ struct CashFlowDetailView: View {
     @State private var importedPreview: ImportedStatementPreview? = nil
     @State private var detectedAccounts: [DetectionReviewSheet.DetectedAccountSelection] = []
     @State private var ingestedAccount: Account? = nil
+    @State private var showStatementSheet = false
     @State private var monthlyPaymentInput: String = ""
     @State private var aprPercentInput: String = ""
     @State private var balanceInput: String = ""
@@ -52,6 +53,7 @@ struct CashFlowDetailView: View {
         var aprFraction: Decimal?
         var aprScale: Int?
         var bankBalanceSummaries: [BankBalanceSummary] = []
+        var bankTransactionLabels: Set<String> = []
     }
 
     private struct BankBalanceSummary: Identifiable {
@@ -106,33 +108,20 @@ struct CashFlowDetailView: View {
         return nil
     }
 
+    private var statementActionTitle: String {
+        lastImportedURL == nil ? "Transactions" : "PDF"
+    }
+
+    private var statementActionWidth: CGFloat {
+        lastImportedURL == nil ? 112 : 55
+    }
+
     @ViewBuilder
     private var columnsView: some View {
         if horizontalSizeClass == .compact {
-            VStack(spacing: 12) {
-                accountsList
-                    .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
-
-                Group {
-                    if let url = lastImportedURL {
-                        PDFPreview(url: url)
-                    } else {
-                        ContentUnavailableView(
-                            "No Statement",
-                            systemImage: "doc.text",
-                            description: Text("Import a statement to preview it here.")
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.quaternary, lineWidth: 1)
-                }
-            }
-            .padding(.horizontal)
+            accountsList
+                .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+                .padding(.horizontal)
         } else {
             HStack(spacing: 0) {
                 accountsList
@@ -141,21 +130,55 @@ struct CashFlowDetailView: View {
 
                 Divider()
 
-                Group {
-                    if let url = lastImportedURL {
-                        PDFPreview(url: url)
-                    } else {
-                        ContentUnavailableView(
-                            "No Statement",
-                            systemImage: "doc.text",
-                            description: Text("Import a statement to preview it here.")
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.05))
+                inlineStatementPreview
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.quaternary.opacity(0.05))
             }
             .frame(maxWidth: .infinity, minHeight: 300)
+        }
+    }
+
+    @ViewBuilder
+    private var inlineStatementPreview: some View {
+        if let url = lastImportedURL {
+            PDFPreview(url: url)
+        } else if let account = currentAccount() {
+            NavigationStack {
+                AccountTransactionsListView(account: account)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        } else {
+            ContentUnavailableView(
+                "No Account Selected",
+                systemImage: "doc.text",
+                description: Text("Select an asset account to preview its statement or activity.")
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var statementSheetContent: some View {
+        if let url = lastImportedURL {
+            NavigationStack {
+                PDFPreview(url: url)
+                    .navigationTitle("View PDF")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showStatementSheet = false }
+                        }
+                    }
+            }
+        } else if let account = currentAccount() {
+            NavigationStack {
+                AccountTransactionsListView(account: account)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showStatementSheet = false }
+                        }
+                    }
+            }
         }
     }
 
@@ -216,17 +239,12 @@ struct CashFlowDetailView: View {
     private func handleImport(url: URL) {
         isPreparingDetectionReview = true
         Task {
-            let routedURL = stageURLToCaches(url)
-            let classifier = StatementIntakeClassifier()
-            let rawDetection = await classifier.classify(url: routedURL)
-            let effectiveType = effectiveImportedStatementType(for: rawDetection.type, url: routedURL)
-            let detection = IntakeDetection(
-                type: effectiveType,
-                institution: rawDetection.institution,
-                confidence: rawDetection.confidence,
-                notes: rawDetection.notes
+            let resolved = await StatementIntakeResolver.resolve(
+                url: url,
+                source: "CashFlow.handleImport"
             )
-            let preview = await extractImportedPreview(from: routedURL, hint: effectiveType)
+            let detection = resolved.detection
+            let preview = await extractImportedPreview(from: resolved.stagedURL, hint: detection.type)
 
             await MainActor.run {
                 lastDetection = detection
@@ -239,7 +257,7 @@ struct CashFlowDetailView: View {
                 showImporter = false
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    detectionSheetModel = DetectionSheetModel(detection: detection, url: routedURL, preview: preview)
+                    detectionSheetModel = DetectionSheetModel(detection: detection, url: resolved.stagedURL, preview: preview)
                     isPreparingDetectionReview = false
                 }
             }
@@ -301,7 +319,8 @@ struct CashFlowDetailView: View {
         let selections = preview.bankBalanceSummaries.map { summary in
             let detectedType = detectedStatementType(for: summary.id, label: summary.label)
             let endingBalance = summary.endingBalance?.magnitude
-            let isInactive = isInactiveDetectedAccount(summary)
+            let hasTransactions = preview.bankTransactionLabels.contains(normalizedDetectedAccountKey(summary.id))
+            let isInactive = !hasTransactions && isInactiveDetectedAccount(summary)
             return DetectionReviewSheet.DetectedAccountSelection(
                 id: normalizedDetectedAccountKey(summary.id),
                 label: summary.label,
@@ -321,7 +340,7 @@ struct CashFlowDetailView: View {
     }
 
     private func normalizedDetectedAccountKey(_ raw: String) -> String {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        normalizedBankSummaryLabel(raw)
     }
 
     private func detectedStatementType(for id: String, label: String) -> StatementType {
@@ -403,6 +422,14 @@ struct CashFlowDetailView: View {
                 staged = try parser.parse(rows: augmentedRows, headers: result.headers)
             }
 
+            let transactionPreview = try? PDFBankTransactionsParser().parse(rows: augmentedRows, headers: result.headers)
+            let transactionAccountLabels = Set(
+                (transactionPreview?.transactions ?? [])
+                    .compactMap { $0.sourceAccountLabel }
+                    .map { normalizedBankSummaryLabel($0) }
+                    .filter { isSupportedBankPreviewKey($0) && $0 != "default" }
+            )
+
             if hint == .some(.creditCard) {
                 staged.balances = deduplicateStagedBalancesForCreditCardPreview(staged.balances)
             } else {
@@ -445,13 +472,35 @@ struct CashFlowDetailView: View {
                 }
             }
 
+            let existingSummaryLabels = Set(bankBalanceSummaries.map { normalizedBankSummaryLabel($0.id) })
+            let missingTransactionLabels = transactionAccountLabels.subtracting(existingSummaryLabels)
+            if !missingTransactionLabels.isEmpty {
+                let transactionOnlySummaries = missingTransactionLabels
+                    .sorted { bankSummarySortOrder(for: $0) < bankSummarySortOrder(for: $1) }
+                    .map { label in
+                        BankBalanceSummary(
+                            id: label,
+                            label: displayLabel(for: label),
+                            beginningBalance: nil,
+                            endingBalance: nil,
+                            endingBalanceDate: nil
+                        )
+                    }
+                bankBalanceSummaries = mergeBankBalanceSummaries(bankBalanceSummaries, transactionOnlySummaries)
+            }
+            AMLogging.always(
+                "CashFlow preview accounts — balanceLabels=\(Array(existingSummaryLabels).sorted()) transactionLabels=\(Array(transactionAccountLabels).sorted()) displayed=\(bankBalanceSummaries.map { $0.id })",
+                component: "Import"
+            )
+
             return ImportedStatementPreview(
                 balance: latestBalance?.balance.magnitude,
                 balanceDate: latestBalance?.asOfDate,
                 typicalPayment: typicalPayment,
                 aprFraction: aprFraction,
                 aprScale: aprScale,
-                bankBalanceSummaries: bankBalanceSummaries
+                bankBalanceSummaries: bankBalanceSummaries,
+                bankTransactionLabels: transactionAccountLabels
             )
         } catch {
             return nil
@@ -1101,7 +1150,13 @@ struct CashFlowDetailView: View {
             vm.staged = staged
             return
         }
-        let selectedLabels = Set(importedSelections.map(\.id))
+        let selectedLabels = Set(importedSelections.map { normalizedDetectedAccountKey($0.id) })
+        let parserLabels = Set(
+            (staged.balances.map { $0.sourceAccountLabel } + staged.transactions.map { $0.sourceAccountLabel })
+                .map { normalizedDetectedAccountKey(normalizedBankSummaryLabel($0)) }
+                .filter { $0 != "default" && isSupportedBankPreviewKey($0) }
+        )
+        let labelsToKeep = selectedLabels.union(parserLabels)
         let soleImportedLabel = importedSelections.count == 1 ? importedSelections[0].id : nil
         let summaryByLabel = Dictionary(
             uniqueKeysWithValues: (importedPreview?.bankBalanceSummaries ?? []).map {
@@ -1109,9 +1164,11 @@ struct CashFlowDetailView: View {
             }
         )
 
+        let originalBalanceCount = staged.balances.count
+        let originalTransactionCount = staged.transactions.count
         staged.balances = staged.balances.filter { balance in
             let key = normalizedDetectedAccountKey(normalizedBankSummaryLabel(balance.sourceAccountLabel))
-            return selectedLabels.contains(key)
+            return labelsToKeep.contains(key)
         }.map { balance in
             var updated = balance
             updated.include = true
@@ -1143,9 +1200,10 @@ struct CashFlowDetailView: View {
             )
         }
 
-        staged.transactions = staged.transactions.filter { transaction in
+        let originalTransactions = staged.transactions
+        var filteredTransactions = staged.transactions.filter { transaction in
             let key = normalizedDetectedAccountKey(normalizedBankSummaryLabel(transaction.sourceAccountLabel))
-            return selectedLabels.contains(key)
+            return labelsToKeep.contains(key)
         }.map { transaction in
             var updated = transaction
             updated.include = true
@@ -1155,6 +1213,26 @@ struct CashFlowDetailView: View {
             }
             return updated
         }
+        if filteredTransactions.isEmpty && !originalTransactions.isEmpty {
+            AMLogging.always(
+                "CashFlow detected-account filter preserved transactions after label mismatch — selected=\(Array(selectedLabels).sorted()) rawTransactionLabels=\(Array(Set(originalTransactions.map { normalizedBankSummaryLabel($0.sourceAccountLabel) })).sorted())",
+                component: "Import"
+            )
+            filteredTransactions = originalTransactions.map { transaction in
+                var updated = transaction
+                updated.include = true
+                if let soleImportedLabel {
+                    updated.sourceAccountLabel = soleImportedLabel
+                }
+                return updated
+            }
+        }
+        staged.transactions = filteredTransactions
+
+        AMLogging.always(
+            "CashFlow detected-account filter — selected=\(Array(selectedLabels).sorted()) parserLabels=\(Array(parserLabels).sorted()) kept=\(Array(labelsToKeep).sorted()) balances \(originalBalanceCount)->\(staged.balances.count) transactions \(originalTransactionCount)->\(staged.transactions.count)",
+            component: "Import"
+        )
 
         if let resolvedType = resolvedAccountType(from: importedSelections) {
             staged.suggestedAccountType = resolvedType
@@ -1452,6 +1530,14 @@ struct CashFlowDetailView: View {
             }
         }
         .toolbar {
+            if horizontalSizeClass == .compact {
+                ToolbarItem(placement: .topBarLeading) {
+                    PlanToolbarButton(statementActionTitle, fixedWidth: statementActionWidth) {
+                        showStatementSheet = true
+                    }
+                    .disabled(currentAccount() == nil)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Add Manually") {
                     selectedType = .bank
@@ -1601,6 +1687,9 @@ struct CashFlowDetailView: View {
             )
         }
 #endif
+        .sheet(isPresented: $showStatementSheet) {
+            statementSheetContent
+        }
         .sheet(isPresented: $showManualAddSheet) {
             ManualAddAccountSheet(
                 selectedType: $selectedType,

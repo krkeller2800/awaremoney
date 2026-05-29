@@ -266,6 +266,7 @@ struct DebtPayoffDetailView: View {
         var aprFraction: Decimal?
         var aprScale: Int?
         var bankBalanceSummaries: [BankBalanceSummary] = []
+        var bankTransactionLabels: Set<String> = []
     }
 
     private struct BankBalanceSummary: Identifiable, Equatable {
@@ -890,6 +891,14 @@ struct DebtPayoffDetailView: View {
                 staged = try parser.parse(rows: augmentedRows, headers: result.headers)
             }
 
+            let transactionPreview = try? PDFBankTransactionsParser().parse(rows: augmentedRows, headers: result.headers)
+            let transactionAccountLabels = Set(
+                (transactionPreview?.transactions ?? [])
+                    .compactMap { $0.sourceAccountLabel }
+                    .map { normalizedBankSummaryLabel($0) }
+                    .filter { isSupportedBankPreviewKey($0) && $0 != "default" }
+            )
+
             if hint == .some(.creditCard) {
                 staged.balances = deduplicateStagedBalancesForCreditCardPreview(staged.balances)
             } else {
@@ -924,10 +933,30 @@ struct DebtPayoffDetailView: View {
                 balances: staged.balances
             )
             let stagedBankSummaries = buildBankBalanceSummaries(from: staged.balances)
-            let bankBalanceSummaries = mergeBankBalanceSummaries(
+            var bankBalanceSummaries = mergeBankBalanceSummaries(
                 stagedBankSummaries,
                 extractConsolidatedBankBalances(from: url) ?? [],
                 extractAccountSectionBankBalances(from: url) ?? []
+            )
+            let existingSummaryLabels = Set(bankBalanceSummaries.map { normalizedBankSummaryLabel($0.id) })
+            let missingTransactionLabels = transactionAccountLabels.subtracting(existingSummaryLabels)
+            if !missingTransactionLabels.isEmpty {
+                let transactionOnlySummaries = missingTransactionLabels
+                    .sorted { bankSummarySortOrder(for: $0) < bankSummarySortOrder(for: $1) }
+                    .map { label in
+                        BankBalanceSummary(
+                            id: label,
+                            label: displayLabel(for: label),
+                            beginningBalance: nil,
+                            endingBalance: nil,
+                            endingBalanceDate: nil
+                        )
+                    }
+                bankBalanceSummaries = mergeBankBalanceSummaries(bankBalanceSummaries, transactionOnlySummaries)
+            }
+            AMLogging.always(
+                "DebtPayoff preview accounts — balanceLabels=\(Array(existingSummaryLabels).sorted()) transactionLabels=\(Array(transactionAccountLabels).sorted()) displayed=\(bankBalanceSummaries.map { $0.id })",
+                component: "DebtPayoffDetailView"
             )
 
             return ImportedStatementPreview(
@@ -938,7 +967,8 @@ struct DebtPayoffDetailView: View {
                 typicalPayment: typicalPayment,
                 aprFraction: aprFraction,
                 aprScale: aprScale,
-                bankBalanceSummaries: bankBalanceSummaries
+                bankBalanceSummaries: bankBalanceSummaries,
+                bankTransactionLabels: transactionAccountLabels
             )
         } catch {
             return nil
@@ -979,7 +1009,8 @@ struct DebtPayoffDetailView: View {
             let endingBalance = summary.endingBalance?.magnitude
             let beginning = summary.beginningBalance?.magnitude ?? .zero
             let ending = endingBalance ?? .zero
-            let isInactive = beginning == .zero && ending == .zero
+            let hasTransactions = preview.bankTransactionLabels.contains(normalizedBankSummaryLabel(summary.id))
+            let isInactive = !hasTransactions && beginning == .zero && ending == .zero
             return DetectionReviewSheet.DetectedAccountSelection(
                 id: summary.id,
                 label: summary.label,
@@ -1813,11 +1844,11 @@ struct DebtPayoffDetailView: View {
 
     @MainActor
     private func openFullImportReview(for model: DetectionSheetModel) {
-        openFullImportReview(detection: model.detection, url: model.url)
+        openFullImportReview(detection: model.detection, url: model.url, selectedDetectedAccounts: detectedAccounts)
     }
 
     private func normalizedDetectedAccountKey(_ raw: String) -> String {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        normalizedBankSummaryLabel(raw)
     }
 
     private func resolvedFallbackAccountType(
@@ -1849,54 +1880,56 @@ struct DebtPayoffDetailView: View {
     private func applyDetectedAccountSelections(_ selections: [DetectionReviewSheet.DetectedAccountSelection]) {
         guard !selections.isEmpty, var staged = vm.staged else { return }
 
+        let originalBalanceCount = staged.balances.count
+        let originalTransactionCount = staged.transactions.count
         let importedSelections = selections.filter(\.shouldImport)
-        let importedKeys = Set(importedSelections.map { normalizedDetectedAccountKey($0.id) })
-        guard !importedKeys.isEmpty else { return }
+        guard !importedSelections.isEmpty else {
+            vm.staged = staged
+            return
+        }
+
+        let selectedLabels = Set(importedSelections.map { normalizedDetectedAccountKey($0.id) })
+        let parserLabels = Set(
+            (staged.balances.map { $0.sourceAccountLabel } + staged.transactions.map { $0.sourceAccountLabel })
+                .map { normalizedDetectedAccountKey(normalizedBankSummaryLabel($0)) }
+                .filter { $0 != "default" && isSupportedBankPreviewKey($0) }
+        )
+        let labelsToKeep = selectedLabels.union(parserLabels)
+        let soleImportedLabel = labelsToKeep.count == 1 ? labelsToKeep.first : nil
+        let summaryByLabel = Dictionary(
+            uniqueKeysWithValues: (importedPreview?.bankBalanceSummaries ?? []).map {
+                (normalizedDetectedAccountKey($0.id), $0)
+            }
+        )
 
         staged.balances = staged.balances.filter { balance in
-            importedKeys.contains(normalizedBankSummaryLabel(balance.sourceAccountLabel))
-        }
-        staged.transactions = staged.transactions.filter { transaction in
-            importedKeys.contains(normalizedBankSummaryLabel(transaction.sourceAccountLabel))
-        }
-
-        if importedSelections.count == 1, let onlySelection = importedSelections.first {
-            let onlyKey = normalizedDetectedAccountKey(onlySelection.id)
-            for index in staged.balances.indices {
-                let currentKey = normalizedBankSummaryLabel(staged.balances[index].sourceAccountLabel)
-                if currentKey == "default" || staged.balances[index].sourceAccountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    staged.balances[index].sourceAccountLabel = onlyKey
-                }
-                staged.balances[index].include = true
+            let key = normalizedDetectedAccountKey(normalizedBankSummaryLabel(balance.sourceAccountLabel))
+            return labelsToKeep.contains(key)
+        }.map { balance in
+            var updated = balance
+            updated.include = true
+            if let soleImportedLabel,
+               normalizedDetectedAccountKey(normalizedBankSummaryLabel(updated.sourceAccountLabel)) == "default" {
+                updated.sourceAccountLabel = soleImportedLabel
             }
-            for index in staged.transactions.indices {
-                let currentKey = normalizedBankSummaryLabel(staged.transactions[index].sourceAccountLabel)
-                if currentKey == "default" || staged.transactions[index].sourceAccountLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    staged.transactions[index].sourceAccountLabel = onlyKey
-                }
-                staged.transactions[index].include = true
-            }
-        } else {
-            for index in staged.balances.indices {
-                staged.balances[index].include = true
-            }
-            for index in staged.transactions.indices {
-                staged.transactions[index].include = true
-            }
+            return updated
         }
 
-        let existingBalanceKeys = Set(staged.balances.map { normalizedBankSummaryLabel($0.sourceAccountLabel) })
+        let existingBalanceLabels = Set(
+            staged.balances.map { normalizedDetectedAccountKey(normalizedBankSummaryLabel($0.sourceAccountLabel)) }
+        )
+        let referenceDate = staged.balances.map(\.asOfDate).max() ?? Date()
+
         for selection in importedSelections {
             let key = normalizedDetectedAccountKey(selection.id)
-            guard !existingBalanceKeys.contains(key),
-                  let summary = importedPreview?.bankBalanceSummaries.first(where: { normalizedDetectedAccountKey($0.id) == key }),
-                  let endingBalance = summary.endingBalance else {
+            guard !existingBalanceLabels.contains(key),
+                  let endingBalance = summaryByLabel[key]?.endingBalance ?? selection.endingBalance else {
                 continue
             }
 
             staged.balances.append(
                 StagedBalance(
-                    asOfDate: Date(),
+                    asOfDate: referenceDate,
                     balance: endingBalance,
                     interestRateAPR: importedPreview?.aprFraction,
                     interestRateScale: importedPreview?.aprScale,
@@ -1907,11 +1940,28 @@ struct DebtPayoffDetailView: View {
             )
         }
 
+        staged.transactions = staged.transactions.filter { transaction in
+            let key = normalizedDetectedAccountKey(normalizedBankSummaryLabel(transaction.sourceAccountLabel))
+            return labelsToKeep.contains(key)
+        }.map { transaction in
+            var updated = transaction
+            updated.include = true
+            if let soleImportedLabel,
+               normalizedDetectedAccountKey(normalizedBankSummaryLabel(updated.sourceAccountLabel)) == "default" {
+                updated.sourceAccountLabel = soleImportedLabel
+            }
+            return updated
+        }
+
         if let resolvedType = resolvedFallbackAccountType(from: importedSelections) {
             staged.suggestedAccountType = resolvedType
             vm.newAccountType = resolvedType
         }
 
+        AMLogging.always(
+            "DebtPayoff detected-account filter — selected=\(Array(selectedLabels).sorted()) parserLabels=\(Array(parserLabels).sorted()) kept=\(Array(labelsToKeep).sorted()) balances \(originalBalanceCount)->\(staged.balances.count) transactions \(originalTransactionCount)->\(staged.transactions.count)",
+            component: "DebtPayoffDetailView"
+        )
         vm.staged = staged
     }
 

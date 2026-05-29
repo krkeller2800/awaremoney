@@ -19,33 +19,14 @@ struct RootView: View {
         .onReceive(importRouter.$pendingURL) { url in
             if let url = url {
                 AMLogging.always("Received import URL: \(url.lastPathComponent)", component: "RootView")
-                let ext = url.pathExtension.lowercased()
-                if ext == "pdf" {
-                    // Route to Quick Start; classify and notify
-                    Task {
-                        let stagedURL = ImportFileStaging.stageToCaches(url)
-                        let classifier = StatementIntakeClassifier()
-                        let detection = await classifier.classify(url: stagedURL)
-                        await MainActor.run {
-                            importRouter.quickStartPendingImport = .init(
-                                url: stagedURL,
-                                type: detection.type,
-                                institution: detection.institution
-                            )
-                            importRouter.pendingURL = nil
-                        }
-                    }
-                    showImportFlow = false
-                } else {
-                    let stagedURL = ImportFileStaging.stageToCaches(url)
-                    importRouter.quickStartPendingImport = .init(
-                        url: stagedURL,
-                        type: nil,
-                        institution: nil
-                    )
-                    importRouter.pendingURL = nil
-                    showImportFlow = false
-                }
+                let stagedURL = ImportFileStaging.stageToCaches(url)
+                importRouter.quickStartPendingImport = .init(
+                    url: stagedURL,
+                    type: nil,
+                    institution: nil
+                )
+                importRouter.pendingURL = nil
+                showImportFlow = false
             }
         }
         .sheet(isPresented: $showImportFlow) {

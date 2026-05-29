@@ -523,54 +523,27 @@ struct QuickStartView: View {
             component: "Import"
         )
         beginImportProgress()
-        let stagedURL = ImportFileStaging.stageToCaches(url)
-        AMLogging.log(
-            "QuickStart staged file=\(stagedURL.lastPathComponent) path=\(stagedURL.path) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path))",
-            component: "Import"
-        )
-        if let type {
-            let topic = topicFor(statementType: type) ?? .statementReview
-            deliverPendingImport(url: stagedURL, type: type, institution: institution, to: topic)
-        } else {
-            Task {
+        Task {
+            let resolved = await StatementIntakeResolver.resolve(
+                url: url,
+                providedType: type,
+                providedInstitution: institution,
+                source: "QuickStart.queueImport"
+            )
 
+            await MainActor.run {
+                let resolvedType = resolved.detection.type
+                let topic = topicFor(statementType: resolvedType) ?? .statementReview
                 AMLogging.log(
-                    "QuickStart classify start file=\(stagedURL.lastPathComponent)",
+                    "QuickStart deliver topic=\(topic.rawValue) resolvedType=\(String(describing: resolvedType)) classifierType=\(String(describing: resolved.classifierDetection.type)) fallbackType=\(String(describing: resolved.fallbackType))",
                     component: "Import"
                 )
-
-                let classifier = StatementIntakeClassifier()
-                let detection = await classifier.classify(url: stagedURL)
-
-                AMLogging.log(
-                    "QuickStart classify result type=\(String(describing: detection.type)) institution=\(detection.institution ?? "nil")",
-                    component: "Import"
+                deliverPendingImport(
+                    url: resolved.stagedURL,
+                    type: resolvedType,
+                    institution: resolved.detection.institution,
+                    to: topic
                 )
-
-                let fallback = await inferStatementFallback(
-                    from: stagedURL,
-                    preferredType: detection.type
-                )
-
-                AMLogging.log(
-                    "QuickStart fallback result type=\(String(describing: fallback.type)) institution=\(fallback.institution ?? "nil")",
-                    component: "Import"
-                )
-
-                await MainActor.run {
-                    let resolvedType = detection.type ?? fallback.type
-                    let topic = topicFor(statementType: resolvedType) ?? .statementReview
-                    AMLogging.log(
-                        "QuickStart deliver topic=\(topic.rawValue) resolvedType=\(String(describing: resolvedType))",
-                        component: "Import"
-                    )
-                    deliverPendingImport(
-                        url: stagedURL,
-                        type: resolvedType,
-                        institution: institution ?? detection.institution ?? fallback.institution,
-                        to: topic
-                    )
-                }
             }
         }
     }
@@ -589,192 +562,6 @@ struct QuickStartView: View {
 
     private var isCompactLayout: Bool {
         horizontalSizeClass == .compact
-    }
-
-    private func inferStatementFallback(from url: URL, preferredType: StatementType?) async -> (type: StatementType?, institution: String?) {
-        let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
-        let userOverride: StatementImporter.UserOverride? = {
-            switch preferredType {
-            case .some(.creditCard): return .creditCard
-            case .some(.loan): return .loan
-            case .some(.brokerage): return .brokerage
-            case .some(.bank): return .bank
-            case .none: return nil
-            }
-        }()
-
-        do {
-            AMLogging.log(
-                "QuickStart fallback: start file=\(url.lastPathComponent) preferredType=\(String(describing: preferredType)) runtime=\(runtime)",
-                component: "Import"
-            )
-            let importer = StatementImporter()
-            let result = try importer.importStatement(from: url, prefer: .transactions, userOverride: userOverride)
-            var augmentedRows = result.rows
-            var fullText: String? = nil
-
-            if url.pathExtension.lowercased() == "pdf",
-               let extractedText = PDFTextExtractor.extractText(from: url) {
-                fullText = extractedText
-                if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: extractedText) {
-                    augmentedRows.append([interestSection])
-                }
-                if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: extractedText) {
-                    augmentedRows.append([balanceSection])
-                }
-                for section in PDFTextExtractor.extractAccountSummarySections(from: extractedText) {
-                    augmentedRows.append([section])
-                }
-                augmentedRows.append([extractedText])
-                AMLogging.log(
-                    "QuickStart fallback: extracted pdfText chars=\(extractedText.count) rows=\(augmentedRows.count) runtime=\(runtime)",
-                    component: "Import"
-                )
-            }
-
-            let staged: StagedImport
-            do {
-                staged = try PDFSummaryParser().parse(rows: augmentedRows, headers: result.headers)
-            } catch {
-                let parser = await MainActor.run {
-                    ImportViewModel.defaultParsers().first { $0.canParse(headers: result.headers) }
-                }
-                guard let parser else { throw error }
-                staged = try parser.parse(rows: augmentedRows, headers: result.headers)
-            }
-
-            let combinedText = ([fullText] + augmentedRows.flatMap { $0 }.map(Optional.some))
-                .compactMap { $0 }
-                .joined(separator: "\n")
-            let inferredType = inferredStatementTypeFromParsedText(combinedText, balances: staged.balances)
-            let inferredInstitution = inferredInstitutionFromParsedText(combinedText)
-            AMLogging.log(
-                "QuickStart fallback: balances=\(staged.balances.count) headers=\(result.headers.count) combinedChars=\(combinedText.count) inferredType=\(String(describing: inferredType)) inferredInstitution=\(inferredInstitution ?? "nil") runtime=\(runtime)",
-                component: "Import"
-            )
-            return (
-                type: inferredType,
-                institution: inferredInstitution
-            )
-        } catch {
-            AMLogging.error(
-                "QuickStart fallback: failed file=\(url.lastPathComponent) error=\(error.localizedDescription) runtime=\(runtime)",
-                component: "Import"
-            )
-            return (nil, nil)
-        }
-    }
-
-    private func inferredInstitutionFromParsedText(_ text: String) -> String? {
-        let lower = text.lowercased()
-        if lower.contains("communitychoice.com") || lower.contains("community choice") {
-            return "Community Choice"
-        }
-        if lower.contains("sloanservicing.com") || lower.contains("sloan servicing") {
-            return "Sloan Servicing"
-        }
-        guard let regex = try? NSRegularExpression(
-            pattern: "(?i)\\b(?:https?://)?(?:www\\d*\\.)?([a-z0-9-]{3,})\\.(com|net|org|bank|loan|mortgage|finance|financial|credit)\\b"
-        ) else {
-            return nil
-        }
-        var counts: [String: Int] = [:]
-        var displayNames: [String: String] = [:]
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = regex.matches(in: text, options: [], range: range)
-        guard !matches.isEmpty else {
-            return nil
-        }
-        let ignored = Set([
-            "account", "accounts", "app", "consumer", "customerservice", "ebill",
-            "help", "home", "login", "mail", "my", "online", "payment", "portal",
-            "secure", "service", "support", "web", "www", "www2"
-        ])
-        for match in matches {
-            guard let labelRange = Range(match.range(at: 1), in: text) else { continue }
-            let label = String(text[labelRange]).lowercased()
-            guard !ignored.contains(label) else { continue }
-
-            counts[label, default: 0] += 1
-            displayNames[label] = label
-                .split(separator: "-")
-                .map { part in
-                    let token = String(part)
-                    guard let first = token.first else { return "" }
-                    return String(first).uppercased() + token.dropFirst()
-                }
-                .joined(separator: " ")
-        }
-
-        guard let best = counts.max(by: { lhs, rhs in
-            if lhs.value == rhs.value {
-                return lhs.key > rhs.key
-            }
-            return lhs.value < rhs.value
-        }) else {
-            return nil
-        }
-
-        return displayNames[best.key]
-    }
-
-    private func inferredStatementTypeFromParsedText(_ text: String, balances: [StagedBalance]) -> StatementType? {
-        let labels = balances.compactMap { $0.sourceAccountLabel?.lowercased() }
-        let hasLoanLabel = labels.contains(where: { $0.contains("loan") })
-        let hasCreditCardLabel = labels.contains(where: { $0.contains("credit") || $0.contains("card") })
-        let hasBankLabel = labels.contains(where: { $0.contains("checking") || $0.contains("savings") })
-        let normalized = text
-            .lowercased()
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-        let hasLoanSummary = normalized.contains("totalloans")
-            || normalized.contains("paymentof")
-            || normalized.contains("paymentdue")
-            || normalized.contains("endingbalance")
-        let hasLoanTerms = normalized.contains("annualpercentagerate")
-            || normalized.contains("interestrate")
-            || normalized.contains("principal")
-            || normalized.contains("interestpaidytd")
-        AMLogging.log(
-            "QuickStart inferredType: labels=\(labels) loanSummary=\(hasLoanSummary) loanTerms=\(hasLoanTerms) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-            component: "Import"
-        )
-        if hasLoanLabel {
-            AMLogging.log(
-                "QuickStart inferredType: returning loan from label runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-                component: "Import"
-            )
-            return .loan
-        }
-        if hasCreditCardLabel {
-            AMLogging.log(
-                "QuickStart inferredType: returning creditCard from label runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-                component: "Import"
-            )
-            return .creditCard
-        }
-        if hasBankLabel {
-            AMLogging.log(
-                "QuickStart inferredType: returning bank from label runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-                component: "Import"
-            )
-            return .bank
-        }
-        if hasLoanSummary && hasLoanTerms {
-            AMLogging.log(
-                "QuickStart inferredType: returning loan from text heuristic runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-                component: "Import"
-            )
-            return .loan
-        }
-        AMLogging.log(
-            "QuickStart inferredType: no type inferred runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-            component: "Import"
-        )
-        return nil
     }
 
     @ViewBuilder

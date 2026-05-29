@@ -57,7 +57,7 @@ struct QAccountsListView: View {
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    .padding(.trailing, UIDevice.type == "iPhone" ? 40 : 25) // reserve space for navigation cue and trailing button
+                    .padding(.trailing, trailingActionPadding)
                     .overlay(alignment: .trailing) {
                         HStack(spacing: 2) {
                             Menu {
@@ -79,7 +79,7 @@ struct QAccountsListView: View {
                                     .accessibilityLabel("More actions")
                             }
                             .menuStyle(.button)
-                            if UIDevice.type == "iPhone" {
+                            if showsNavigationCue {
                                 Image(systemName: "chevron.right")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.tertiary)
@@ -148,6 +148,14 @@ struct QAccountsListView: View {
 
 // MARK: - Helpers
 private extension QAccountsListView {
+    var showsNavigationCue: Bool {
+        UIDevice.type == "iPhone" && showsDebtTools
+    }
+
+    var trailingActionPadding: CGFloat {
+        showsNavigationCue ? 40 : 25
+    }
+
     func latestBalanceSnapshot(for account: Account) -> BalanceSnapshot? {
         account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first
     }

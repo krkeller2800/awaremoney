@@ -19,6 +19,255 @@ public struct IntakeDetection: Sendable {
     }
 }
 
+struct ResolvedStatementImport {
+    let stagedURL: URL
+    let detection: IntakeDetection
+    let classifierDetection: IntakeDetection
+    let fallbackType: StatementType?
+    let fallbackInstitution: String?
+}
+
+enum StatementIntakeResolver {
+    static func resolve(
+        url: URL,
+        providedType: StatementType? = nil,
+        providedInstitution: String? = nil,
+        source: String
+    ) async -> ResolvedStatementImport {
+        let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
+        let stagedURL = ImportFileStaging.stageToCaches(url)
+        AMLogging.log(
+            "StatementIntakeResolver start source=\(source) file=\(stagedURL.lastPathComponent) providedType=\(String(describing: providedType)) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path)) runtime=\(runtime)",
+            component: "Import"
+        )
+
+        let classifier = StatementIntakeClassifier()
+        let classifierDetection = await classifier.classify(url: stagedURL)
+        let fallback = await inferStatementFallback(from: stagedURL, preferredType: providedType)
+        let resolvedType = resolvedStatementType(
+            providedType: providedType,
+            classifierType: classifierDetection.type,
+            fallbackType: fallback.type
+        )
+        let resolvedInstitution = providedInstitution
+            ?? classifierDetection.institution
+            ?? fallback.institution
+        var notes = classifierDetection.notes
+        if let fallbackType = fallback.type, fallbackType != classifierDetection.type {
+            notes.append("fallback-type-\(fallbackType.rawValue)")
+        }
+        if let providedType, providedType != resolvedType {
+            notes.append("provided-type-\(providedType.rawValue)-overridden")
+        }
+
+        AMLogging.log(
+            "StatementIntakeResolver resolved source=\(source) classifier=\(String(describing: classifierDetection.type)) fallback=\(String(describing: fallback.type)) final=\(String(describing: resolvedType)) institution=\(resolvedInstitution ?? "nil") runtime=\(runtime)",
+            component: "Import"
+        )
+
+        return ResolvedStatementImport(
+            stagedURL: stagedURL,
+            detection: IntakeDetection(
+                type: resolvedType,
+                institution: resolvedInstitution,
+                confidence: classifierDetection.confidence,
+                notes: notes
+            ),
+            classifierDetection: classifierDetection,
+            fallbackType: fallback.type,
+            fallbackInstitution: fallback.institution
+        )
+    }
+
+    private static func resolvedStatementType(
+        providedType: StatementType?,
+        classifierType: StatementType?,
+        fallbackType: StatementType?
+    ) -> StatementType? {
+        if fallbackType == .bank && classifierType == .creditCard {
+            return .bank
+        }
+        if fallbackType == .bank && providedType == .creditCard {
+            return .bank
+        }
+        return providedType ?? classifierType ?? fallbackType
+    }
+
+    private static func inferStatementFallback(
+        from url: URL,
+        preferredType: StatementType?
+    ) async -> (type: StatementType?, institution: String?) {
+        let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
+        let userOverride: StatementImporter.UserOverride? = {
+            switch preferredType {
+            case .some(.bank): return .bank
+            case .some(.loan): return .loan
+            case .some(.brokerage): return .brokerage
+            case .some(.creditCard), .none:
+                return nil
+            }
+        }()
+
+        do {
+            AMLogging.log(
+                "StatementIntakeResolver fallback start file=\(url.lastPathComponent) preferredType=\(String(describing: preferredType)) override=\(String(describing: userOverride)) runtime=\(runtime)",
+                component: "Import"
+            )
+            let importer = StatementImporter()
+            let result = try importer.importStatement(from: url, prefer: .transactions, userOverride: userOverride)
+            var augmentedRows = result.rows
+            var fullText: String? = nil
+
+            if url.pathExtension.lowercased() == "pdf",
+               let extractedText = PDFTextExtractor.extractText(from: url) {
+                fullText = extractedText
+                if let interestSection = PDFTextExtractor.extractInterestChargesSection(from: extractedText) {
+                    augmentedRows.append([interestSection])
+                }
+                if let balanceSection = PDFTextExtractor.extractBalanceSummarySection(from: extractedText) {
+                    augmentedRows.append([balanceSection])
+                }
+                for section in PDFTextExtractor.extractAccountSummarySections(from: extractedText) {
+                    augmentedRows.append([section])
+                }
+                augmentedRows.append([extractedText])
+                AMLogging.log(
+                    "StatementIntakeResolver fallback pdfText chars=\(extractedText.count) rows=\(augmentedRows.count) runtime=\(runtime)",
+                    component: "Import"
+                )
+            }
+
+            let staged: StagedImport
+            do {
+                staged = try PDFSummaryParser().parse(rows: augmentedRows, headers: result.headers)
+            } catch {
+                guard let parser = ImportViewModel.defaultParsers().first(where: { $0.canParse(headers: result.headers) }) else {
+                    throw error
+                }
+                staged = try parser.parse(rows: augmentedRows, headers: result.headers)
+            }
+
+            let combinedText = ([fullText] + augmentedRows.flatMap { $0 }.map(Optional.some))
+                .compactMap { $0 }
+                .joined(separator: "\n")
+            let inferredType = inferredStatementTypeFromParsedText(combinedText, balances: staged.balances)
+            let inferredInstitution = inferredInstitutionFromParsedText(combinedText)
+            AMLogging.log(
+                "StatementIntakeResolver fallback result balances=\(staged.balances.count) headers=\(result.headers.count) inferredType=\(String(describing: inferredType)) inferredInstitution=\(inferredInstitution ?? "nil") runtime=\(runtime)",
+                component: "Import"
+            )
+            return (inferredType, inferredInstitution)
+        } catch {
+            AMLogging.error(
+                "StatementIntakeResolver fallback failed file=\(url.lastPathComponent) error=\(error.localizedDescription) runtime=\(runtime)",
+                component: "Import"
+            )
+            return (nil, nil)
+        }
+    }
+
+    private static func inferredInstitutionFromParsedText(_ text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("communitychoice.com") || lower.contains("community choice") {
+            return "Community Choice"
+        }
+        if lower.contains("sloanservicing.com") || lower.contains("sloan servicing") {
+            return "Sloan Servicing"
+        }
+        if lower.contains("sofi.com") || lower.contains("sofi bank") {
+            return "SoFi"
+        }
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?i)\\b(?:https?://)?(?:www\\d*\\.)?([a-z0-9-]{3,})\\.(com|net|org|bank|loan|mortgage|finance|financial|credit)\\b"
+        ) else {
+            return nil
+        }
+        var counts: [String: Int] = [:]
+        var displayNames: [String: String] = [:]
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let matches = regex.matches(in: text, options: [], range: range)
+        guard !matches.isEmpty else {
+            return nil
+        }
+        let ignored = Set([
+            "account", "accounts", "app", "consumer", "customerservice", "ebill",
+            "help", "home", "login", "mail", "my", "online", "payment", "portal",
+            "secure", "service", "support", "web", "www", "www2"
+        ])
+        for match in matches {
+            guard let labelRange = Range(match.range(at: 1), in: text) else { continue }
+            let label = String(text[labelRange]).lowercased()
+            guard !ignored.contains(label) else { continue }
+
+            counts[label, default: 0] += 1
+            displayNames[label] = label
+                .split(separator: "-")
+                .map { part in
+                    let token = String(part)
+                    guard let first = token.first else { return "" }
+                    return String(first).uppercased() + token.dropFirst()
+                }
+                .joined(separator: " ")
+        }
+
+        guard let best = counts.max(by: { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.key > rhs.key
+            }
+            return lhs.value < rhs.value
+        }) else {
+            return nil
+        }
+
+        return displayNames[best.key]
+    }
+
+    private static func inferredStatementTypeFromParsedText(_ text: String, balances: [StagedBalance]) -> StatementType? {
+        let labels = balances.compactMap { $0.sourceAccountLabel?.lowercased() }
+        let hasLoanLabel = labels.contains(where: { $0.contains("loan") })
+        let hasBankLabel = labels.contains(where: { $0.contains("checking") || $0.contains("savings") })
+        let hasCreditCardLabel = labels.contains(where: { $0.contains("credit") || $0.contains("card") })
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let hasDepositSummary = normalized.contains("checkingaccount")
+            || normalized.contains("savingsaccount")
+            || normalized.contains("depositaccount")
+            || normalized.contains("certificateaccount")
+        let hasLoanSummary = normalized.contains("totalloans")
+            || normalized.contains("paymentof")
+            || normalized.contains("paymentdue")
+            || normalized.contains("endingbalance")
+        let hasLoanTerms = normalized.contains("annualpercentagerate")
+            || normalized.contains("interestrate")
+            || normalized.contains("principal")
+            || normalized.contains("interestpaidytd")
+
+        AMLogging.log(
+            "StatementIntakeResolver inferredType labels=\(labels) bankLabel=\(hasBankLabel) creditCardLabel=\(hasCreditCardLabel) depositSummary=\(hasDepositSummary) loanSummary=\(hasLoanSummary) loanTerms=\(hasLoanTerms) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+            component: "Import"
+        )
+
+        if hasLoanLabel {
+            return .loan
+        }
+        if hasBankLabel || hasDepositSummary {
+            return .bank
+        }
+        if hasCreditCardLabel {
+            return .creditCard
+        }
+        if hasLoanSummary && hasLoanTerms {
+            return .loan
+        }
+        return nil
+    }
+}
+
 public protocol StatementIntakeClassifying {
     func classify(url: URL) async -> IntakeDetection
 }

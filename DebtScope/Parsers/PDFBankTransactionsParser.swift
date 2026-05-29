@@ -25,8 +25,13 @@ struct PDFBankTransactionsParser: StatementParser {
         var txs: [StagedTransaction] = []
 
         // Parse all rows into a lightweight struct for optional balance-delta sign inference
-        struct RowItem { let date: Date; let desc: String; let amount: Decimal; let balance: Decimal? ; let account: String? }
+        struct RowItem { let date: Date; let desc: String; let amount: Decimal; let rawAmount: String; let balance: Decimal? ; let account: String? }
         var items: [RowItem] = []
+        var skippedMissingDate = 0
+        var skippedDateParse = 0
+        var skippedHeaderOrTotal = 0
+        var skippedMissingAmount = 0
+        var skippedAmountParse = 0
 
         func parseDate(_ s: String) -> Date? {
             let df = DateFormatter()
@@ -37,17 +42,25 @@ struct PDFBankTransactionsParser: StatementParser {
         }
 
         func sanitize(_ s: String) -> String {
-            s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
+            s.replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "CR", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "DR", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "CREDIT", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "DEBIT", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: " ", with: "")
         }
 
         // First pass: parse as absolute amounts; keep optional running balance
         for (rowIndex, row) in rows.enumerated() {
             AMLogging.log("Row \(rowIndex) raw: \(row)", component: LOG_COMPONENT)
             guard let dateStr = value(row, map, key: "date") else {
+                skippedMissingDate += 1
                 AMLogging.log("Row \(rowIndex) skipped — missing date cell", component: LOG_COMPONENT)
                 continue
             }
             guard let date = parseDate(dateStr) else {
+                skippedDateParse += 1
                 AMLogging.log("Row \(rowIndex) skipped — date parse failed: \(dateStr)", component: LOG_COMPONENT)
                 continue
             }
@@ -56,15 +69,18 @@ struct PDFBankTransactionsParser: StatementParser {
 
             // Skip section/page headers and totals that sometimes get captured as rows
             if isHeaderOrTotal(descRaw ?? "") || isHeaderOrTotal(rowForHeuristics) {
+                skippedHeaderOrTotal += 1
                 AMLogging.log("Row \(rowIndex) skipped — header/total detected. desc=\(descRaw ?? "<nil>"), row=\(rowForHeuristics)", component: LOG_COMPONENT)
                 continue
             }
 
             guard let amountStr = value(row, map, key: "amount") else {
+                skippedMissingAmount += 1
                 AMLogging.log("Row \(rowIndex) skipped — missing amount cell", component: LOG_COMPONENT)
                 continue
             }
             guard let amountVal = Decimal(string: sanitize(amountStr)) else {
+                skippedAmountParse += 1
                 AMLogging.log("Row \(rowIndex) skipped — amount parse failed: \(amountStr)", component: LOG_COMPONENT)
                 continue
             }
@@ -86,17 +102,27 @@ struct PDFBankTransactionsParser: StatementParser {
                 AMLogging.log("Row \(rowIndex) loan payment recovery — charges=\(amountVal), payments=\(parsedBalance?.description ?? "nil"), recoveredAmount=\(amount)", component: LOG_COMPONENT)
             }
 
-            items.append(RowItem(date: date, desc: desc, amount: amount, balance: balance, account: accountLabel))
+            items.append(RowItem(date: date, desc: desc, amount: amount, rawAmount: amountStr, balance: balance, account: accountLabel))
             AMLogging.log("Row \(rowIndex) included — date=\(dateStr), desc=\(desc), amount=\(amount), balance=\(balance?.description ?? "nil"), account=\(accountLabel ?? "(nil)")", component: LOG_COMPONENT)
         }
 
         AMLogging.log("Parsed items count: \(items.count)", component: LOG_COMPONENT)
+        let includedAccountCounts = Dictionary(grouping: items, by: { ($0.account ?? "nil").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            .mapValues { $0.count }
+        AMLogging.always(
+            "PDF transaction parse summary — inputRows=\(rows.count) includedItems=\(items.count) accounts=\(includedAccountCounts) skippedMissingDate=\(skippedMissingDate) skippedDateParse=\(skippedDateParse) skippedHeaderOrTotal=\(skippedHeaderOrTotal) skippedMissingAmount=\(skippedMissingAmount) skippedAmountParse=\(skippedAmountParse)",
+            component: LOG_COMPONENT
+        )
         let looksLikeCreditCardActivity = items.contains { item in
-            let lower = item.desc.lowercased()
-            return lower.contains("payment thank you") ||
-                lower.contains("purchase interest charge") ||
-                lower.contains("cardmember") ||
-                lower.contains("card member")
+            let lowerDesc = item.desc.lowercased()
+            let lowerAccount = item.account?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            return lowerAccount == "creditcard" ||
+                lowerAccount == "credit card" ||
+                lowerDesc.contains("payment thank you") ||
+                lowerDesc.contains("interest charge") ||
+                lowerDesc.contains("finance charge") ||
+                lowerDesc.contains("cardmember") ||
+                lowerDesc.contains("card member")
         }
 
         // Determine a suggested account type from account labels in the PDF
@@ -153,7 +179,7 @@ struct PDFBankTransactionsParser: StatementParser {
         for i in 0..<items.count {
             let it = items[i]
             let inferredAmount = (i < signedAmounts.count) ? signedAmounts[i] : it.amount
-            let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, isCreditCardActivity: looksLikeCreditCardActivity)
+            let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, rawAmount: it.rawAmount, isCreditCardActivity: looksLikeCreditCardActivity)
             let hashKey = Hashing.hashKey(date: it.date, amount: amount, payee: it.desc, memo: nil, symbol: nil, quantity: nil)
             let tx = StagedTransaction(
                 datePosted: it.date,
@@ -208,26 +234,32 @@ struct PDFBankTransactionsParser: StatementParser {
         return nil
     }
 
-    private func normalizeCreditCardActivityAmount(_ amount: Decimal, description: String, isCreditCardActivity: Bool) -> Decimal {
+    private func normalizeCreditCardActivityAmount(_ amount: Decimal, description: String, rawAmount: String, isCreditCardActivity: Bool) -> Decimal {
         guard isCreditCardActivity else { return amount }
 
-        let lower = description.lowercased()
-        let paymentTokens = [
-            "payment thank you",
-            "payment received",
-            "online payment",
-            "autopay",
-            "auto pay",
-            "cardmember serv",
-            "card member serv"
-        ]
-        let creditTokens = ["refund", "return", "credit"]
-
-        if paymentTokens.contains(where: { lower.contains($0) }) || creditTokens.contains(where: { lower.contains($0) }) {
+        let upperRawAmount = rawAmount.uppercased()
+        if upperRawAmount.contains("CR") || upperRawAmount.contains("CREDIT") {
+            return amount.magnitude
+        }
+        if upperRawAmount.contains("DR") || upperRawAmount.contains("DEBIT") {
             return -amount.magnitude
         }
 
-        return amount.magnitude
+        let normalizedDescription = description
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter })
+            .joined(separator: " ")
+        let words = Set(normalizedDescription.split(separator: " ").map(String.init))
+        let isPayment = words.contains("payment") || words.contains("autopay") || (words.contains("auto") && words.contains("pay"))
+        let isCredit = words.contains("refund") || words.contains("return") || words.contains("credit")
+
+        // DebtScope stores liability balances as negative values. Credit-card charges increase
+        // the liability, so they are negative; payments and credits reduce it, so they are positive.
+        if isPayment || isCredit {
+            return amount.magnitude
+        }
+
+        return -amount.magnitude
     }
     
     private func isHeaderOrTotal(_ desc: String) -> Bool {
@@ -253,6 +285,10 @@ struct PDFBankTransactionsParser: StatementParser {
 
         if lower.contains("interest charge") {
             return false
+        }
+
+        if lower.contains("amount enclosed") || lower.contains("payment coupon") || lower.contains("return this portion") || lower.contains("mail payment") || lower.contains("remittance") {
+            return true
         }
 
         // Exact/normalized section headers commonly seen in bank PDFs

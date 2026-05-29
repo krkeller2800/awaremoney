@@ -73,6 +73,7 @@ struct ImportFlowView: View {
         externalImportActive = true
         pendingExternalURL = stagedURL
         showPaywall = false
+        clearPreviousImportReviewIfNeeded(fileName: stagedURL.lastPathComponent, source: "external-intake")
         Task {
             let runtime = AMRuntimeDiagnostics.executionEnvironmentDescription
             AMLogging.log(
@@ -135,8 +136,34 @@ struct ImportFlowView: View {
         case .ofx, .qif, .excel, .zip:
             vm.userSelectedDocHint = nil
         }
-        Task { await self.coordinator.importURL(url, hint: self.statementHint(from: self.vm.newAccountType), modelContext: self.modelContext, settings: self.settings) }
         AMLogging.always("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
+        beginCoordinatorImport(url, hint: statementHint(from: vm.newAccountType), source: "external-\(kind.rawValue)")
+    }
+
+    private func clearPreviousImportReviewIfNeeded(fileName: String, source: String) {
+        guard vm.staged != nil || vm.mappingSession != nil else { return }
+        AMLogging.always(
+            "ImportFlowView: clearing previous staged review before \(source) file=\(fileName)",
+            component: "Import"
+        )
+        vm.staged = nil
+        vm.mappingSession = nil
+    }
+
+    private func beginCoordinatorImport(_ url: URL, hint: StatementType?, source: String) {
+        clearPreviousImportReviewIfNeeded(fileName: url.lastPathComponent, source: source)
+        AMLogging.always(
+            "ImportFlowView: begin coordinator import source=\(source) file=\(url.lastPathComponent) hint=\(String(describing: hint))",
+            component: "Import"
+        )
+        Task {
+            await self.coordinator.importURL(
+                url,
+                hint: hint,
+                modelContext: self.modelContext,
+                settings: self.settings
+            )
+        }
     }
 
     private func statementHint(from type: Account.AccountType?) -> StatementType? {
@@ -148,6 +175,18 @@ struct ImportFlowView: View {
         case .checking, .savings: return .bank
         default: return nil
         }
+    }
+
+    private func stagedLabelSummary(_ staged: StagedImport) -> String {
+        func normalizedLabel(_ raw: String?) -> String {
+            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "default" : trimmed.lowercased()
+        }
+        let transactionLabels = Dictionary(grouping: staged.transactions, by: { normalizedLabel($0.sourceAccountLabel) })
+            .mapValues { $0.count }
+        let balanceLabels = Dictionary(grouping: staged.balances, by: { normalizedLabel($0.sourceAccountLabel) })
+            .mapValues { $0.count }
+        return "parser=\(staged.parserId) balances=\(staged.balances.count) tx=\(staged.transactions.count) txLabels=\(transactionLabels) balanceLabels=\(balanceLabels)"
     }
 
     private func allowedTypesForCurrentPicker() -> [UTType] {
@@ -664,7 +703,7 @@ struct ImportFlowView: View {
             }
             .onReceive(vm.$staged) { (staged: StagedImport?) in
                 if let staged {
-                    AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                    AMLogging.always("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
                     externalImportActive = false
                 } else {
                     AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
@@ -1008,7 +1047,7 @@ struct ImportFlowView: View {
         }
         .onReceive(vm.$staged) { (staged: StagedImport?) in
             if let staged {
-                AMLogging.log("ImportFlowView: staged import ready — parser=\(staged.parserId), balances=\(staged.balances.count), tx=\(staged.transactions.count)", component: "Import")
+                AMLogging.always("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
                 externalImportActive = false
             } else {
                 AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
@@ -1223,7 +1262,7 @@ struct ImportFlowView: View {
                     showPaywall = true
                     return
                 }
-                Task { await coordinator.importURL(url, hint: statementHint(from: vm.newAccountType), modelContext: modelContext, settings: settings) }
+                beginCoordinatorImport(url, hint: statementHint(from: vm.newAccountType), source: "fileImporter")
             case .failure(let error):
                 AMLogging.error("ImportFlowView: fileImporter failed — \(error.localizedDescription)", component: "Import")
                 vm.errorMessage = error.localizedDescription

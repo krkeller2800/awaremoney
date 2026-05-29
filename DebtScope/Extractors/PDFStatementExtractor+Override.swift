@@ -9,7 +9,7 @@ extension PDFStatementExtractor {
             case .loan:
                 return .loan
             case .bank:
-                return .checking
+                return nil
             case .brokerage:
                 return .investment
             case .none:
