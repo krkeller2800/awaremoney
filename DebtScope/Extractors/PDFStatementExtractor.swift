@@ -1306,11 +1306,38 @@ enum PDFStatementExtractor {
                     var amount = applySectionSign(amount: sanitizeAmount(amtRaw))
                     var balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
 
+                    let sanitizedRawAmount = sanitizeAmount(amtRaw)
+                    let rawAmountLooksLikeAccountSuffix = !balRaw.isEmpty &&
+                        sanitizedRawAmount.range(of: #"^[0-9]{3}$"#, options: .regularExpression) != nil &&
+                        !amtRaw.contains(".") &&
+                        !amtRaw.contains("$") &&
+                        !amtRaw.contains("-") &&
+                        !amtRaw.contains("+")
+                    if rawAmountLooksLikeAccountSuffix {
+                        let decimalMoneyRegex = try! NSRegularExpression(
+                            pattern: #"\(?[+-]?\s?\$?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}[+-]?\)?(?:\s*(?:CR|DR|CREDIT|DEBIT))?"#,
+                            options: [.caseInsensitive]
+                        )
+                        let lineRange = NSRange(location: 0, length: line.utf16.count)
+                        let decimalMoneyMatches = decimalMoneyRegex.matches(in: line, options: [], range: lineRange)
+                        if decimalMoneyMatches.count >= 2,
+                           let amountMatch = decimalMoneyMatches.dropLast().last,
+                           let balanceMatch = decimalMoneyMatches.last,
+                           let amountRange = Range(amountMatch.range, in: line),
+                           let balanceRange = Range(balanceMatch.range, in: line) {
+                            let correctedAmountRaw = String(line[amountRange])
+                            let correctedBalanceRaw = String(line[balanceRange])
+                            amount = sanitizeAmount(correctedAmountRaw)
+                            balance = sanitizeAmount(correctedBalanceRaw)
+                            AMLogging.log("PDF single-line amount corrected from account suffix at line \(i): raw=\(amtRaw) corrected=\(correctedAmountRaw) balance=\(correctedBalanceRaw)", component: "PDFStatementExtractor")
+                        }
+                    }
+
                     // If a nearby header explicitly names an Amount column and the regex had to absorb
                     // earlier money values into the description, prefer the first money token as Amount.
                     // This handles generic tables like Amount / Principal / Charge Fee / Balance without
                     // baking in institution-specific column names.
-                    if contextHasStandaloneAmountHeader() {
+                    if contextHasStandaloneAmountHeader() && !rawAmountLooksLikeAccountSuffix {
                         let descRange = NSRange(location: 0, length: descRaw.utf16.count)
                         let embeddedMoneyMatches = amountAnywhereRegex.matches(in: descRaw, options: [], range: descRange)
                         if let firstMoney = embeddedMoneyMatches.first,
@@ -2221,6 +2248,82 @@ enum PDFStatementExtractor {
                 }
             }
         }
+
+        let documentHasSavingsAccount = lines.contains { isSavingsHeader($0) }
+        if documentHasSavingsAccount {
+            for idx in 0..<rows.count where rows[idx].count >= 5 {
+                let keyLower = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard keyLower.isEmpty || keyLower == "unknown" else { continue }
+                let descLower = rows[idx][1].lowercased()
+                let referencesCheckingCounterparty = descLower.contains("from chk") ||
+                    descLower.contains("to chk") ||
+                    descLower.contains("from checking") ||
+                    descLower.contains("to checking")
+                if referencesCheckingCounterparty {
+                    rows[idx][4] = "savings"
+                    AMLogging.log("PDF account label corrected to savings for checking-counterparty transfer row #\(idx)", component: "PDFStatementExtractor")
+                }
+            }
+        }
+
+        func decimalValue(_ raw: String) -> Decimal? {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isParenthesized = trimmed.hasPrefix("(") && trimmed.hasSuffix(")")
+            let cleaned = trimmed
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: "CR", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "DR", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "CREDIT", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "DEBIT", with: "", options: [.caseInsensitive])
+                .replacingOccurrences(of: "(", with: "")
+                .replacingOccurrences(of: ")", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            guard !cleaned.isEmpty, var value = Decimal(string: cleaned) else { return nil }
+            if isParenthesized { value = -value }
+            return value
+        }
+
+        func amountString(_ value: Decimal) -> String {
+            String(format: "%.2f", NSDecimalNumber(decimal: value).doubleValue)
+        }
+
+        func beginningBalancesByAccount() -> [String: Decimal] {
+            var balances: [String: Decimal] = [:]
+            var activeAccount: String?
+            for line in lines {
+                if isSavingsHeader(line) { activeAccount = "savings" }
+                else if isCheckingHeader(line) { activeAccount = "checking" }
+                guard let account = activeAccount else { continue }
+                let lower = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard lower.hasPrefix("beginning balance") || lower.hasPrefix("opening balance") else { continue }
+                let matches = amountAnywhereRegex.matches(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count))
+                guard let match = matches.last, let range = Range(match.range, in: line), let amount = decimalValue(sanitizeAmount(String(line[range]))) else { continue }
+                balances[account] = amount
+            }
+            return balances
+        }
+
+        func repairBareAccountSuffixAmountsFromRunningBalances() {
+            var previousBalances = beginningBalancesByAccount()
+            for idx in 0..<rows.count where rows[idx].count >= 5 {
+                let account = rows[idx][4].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard account == "checking" || account == "savings" else { continue }
+                guard let currentBalance = decimalValue(rows[idx][3]) else { continue }
+                defer { previousBalances[account] = currentBalance }
+
+                let amountRaw = rows[idx][2].trimmingCharacters(in: .whitespacesAndNewlines)
+                let amountLooksLikeAccountSuffix = amountRaw.range(of: #"^[0-9]{3}$"#, options: .regularExpression) != nil
+                guard amountLooksLikeAccountSuffix, let previousBalance = previousBalances[account] else { continue }
+
+                let correctedAmount = currentBalance - previousBalance
+                guard correctedAmount != .zero else { continue }
+                rows[idx][2] = amountString(correctedAmount)
+                AMLogging.log("PDF amount repaired from running balance row #\(idx) account=\(account) previous=\(previousBalance) current=\(currentBalance) corrected=\(rows[idx][2])", component: "PDFStatementExtractor")
+            }
+        }
+
+        repairBareAccountSuffixAmountsFromRunningBalances()
 
         // Credit-card documents often leave transaction rows unlabeled even when summary rows are clear.
         // Keep transaction routing coherent with the document type instead of leaking "unknown" rows downstream.

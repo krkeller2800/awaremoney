@@ -179,7 +179,10 @@ struct PDFBankTransactionsParser: StatementParser {
         for i in 0..<items.count {
             let it = items[i]
             let inferredAmount = (i < signedAmounts.count) ? signedAmounts[i] : it.amount
-            let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, rawAmount: it.rawAmount, isCreditCardActivity: looksLikeCreditCardActivity)
+            let accountLabel = it.account?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            let shouldNormalizeAsCreditCardActivity = looksLikeCreditCardActivity &&
+                (accountLabel.isEmpty || accountLabel == "unknown" || accountLabel == "creditcard" || accountLabel == "credit card")
+            let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, rawAmount: it.rawAmount, isCreditCardActivity: shouldNormalizeAsCreditCardActivity)
             let hashKey = Hashing.hashKey(date: it.date, amount: amount, payee: it.desc, memo: nil, symbol: nil, quantity: nil)
             let tx = StagedTransaction(
                 datePosted: it.date,
