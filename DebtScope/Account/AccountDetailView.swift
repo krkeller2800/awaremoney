@@ -768,17 +768,13 @@ struct AccountDetailView: View {
         let bg = ModelContext(container)
         bg.autosaveEnabled = false
 
-        // Capture ID and last snapshot data on the main actor
         let id = await MainActor.run { account.id }
         AMLogging.log("recompute start id=\(id)", component: "AccountDetailView")
-        let snapshotData: (Decimal?, Date?) = await MainActor.run { () -> (Decimal?, Date?) in
-            let last = self.lastBalanceSnapshot(for: account)
-            return (last?.balance, last?.asOfDate)
-        }
-        let baseBalance = snapshotData.0
-        let sinceDate = snapshotData.1
 
         do {
+            let snapshotData = try fetchLatestBalanceSnapshotData(in: bg, accountID: id)
+            let baseBalance = snapshotData.balance
+            let sinceDate = snapshotData.asOfDate
             // Earliest transaction date using an ascending sort and fetch limit 1
             let earliest = try await fetchEarliestTransactionDate(in: bg, accountID: id)
             AMLogging.log("recompute earliest=\(String(describing: earliest)) id=\(id)", component: "AccountDetailView")
@@ -818,15 +814,36 @@ struct AccountDetailView: View {
         return results.first?.datePosted
     }
 
+    private func fetchLatestBalanceSnapshotData(in context: ModelContext, accountID: UUID) throws -> (balance: Decimal?, asOfDate: Date?) {
+        let predicate = #Predicate<BalanceSnapshot> { snapshot in snapshot.account?.id == accountID }
+        var descriptor = FetchDescriptor<BalanceSnapshot>(predicate: predicate)
+        descriptor.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
+        descriptor.fetchLimit = 1
+        guard let snapshot = try context.fetch(descriptor).first else {
+            return (nil, nil)
+        }
+        return (snapshot.balance, snapshot.asOfDate)
+    }
+
     private func sumTransactions(in context: ModelContext, accountID: UUID, since: Date?) async throws -> Decimal {
         let predicate: Predicate<Transaction>
+        let snapshotDateForLog = since
         if let sinceDate = since {
-            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID && tx.datePosted > sinceDate }
+            let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: sinceDate)) ?? sinceDate
+            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID && tx.datePosted >= nextDay }
         } else {
             predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID }
         }
         let descriptor = FetchDescriptor<Transaction>(predicate: predicate)
         let results = try context.fetch(descriptor)
+        if let sinceDate = snapshotDateForLog, !results.isEmpty {
+            let preview = results
+                .sorted { $0.datePosted < $1.datePosted }
+                .prefix(8)
+                .map { "\($0.datePosted) \($0.amount) \($0.payee)" }
+                .joined(separator: " | ")
+            AMLogging.log("AccountDetailView: derived balance counted transactions after snapshot — accountID=\(accountID) snapshotDate=\(sinceDate) count=\(results.count) preview=\(preview)", component: "AccountDetailView")
+        }
         return results.reduce(Decimal.zero) { $0 + $1.amount }
     }
 

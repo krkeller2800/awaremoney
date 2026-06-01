@@ -251,16 +251,21 @@ final class ImportViewModel: ObservableObject {
         }
 
         func parseDate(_ s: String) -> Date? {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let candidates = [
-                "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy",
+                "MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy",
                 "MMMM d, yyyy", "MMM d, yyyy"
             ]
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             for fmt in candidates {
                 let df = DateFormatter()
                 df.locale = Locale(identifier: "en_US_POSIX")
                 df.timeZone = TimeZone(secondsFromGMT: 0)
                 df.dateFormat = fmt
-                if let d = df.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines)) { return d }
+                if let d = df.date(from: trimmed), calendar.component(.year, from: d) >= 1900 {
+                    return d
+                }
             }
             return nil
         }
@@ -576,16 +581,21 @@ final class ImportViewModel: ObservableObject {
             return Decimal(string: cleaned)
         }
         func parseDate(_ s: String) -> Date? {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let fmts = [
-                "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy",
+                "MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy",
                 "MMMM d, yyyy", "MMM d, yyyy"
             ]
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             for f in fmts {
                 let df = DateFormatter()
                 df.locale = Locale(identifier: "en_US_POSIX")
                 df.timeZone = TimeZone(secondsFromGMT: 0)
                 df.dateFormat = f
-                if let d = df.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines)) { return d }
+                if let d = df.date(from: trimmed), calendar.component(.year, from: d) >= 1900 {
+                    return d
+                }
             }
             return nil
         }
@@ -902,13 +912,18 @@ final class ImportViewModel: ObservableObject {
             return Decimal(string: cleaned)
         }
         func parseDate(_ s: String) -> Date? {
-            let fmts = ["MMMM d, yyyy", "MMM d, yyyy", "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy"]
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fmts = ["MM/dd/yy", "M/d/yy", "MMMM d, yyyy", "MMM d, yyyy", "MM/dd/yyyy", "M/d/yyyy"]
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             for f in fmts {
                 let df = DateFormatter()
                 df.locale = Locale(identifier: "en_US_POSIX")
                 df.timeZone = TimeZone(secondsFromGMT: 0)
                 df.dateFormat = f
-                if let d = df.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines)) { return d }
+                if let d = df.date(from: trimmed), calendar.component(.year, from: d) >= 1900 {
+                    return d
+                }
             }
             return nil
         }
@@ -1512,6 +1527,15 @@ final class ImportViewModel: ObservableObject {
         let chosenInst = providedInst.isEmpty ? guessInstitutionName(from: staged.sourceFileName) : providedInst
         AMLogging.log("Approve: chosen institution: \(chosenInst ?? "(nil)") from file '\(staged.sourceFileName)'", component: "ImportViewModel")
 
+        func correctedImportedDate(_ date: Date) -> Date {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            var components = calendar.dateComponents([.year, .month, .day], from: date)
+            guard let year = components.year, year > 0, year < 100 else { return date }
+            components.year = 2000 + year
+            return calendar.date(from: components) ?? date
+        }
+
         // Helper to normalize PDF/CSV labels to canonical strings
         func normalizedLabel(_ raw: String?) -> String? {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
@@ -1938,9 +1962,10 @@ final class ImportViewModel: ObservableObject {
             let key = allowSplitByLabel ? (normalizedLabel(b.sourceAccountLabel) ?? "default") : "default"
             let targetAccount = accountsByLabel[key] ?? accountsByLabel.values.first
             guard let account = targetAccount else { continue }
+            let snapshotDate = correctedImportedDate(b.asOfDate)
             // Skip duplicate snapshot for the same account/date within this batch
-            if batch.balances.contains(where: { $0.account?.id == account.id && $0.asOfDate == b.asOfDate }) {
-                AMLogging.log("Skipping duplicate balance for account: \(account.name) on \(b.asOfDate)", component: "ImportViewModel")
+            if batch.balances.contains(where: { $0.account?.id == account.id && $0.asOfDate == snapshotDate }) {
+                AMLogging.log("Skipping duplicate balance for account: \(account.name) on \(snapshotDate)", component: "ImportViewModel")
                 continue
             }
             let rawBalance = b.balance
@@ -1956,7 +1981,7 @@ final class ImportViewModel: ObservableObject {
             }()
 
             let bs = BalanceSnapshot(
-                asOfDate: b.asOfDate,
+                asOfDate: snapshotDate,
                 balance: coercedBalance,
                 interestRateAPR: b.interestRateAPR,
                 interestRateScale: b.interestRateScale,

@@ -97,6 +97,20 @@ extension ImportViewModel {
         default:
             break
         }
+
+        if self.newAccountType != .loan,
+           hasAnyTx,
+           hasAnyBalance,
+           let statementCheck = StatementCheckService.evaluate(staged: staged),
+           statementCheck.issues.isEmpty,
+           !statementCheck.warnings.isEmpty {
+            issues.append(CompletenessIssue(
+                severity: .recommended,
+                title: "Statement cannot be verified",
+                detail: "The statement does not include enough balance information to verify the imported transactions."
+            ))
+        }
+
         return issues
     }
 

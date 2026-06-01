@@ -132,52 +132,16 @@ struct RoutingConfirmationView: View {
         case .other: return "Other"
         }
     }
-    // Add this helper inside RoutingConfirmationView
-    private func reviewHint(
-        for plan: ImportRoutingService.RoutedClusterPlan,
-        baseAction: RoutingCandidate.Action
-    ) -> String? {
-        let c = plan.candidate.confidence
-        // Mirror AttentionBadge thresholds
-        guard c < 0.85 else { return nil }
 
-        var reasons: [String] = []
-
-        // Mode-specific checks
-        if globalTargetMode == 0 {
-            // Existing account mode
-            if accounts(at: selectedInstitution).isEmpty {
-                reasons.append("No existing accounts at the selected institution")
-            }
-            if case .existing(_, let name) = baseAction, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                reasons.append("No account selected")
-            }
-        } else {
-            // Create new mode
-            if case .createNew(let t) = baseAction, t == nil {
-                reasons.append("Account type not specified")
-            }
-        }
-
-        // Signal strength: very few transactions/balances/holdings
-        let signalCount = plan.transactions.count + plan.balances.count + plan.holdings.count
-        if signalCount < 2 {
-            reasons.append("Limited balances")
-        }
-
-        // Catch-all cluster
-        if plan.label == "__default__" {
-            reasons.append("Default catch‑all cluster")
-        }
-
-        // Compose final, short message
-        let prefix = c >= 0.65 ? "" : "Check account type -"
-        if let primary = reasons.first {
-            return "\(prefix) \(primary)."
-        } else {
-            return "\(prefix) please verify the institution."
+    private func routingTitle(for action: RoutingCandidate.Action) -> String {
+        switch action {
+        case .existing:
+            return "Existing Account"
+        case .createNew:
+            return "Create New Account"
         }
     }
+
     // Helper to describe the enum
     private func describe(_ action: RoutingCandidate.Action) -> String {
         switch action {
@@ -592,62 +556,13 @@ struct RoutingConfirmationView: View {
                     // Decide which UI to show based on the global target mode
 //                    let showExistingUI: Bool = (globalTargetMode == 0)
 
-                    // Header title that reflects the effective action for this row
                     let eff = effectiveAction(for: plan)
-                    let baseLabel = (plan.label == "__default__") ? "Default" : plan.label.capitalized
-
-                    let suffix: String = {
-                        switch eff {
-                        case .existing(_, let name):
-                            return name.isEmpty ? " — Existing" : " — Existing (\(name))"
-                        case .createNew(let t):
-                            if let t {
-                                let typeName = displayName(for: t)
-                                return " — Create New (\(typeName))"
-                            } else if globalTargetMode == 0 {
-                                return " — Needs Selection"
-                            } else {
-                                return " — Create New"
-                            }
-                        }
-                    }()
-                    let headerTitle: String = baseLabel + suffix
 
                     // Header + confidence
                     HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(headerTitle)
-                                .font(.headline)
-                            HStack(spacing: 6) {
-                                if plan.transactions.count > 0 { Text("Tx: \(plan.transactions.count)").font(.caption).foregroundStyle(.secondary) }
-                                if plan.balances.count > 0 { Text("Balances: \(plan.balances.count)").font(.caption).foregroundStyle(.secondary) }
-                                if plan.holdings.count > 0 { Text("Holdings: \(plan.holdings.count)").font(.caption).foregroundStyle(.secondary) }
-                            }
-                        }
+                        Text(routingTitle(for: eff))
+                            .font(.headline)
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            AttentionBadge(confidence: plan.candidate.confidence)
-
-                            if let hint = reviewHint(for: plan, baseAction: baseAction) {
-                                Text(hint)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityLabel(hint)
-                            }
-                        }
-                    }
-
-                    // Institution line (derived from the global picker)
-                    if let inst = selectedInstitution ?? analysis.institution {
-                        HStack(spacing: 6) {
-                            Image(systemName: "building.columns")
-                                .foregroundStyle(.secondary)
-                            Text(inst)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
                     }
 
                     // Existing vs. Create New UI — strictly follow globalTargetMode
@@ -974,7 +889,7 @@ private struct CreateNewSelectionRow: View {
         VStack(alignment: .leading, spacing: 8) {
             let allTypes: [Account.AccountType] = [.checking, .savings, .creditCard, .loan, .brokerage, .cash, .property, .other]
 
-            Picker("New Account Type", selection: Binding<Account.AccountType?>(
+            Picker("Account Type", selection: Binding<Account.AccountType?>(
                 get: { seedType },
                 set: { applyTypeSelection($0) }
             )) {
@@ -1015,45 +930,6 @@ private struct CreateNewSelectionRow: View {
     }
 }
 
-private struct AttentionBadge: View {
-    let confidence: Double
-
-    var body: some View {
-        switch status {
-        case .ok:
-            EmptyView() // Don’t show anything when the system is confident
-        case .needsReview:
-            Label("Needs Review", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(.yellow)
-                .background(Color.yellow.opacity(0.15))
-                .clipShape(Capsule())
-                .accessibilityLabel("Needs review")
-        case .uncertain:
-            Label("Uncertain", systemImage: "xmark.octagon.fill")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(.red)
-                .background(Color.red.opacity(0.15))
-                .clipShape(Capsule())
-                .accessibilityLabel("Uncertain")
-        }
-    }
-
-    private enum Status { case ok, needsReview, uncertain }
-
-    private var status: Status {
-        switch confidence {
-        case let c where c >= 0.85: return .ok
-        case let c where c >= 0.65: return .needsReview
-        default: return .uncertain
-        }
-    }
-}
-
 struct RoutingChildEditingKey: PreferenceKey {
     static var defaultValue: Bool = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) {
@@ -1064,4 +940,3 @@ struct RoutingChildEditingKey: PreferenceKey {
 #Preview {
     Text("Preview requires model data")
 }
-

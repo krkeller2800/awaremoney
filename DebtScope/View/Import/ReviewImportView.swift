@@ -43,6 +43,9 @@ struct ReviewImportView: View {
     @State private var routingGlobalTargetMode: Int = 0
     @State private var routingPreviewEffective: [String: RoutingCandidate.Action] = [:]
     @State private var routingPreviewInstitution: String? = nil
+    @State private var pendingStatementCheck: StatementCheckResult? = nil
+    @State private var showStatementCheckSheet = false
+    @State private var acceptedStatementCheckKey: String? = nil
     @State private var isApprovingSave = false
     @State private var importLimitReached = false
     @State private var showImportLimitAlert = false
@@ -66,6 +69,28 @@ struct ReviewImportView: View {
     }
     private var hasStagedPreviewData: Bool {
         return !staged.transactions.isEmpty || !staged.balances.isEmpty || !staged.holdings.isEmpty
+    }
+
+    private var visibleCompletenessIssues: [ImportViewModel.CompletenessIssue] {
+        let issues = vm.computeCompletenessIssues()
+        if staged.transactions.isEmpty {
+            return issues
+        }
+        return issues.filter { $0.title == "Statement cannot be verified" }
+    }
+
+    private var visibleHasBlockingCompletenessIssues: Bool {
+        visibleCompletenessIssues.contains { $0.severity == .required }
+    }
+
+    private var currentStagedForReview: StagedImport {
+        vm.staged ?? staged
+    }
+
+    private var statementCheckSuccessMessage: String? {
+        guard vm.newAccountType != .loan else { return nil }
+        guard case .balanced = StatementCheckService.status(staged: currentStagedForReview) else { return nil }
+        return "The imported transactions reconcile to the beginning and ending balances."
     }
     
     var body: some View {
@@ -228,6 +253,20 @@ struct ReviewImportView: View {
             .presentationDetents([.large])
             .applySheetSizing()
         }
+        .sheet(isPresented: $showStatementCheckSheet) {
+            if let pendingStatementCheck {
+                StatementCheckSheet(
+                    result: pendingStatementCheck,
+                    currencyCode: settings.currencyCode,
+                    onImportBalancesOnly: applyStatementCheckBalancesOnly,
+                    onExcludeProblemTransactions: applyStatementCheckExcludeFlaggedTransactions,
+                    onContinueAnyway: acceptPendingStatementCheck,
+                    onCancel: cancelPendingStatementCheck
+                )
+                .presentationDetents([.medium, .large])
+                .applySheetSizing()
+            }
+        }
 //        .sheet(isPresented: $showRoutingSheet) {
 //            if let staged = vm.staged {
 //                let service = ImportRoutingService()
@@ -345,13 +384,12 @@ struct ReviewImportView: View {
     private var mainList: some View {
         ScrollViewReader { proxy in
             Form {
-                // Suppress banner when transactions are present
-                if staged.transactions.isEmpty && !vm.computeCompletenessIssues().isEmpty {
+                if !visibleCompletenessIssues.isEmpty {
                     Section {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
-                                Image(systemName: vm.hasBlockingCompletenessIssues ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
-                                    .foregroundStyle(vm.hasBlockingCompletenessIssues ? .orange : .yellow)
+                                Image(systemName: visibleHasBlockingCompletenessIssues ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
+                                    .foregroundStyle(visibleHasBlockingCompletenessIssues ? .orange : .yellow)
                                 Text("Review required")
                                     .font(.subheadline.weight(.semibold))
                             }
@@ -362,7 +400,7 @@ struct ReviewImportView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 6) {
-                                ForEach(vm.computeCompletenessIssues()) { issue in
+                                ForEach(visibleCompletenessIssues) { issue in
                                     Button {
 #if canImport(UIKit)
                                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -412,51 +450,7 @@ struct ReviewImportView: View {
                 }
 
                 Section {
-                    VStack {
-                        // Build a single banner text, preferring the live preview
-                        let bannerText: String = {
-                            if let preview = routingPreviewBannerText() {
-                                return preview
-                            } else if routedAccountIDs.count > 1 {
-                                let routedAccounts = accounts.filter { routedAccountIDs.contains($0.id) }
-                                let routedNames = routedAccounts.map { disambiguatedName(for: $0, among: routedAccounts) }
-                                return "This import will be routed to multiple accounts: \(routedNames.joined(separator: ", "))."
-                            } else {
-                                if let sel = selectedAccountId, let acct = accounts.first(where: { $0.id == sel }) {
-                                    let baseName = disambiguatedName(for: acct, among: accounts)
-                                    let typeName = displayName(for: acct.type)
-                                    let nameWithType: String = {
-                                        if baseName.localizedCaseInsensitiveContains(typeName) { return baseName }
-                                        return "\(baseName) (\(typeName))"
-                                    }()
-                                    let noun = staged.transactions.isEmpty ? "This snapshot" : "These transactions"
-                                    return "\(noun) will be saved to \(nameWithType)."
-                                } else {
-                                    return "Input Routing Information below"
-                                }
-                            }
-                        }()
-
-                        // The row UI used in both tappable and non‑tappable modes
-                        let row = HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.footnote)
-                                .italic()
-                                .foregroundStyle(.yellow)
-
-                            Text(bannerText)
-                                .font(.footnote)
-                                .italic()
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .multilineTextAlignment(.center)
-                            Spacer(minLength: 0)
-                        }
-                        .accessibilityElement(children: .combine)
-                        row
-                    }
-                    .onAppear(perform: onAccountSectionAppear)
-
+                    EmptyView()
                 } header: {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("File: \(staged.sourceFileName)")
@@ -480,9 +474,28 @@ struct ReviewImportView: View {
                     }
                     .foregroundStyle(.primary)
                 }
+                .onAppear(perform: onAccountSectionAppear)
+
+                if let statementCheckSuccessMessage {
+                    Section {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Statement totals match")
+                                    .font(.footnote.weight(.semibold))
+                                Text(statementCheckSuccessMessage)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
                 Group {
                     if let currentStaged = vm.staged {
-                        Section("Routing") {
+                        Section {
                             let service = ImportRoutingService()
                             let result = service.buildPlans(staged: currentStaged, context: modelContext)
 
@@ -510,6 +523,14 @@ struct ReviewImportView: View {
                                     // No-op in embedded mode; parent controls dismissal
                                 }
                             )
+                        } header: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Routing")
+                                Text("Verify the institution and account type before saving.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textCase(nil)
+                            }
                         }
                     }
                 }
@@ -663,58 +684,6 @@ struct ReviewImportView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
                 
-                // Transactions preview
-                if !staged.transactions.isEmpty {
-                    Section("Transactions") {
-                        ForEach(staged.transactions.indices, id: \.self) { idx in
-                            let t = staged.transactions[idx]
-                            HStack(alignment: .firstTextBaseline) {
-                                Toggle("", isOn: transactionIncludeBinding(for: idx))
-                                    .labelsHidden()
-                                
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.payee)
-                                    HStack(spacing: 6) {
-                                        if let acct = t.sourceAccountLabel, !acct.isEmpty {
-                                            Text(acct.capitalized)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.secondary.opacity(0.12))
-                                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        }
-                                        Text(t.datePosted, style: .date)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                Text(t.amount as NSNumber, formatter: currencyFormatter)
-                                    .foregroundStyle(t.amount < 0 ? .red : .primary)
-                            }
-                        }
-                    }
-                }
-                
-                // Holdings
-                if !staged.holdings.isEmpty {
-                    Section("Holdings") {
-                        ForEach(staged.holdings.indices, id: \.self) { idx in
-                            let h = staged.holdings[idx]
-                            HStack {
-                                Toggle("", isOn: holdingIncludeBinding(for: idx))
-                                    .labelsHidden()
-                                Text("\(h.symbol) — \(h.quantity.description)")
-                                Spacer()
-                                if let mv = h.marketValue {
-                                    Text(mv as NSNumber, formatter: currencyFormatter)
-                                }
-                            }
-                        }
-                    }
-                }
-                
                 if let balances = vm.staged?.balances, !balances.isEmpty {
                     Section("Balances") {
                         VStack {
@@ -794,6 +763,58 @@ struct ReviewImportView: View {
                             }
                             .id("addBalanceButton")
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
+                // Holdings
+                if !staged.holdings.isEmpty {
+                    Section("Holdings") {
+                        ForEach(staged.holdings.indices, id: \.self) { idx in
+                            let h = staged.holdings[idx]
+                            HStack {
+                                Toggle("", isOn: holdingIncludeBinding(for: idx))
+                                    .labelsHidden()
+                                Text("\(h.symbol) — \(h.quantity.description)")
+                                Spacer()
+                                if let mv = h.marketValue {
+                                    Text(mv as NSNumber, formatter: currencyFormatter)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Transactions preview
+                if !staged.transactions.isEmpty {
+                    Section("Transactions") {
+                        ForEach(staged.transactions.indices, id: \.self) { idx in
+                            let t = staged.transactions[idx]
+                            HStack(alignment: .firstTextBaseline) {
+                                Toggle("", isOn: transactionIncludeBinding(for: idx))
+                                    .labelsHidden()
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(t.payee)
+                                    HStack(spacing: 6) {
+                                        if let acct = t.sourceAccountLabel, !acct.isEmpty {
+                                            Text(acct.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color.secondary.opacity(0.12))
+                                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        }
+                                        Text(t.datePosted, style: .date)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(t.amount as NSNumber, formatter: currencyFormatter)
+                                    .foregroundStyle(t.amount < 0 ? .red : .primary)
+                            }
                         }
                     }
                 }
@@ -904,6 +925,67 @@ struct ReviewImportView: View {
         staged.parserId != "manual.user" && !PurchaseManager.shared.isPremiumUnlocked
     }
 
+    private func requestStatementCheckIfNeeded(for staged: StagedImport) -> Bool {
+        guard vm.newAccountType != .loan else {
+            return false
+        }
+        guard let result = StatementCheckService.evaluate(staged: staged),
+              !result.issues.isEmpty,
+              acceptedStatementCheckKey != result.decisionKey else {
+            return false
+        }
+
+        pendingStatementCheck = result
+        showStatementCheckSheet = true
+        isApprovingSave = false
+        AMLogging.log("ReviewImportView: Statement check interrupted save — issues=\(result.issues.count)", component: "ReviewImportView")
+        return true
+    }
+
+    private func acceptPendingStatementCheck() {
+        guard let pendingStatementCheck else { return }
+        acceptedStatementCheckKey = pendingStatementCheck.decisionKey
+        self.pendingStatementCheck = nil
+        showStatementCheckSheet = false
+        isApprovingSave = false
+    }
+
+    private func applyStatementCheckBalancesOnly() {
+        guard var staged = vm.staged else { return }
+        for index in staged.transactions.indices {
+            staged.transactions[index].include = false
+        }
+        vm.staged = staged
+        acceptedStatementCheckKey = StatementCheckService.decisionKey(for: staged)
+        pendingStatementCheck = nil
+        showStatementCheckSheet = false
+        isApprovingSave = false
+        computeRoutingAnalysisIfNeeded()
+    }
+
+    private func applyStatementCheckExcludeFlaggedTransactions() {
+        guard var staged = vm.staged, let pendingStatementCheck else { return }
+        let affectedLabels = pendingStatementCheck.affectedAccountLabels
+        for index in staged.transactions.indices {
+            let label = StatementCheckService.normalizedLabel(staged.transactions[index].sourceAccountLabel)
+            if affectedLabels.contains(label) {
+                staged.transactions[index].include = false
+            }
+        }
+        vm.staged = staged
+        acceptedStatementCheckKey = StatementCheckService.decisionKey(for: staged)
+        self.pendingStatementCheck = nil
+        showStatementCheckSheet = false
+        isApprovingSave = false
+        computeRoutingAnalysisIfNeeded()
+    }
+
+    private func cancelPendingStatementCheck() {
+        pendingStatementCheck = nil
+        showStatementCheckSheet = false
+        isApprovingSave = false
+    }
+
     private var bottomBar: some View {
         VStack(spacing: 0) {
             Divider()
@@ -916,6 +998,9 @@ struct ReviewImportView: View {
                     routedAccountIDs = []
                     selectedAccountId = nil
                     vm.selectedAccountID = nil
+                    pendingStatementCheck = nil
+                    showStatementCheckSheet = false
+                    acceptedStatementCheckKey = nil
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "xmark.circle")
@@ -963,6 +1048,10 @@ struct ReviewImportView: View {
                     guard let stagedForSave = vm.staged else {
                         isApprovingSave = false
                         vm.errorMessage = "There is no reviewed import to save."
+                        return
+                    }
+
+                    if requestStatementCheckIfNeeded(for: stagedForSave) {
                         return
                     }
 

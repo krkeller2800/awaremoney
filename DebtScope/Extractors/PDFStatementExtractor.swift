@@ -475,19 +475,21 @@ enum PDFStatementExtractor {
 
             // Try multiple formats and reformat to MM/dd/yyyy
             let fmts = [
-                "MM/dd/yyyy", "M/d/yyyy", "MM/dd/yy", "M/d/yy",
+                "MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy",
                 "yyyy-MM-dd", "yyyy/M/d", "yyyy/MM/dd",
-                "dd-MMM-yyyy", "d-MMM-yy", "dd MMM yyyy", "d MMM yy",
-                "MMM d, yyyy", "MMMM d, yyyy", "MMM d, yy", "MMMM d, yy",
+                "d-MMM-yy", "dd-MMM-yyyy", "d MMM yy", "dd MMM yyyy",
+                "MMM d, yy", "MMMM d, yy", "MMM d, yyyy", "MMMM d, yyyy",
                 "MMM d yyyy", "MMMM d yyyy",
-                "MM-dd-yyyy", "M-d-yyyy", "MM-dd-yy", "M-d-yy",
+                "MM-dd-yy", "M-d-yy", "MM-dd-yyyy", "M-d-yyyy",
             ]
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
             df.timeZone = TimeZone(secondsFromGMT: 0)
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             for f in fmts {
                 df.dateFormat = f
-                if let d = df.date(from: trimmed) {
+                if let d = df.date(from: trimmed), calendar.component(.year, from: d) >= 1900 {
                     df.dateFormat = "MM/dd/yyyy"
                     return df.string(from: d)
                 }
@@ -1659,7 +1661,8 @@ enum PDFStatementExtractor {
                         if tuple.begin == nil { tuple.begin = amt }
                         result[acct] = tuple
                     }
-                    if firstRangeOfAnyLabelRegex(endLabelRegexes, in: l) != nil {
+                    if firstRangeOfAnyLabelRegex(endLabelRegexes, in: l) != nil,
+                       firstRangeOfAnyLabelRegex(beginLabelRegexes, in: l) == nil {
                         let amt = amountNear(lineIndex: idx, labels: endLabels, labelRegexes: endLabelRegexes, in: src)
                         let acct = inferAccountContext(around: idx, in: src)
                         var tuple = result[acct] ?? (begin: nil, end: nil)
@@ -1733,15 +1736,14 @@ enum PDFStatementExtractor {
                 AMLogging.log("PDF summary: merged section-filtered + unfiltered = \(debugBalances(balancesByAccount))", component: "PDFStatementExtractor")
             }
 
-            // If this looks like a credit card statement, prefer the unknown bucket (to be labeled as Credit Card)
-            // and drop misclassified deposit/investment accounts that are likely noise.
+            // If this looks like a credit card statement, drop misclassified deposit/investment buckets.
             do {
-                if documentLooksCreditCard(lines) {
-                    if let unk = balancesByAccount[.unknown], (unk.begin != nil || unk.end != nil) {
-                        let before = debugBalances(balancesByAccount)
-                        balancesByAccount.removeValue(forKey: .savings)
-                        balancesByAccount.removeValue(forKey: .checking)
-                        balancesByAccount.removeValue(forKey: .investment)
+                if documentLooksCreditCard(lines) || documentLooksCreditCardLoose(lines) {
+                    let before = debugBalances(balancesByAccount)
+                    balancesByAccount.removeValue(forKey: .savings)
+                    balancesByAccount.removeValue(forKey: .checking)
+                    balancesByAccount.removeValue(forKey: .investment)
+                    if before != debugBalances(balancesByAccount) {
                         AMLogging.log("PDF summary: credit card doc — pruned non-credit accounts; before=\(before) after=\(debugBalances(balancesByAccount))", component: "PDFStatementExtractor")
                     }
                 }
@@ -2029,11 +2031,69 @@ enum PDFStatementExtractor {
                 }
             }
 
-            // Generic end-date override: capture date next to ending balance labels with amount on same line
+            // Generic begin/end date overrides: capture dates next to labeled balances with amount on the same line.
+            var beginDateOverrideByAccount: [AccountKind: String] = [:]
             var endDateOverrideByAccount: [AccountKind: String] = [:]
             do {
                 let source = balancesFromOCR ? ocrLinesLocal : lines
+                let beginLabelKeywords: [String] = [
+                    "beginning balance", "opening balance",
+                    "beginning account value", "beginning value", "beginning account balance",
+                    "previous balance", "prior balance", "starting balance",
+                    "balance at beginning", "starting account value"
+                ]
+
+                for (idx, raw) in source.enumerated() {
+                    let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if line.isEmpty { continue }
+                    let lower = line.lowercased()
+                    guard beginLabelKeywords.contains(where: { lower.contains($0) }) else { continue }
+
+                    var labelEndUTF16: Int = 0
+                    for lbl in beginLabelKeywords where lower.contains(lbl) {
+                        if let r = line.range(of: lbl, options: [.caseInsensitive]) {
+                            let nsr = NSRange(r, in: line)
+                            labelEndUTF16 = max(labelEndUTF16, nsr.location + nsr.length)
+                        }
+                    }
+
+                    let full = NSRange(location: 0, length: (line as NSString).length)
+                    let dateMatches = anyDateRegex.matches(in: line, options: [], range: full)
+                    let amountMatches = amountAnywhereRegex.matches(in: line, options: [], range: full)
+                    guard !dateMatches.isEmpty, !amountMatches.isEmpty else { continue }
+
+                    let dateMatch: NSTextCheckingResult? = dateMatches.first(where: { $0.range.location >= labelEndUTF16 }) ?? dateMatches.first
+                    let amountMatch: NSTextCheckingResult? = amountMatches.last(where: { $0.range.location >= labelEndUTF16 }) ?? amountMatches.last
+                    guard let dm = dateMatch, let am = amountMatch,
+                          let dRange = Range(dm.range, in: line),
+                          let aRange = Range(am.range, in: line) else { continue }
+
+                    let dateRaw = String(line[dRange])
+                    let amtRaw = String(line[aRange])
+                    let normDate = normalizeDateString(dateRaw, inferredYear: inferredYear)
+                    let normAmt = sanitizeAmount(amtRaw)
+                    let acct = inferAccountContext(around: idx, in: source)
+                    beginDateOverrideByAccount[acct] = normDate
+
+                    var tuple = balancesByAccount[acct] ?? (begin: nil, end: nil)
+                    let preferOverride = lower.contains("as of") || lower.contains("previous balance") || lower.contains("beginning balance")
+                    if tuple.begin == nil || preferOverride {
+                        tuple.begin = normAmt
+                    }
+                    balancesByAccount[acct] = tuple
+
+                    AMLogging.log("PDF summary: begin-date override detected acct=\(kindName(acct)) date=\(normDate) amount=\(normAmt)", component: "PDFStatementExtractor")
+                }
+            }
+            do {
+                let source = balancesFromOCR ? ocrLinesLocal : lines
                 // Keywords that imply an ending/closing/new balance. Keep generic and reusable across statement types.
+                let beginLabelKeywords: [String] = [
+                    "beginning balance", "opening balance",
+                    "beginning account value", "beginning value", "beginning account balance",
+                    "previous balance", "prior balance", "starting balance",
+                    "balance at beginning", "starting account value"
+                ]
                 let endLabelKeywords: [String] = [
                     "ending balance", "current balance", "closing balance",
                     "ending account value", "ending value", "ending account balance",
@@ -2051,6 +2111,7 @@ enum PDFStatementExtractor {
                     if line.isEmpty { continue }
                     let lower = line.lowercased()
                     guard endLabelKeywords.contains(where: { lower.contains($0) }) else { continue }
+                    guard !beginLabelKeywords.contains(where: { lower.contains($0) }) else { continue }
 
                     // Determine the end of the last matching label on this line (case-insensitive)
                     var labelEndUTF16: Int = 0
@@ -2134,7 +2195,7 @@ enum PDFStatementExtractor {
                     if isCreditCardContext { return "creditCard" }
                     return accountKey
                 }()
-                if let bAmt = pair.begin, let bDate = beginDateStr {
+                if let bAmt = pair.begin, let bDate = (beginDateOverrideByAccount[acct] ?? beginDateStr) {
                     let beginBalanceForAccount = (isLoanContext || isCreditCardContext) ? forceNegative(bAmt) : bAmt
                     rows.append([bDate, "Statement Beginning Balance (\(accountLabelDisplay))", "0", beginBalanceForAccount, accountKeyOut])
                     AMLogging.log("PDF summary: appended beginning row accountKey=\(accountKeyOut)", component: "PDFStatementExtractor")

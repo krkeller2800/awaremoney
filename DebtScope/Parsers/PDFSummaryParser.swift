@@ -45,22 +45,25 @@ struct PDFSummaryParser: StatementParser {
         let docProbe = normalizeSpaces(rows.flatMap { $0 }.joined(separator: " ")).lowercased()
         AMLogging.log("PDFSummaryParser.parse: doc length=\(docProbe.count) purchasesTokenCount=\(max(0, docProbe.components(separatedBy: "purchase").count - 1))", component: LOG_COMPONENT)
 
-        // Helper to parse dates in the normalized format from PDFStatementExtractor (MM/dd/yyyy)
+        // Helper to parse dates in the normalized format from PDFStatementExtractor.
         func parseDate(_ s: String) -> Date? {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
             df.timeZone = TimeZone(secondsFromGMT: 0)
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             for fmt in [
-                "MM/dd/yyyy", "M/d/yy", "MM/dd/yy", "M/d/yyyy",
+                "M/d/yy", "MM/dd/yy", "MM/dd/yyyy", "M/d/yyyy",
                 "MMMM d, yyyy", "MMM d, yyyy", "MMMM dd, yyyy", "MMM dd, yyyy",
                 "MMMM d yyyy", "MMM d yyyy",
-                // Added hyphenated formats
-                "MM-dd-yyyy", "M-d-yyyy", "MM-dd-yy", "M-d-yy",
-                // Allow month-day without year (used with inference below)
+                "MM-dd-yy", "M-d-yy", "MM-dd-yyyy", "M-d-yyyy",
                 "MM-dd", "M-d"
             ] {
                 df.dateFormat = fmt
-                if let d = df.date(from: s) { return d }
+                if let d = df.date(from: trimmed), calendar.component(.year, from: d) >= 1900 {
+                    return d
+                }
             }
             return nil
         }
@@ -889,6 +892,9 @@ struct PDFSummaryParser: StatementParser {
 
             // Detect credit-card style summary lines
             let isCCNewBalance = rowCombinedNorm.contains("new balance")
+            let isCCPreviousBalance = rowCombinedNorm.contains("previous balance")
+            let isCCStatementBeginningBalance = rowCombinedNorm.contains("statement beginning balance")
+            let isCCStatementEndingBalance = rowCombinedNorm.contains("statement ending balance")
             let isCreditCardSummary = rowCombinedNorm.contains("new balance")
                 || rowCombinedNorm.contains("previous balance")
                 || rowCombinedNorm.contains("minimum payment due")
@@ -897,10 +903,10 @@ struct PDFSummaryParser: StatementParser {
                 || rowCombinedNorm.contains("available credit")
                 || rowCombinedNorm.contains("card ending")
 
-            let isStatementSummary = rowCombinedNorm.contains("statement ending balance") || (!hasCreditCardIndicators && rowCombinedNorm.contains("statement beginning balance"))
+            let isStatementSummary = rowCombinedNorm.contains("statement ending balance") || rowCombinedNorm.contains("statement beginning balance")
             let isLoanSummary = rowCombinedNorm.contains("beginning balance") || rowCombinedNorm.contains("ending balance") || rowCombinedNorm.contains("current amount due") || rowCombinedNorm.contains("amount due") || rowCombinedNorm.contains("payment due") || rowCombinedNorm.contains("principal balance") || rowCombinedNorm.contains("outstanding principal")
 
-            // Only accept CC "New Balance" (avoid multiple snapshots); keep other statement/loan summaries as before
+            // Accept CC beginning/ending statement balances; ignore other CC summary fields as balances.
             // In credit card documents, ignore generic loan-like summaries (beginning/ending/current due) to avoid picking the wrong balance
             let isNonCCContext = (currentAccountContext == "savings" || currentAccountContext == "loan")
                 || rowCombinedNorm.contains("savings") || rowCombinedNorm.contains("checking")
@@ -908,12 +914,14 @@ struct PDFSummaryParser: StatementParser {
 
             let isRelevant = isStatementSummary
                 || isCCNewBalance
+                || isCCPreviousBalance
                 || (!hasCreditCardIndicators && isLoanSummary)
                 || (hasCreditCardIndicators && isLoanSummary && isNonCCContext)
 
             guard isRelevant else { continue }
 
-            // Date selection: prefer the statement closing date for CC "New Balance"
+            // Date selection: prefer the statement closing date for CC "New Balance".
+            // Previous/beginning rows keep their own row date when the extractor found one.
             let rowDateStr = value(row, map, key: "date")
             var rowDate = rowDateStr.flatMap(parseDate)
 
@@ -946,8 +954,8 @@ struct PDFSummaryParser: StatementParser {
                 continue
             }
 
-            // If this is a CC summary line but not "New Balance", skip it
-            if hasCreditCardIndicators && isCreditCardSummary && !isCCNewBalance {
+            // If this is a CC summary line but not a balance line, skip it.
+            if hasCreditCardIndicators && isCreditCardSummary && !(isCCNewBalance || isCCPreviousBalance || isCCStatementBeginningBalance || isCCStatementEndingBalance) {
                 AMLogging.log("RowSummary: skipping non-New Balance CC summary '\(descRawOriginal ?? "")'", component: LOG_COMPONENT)
                 continue
             }
@@ -2066,31 +2074,20 @@ struct PDFSummaryParser: StatementParser {
             AMLogging.log("PDFSummaryParser: de-duplicated balances by day/label — before=\(before) after=\(balances.count)", component: LOG_COMPONENT)
         }
         
-        if hasCreditCardIndicators, let cd = statementClosingDate {
-            // Force all credit card snapshots to the closing date and backfill APR if missing
+        if hasCreditCardIndicators {
+            // Backfill APR on credit-card snapshots without rewriting their dates. Beginning
+            // and ending balances must keep separate dates so statement verification can run.
             for i in balances.indices {
                 let lbl = (balances[i].sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if lbl == "__typical_payment__" { continue }
                 if lbl == "creditcard" {
-                    balances[i].asOfDate = cd
                     if balances[i].interestRateAPR == nil, let apr = globalAPR {
                         balances[i].interestRateAPR = apr.value
                         if balances[i].interestRateScale == nil { balances[i].interestRateScale = apr.scale }
                     }
                 }
             }
-            // Collapse duplicates after coercion (keep one per label/day)
-            var seen: Set<String> = []
-            let cal = Calendar.current
-            balances = balances.filter { b in
-                let lbl = (b.sourceAccountLabel ?? "default").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if lbl == "__typical_payment__" { return true }
-                let key = "\(lbl)|\(Int(cal.startOfDay(for: b.asOfDate).timeIntervalSince1970))"
-                if seen.contains(key) { return false }
-                seen.insert(key)
-                return true
-            }
-            AMLogging.log("PostFilter: coerced CC snapshot date to closing date and backfilled APR; count=\(balances.count)", component: LOG_COMPONENT)
+            AMLogging.log("PostFilter: backfilled CC APR without date coercion; count=\(balances.count)", component: LOG_COMPONENT)
         }
         
         // Final fallback: if no sentinel and no snapshot carries a typicalPaymentAmount,
@@ -2157,4 +2154,3 @@ private extension NSRange {
         return self.location == NSNotFound ? nil : self
     }
 }
-

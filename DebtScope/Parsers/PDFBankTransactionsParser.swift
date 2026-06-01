@@ -34,11 +34,19 @@ struct PDFBankTransactionsParser: StatementParser {
         var skippedAmountParse = 0
 
         func parseDate(_ s: String) -> Date? {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
             df.timeZone = TimeZone(secondsFromGMT: 0)
-            df.dateFormat = "MM/dd/yyyy" // normalized by PDFStatementExtractor
-            return df.date(from: s)
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            for fmt in ["MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy"] {
+                df.dateFormat = fmt
+                if let date = df.date(from: trimmed), calendar.component(.year, from: date) >= 1900 {
+                    return date
+                }
+            }
+            return nil
         }
 
         func sanitize(_ s: String) -> String {
@@ -253,7 +261,11 @@ struct PDFBankTransactionsParser: StatementParser {
             .split(whereSeparator: { !$0.isLetter })
             .joined(separator: " ")
         let words = Set(normalizedDescription.split(separator: " ").map(String.init))
-        let isPayment = words.contains("payment") || words.contains("autopay") || (words.contains("auto") && words.contains("pay"))
+        let isPayment = words.contains("payment")
+            || words.contains("pymt")
+            || words.contains("pmt")
+            || words.contains("autopay")
+            || (words.contains("auto") && words.contains("pay"))
         let isCredit = words.contains("refund") || words.contains("return") || words.contains("credit")
 
         // DebtScope stores liability balances as negative values. Credit-card charges increase
@@ -382,4 +394,3 @@ struct PDFBankTransactionsParser: StatementParser {
         return false
     }
 }
-
