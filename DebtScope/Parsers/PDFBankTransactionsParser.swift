@@ -121,7 +121,7 @@ struct PDFBankTransactionsParser: StatementParser {
             "PDF transaction parse summary — inputRows=\(rows.count) includedItems=\(items.count) accounts=\(includedAccountCounts) skippedMissingDate=\(skippedMissingDate) skippedDateParse=\(skippedDateParse) skippedHeaderOrTotal=\(skippedHeaderOrTotal) skippedMissingAmount=\(skippedMissingAmount) skippedAmountParse=\(skippedAmountParse)",
             component: LOG_COMPONENT
         )
-        let looksLikeCreditCardActivity = items.contains { item in
+        var looksLikeCreditCardActivity = items.contains { item in
             let lowerDesc = item.desc.lowercased()
             let lowerAccount = item.account?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
             return lowerAccount == "creditcard" ||
@@ -180,6 +180,69 @@ struct PDFBankTransactionsParser: StatementParser {
             return signed
         }
 
+        func recoverMissingCreditCardActivity(from text: String, into items: inout [RowItem]) {
+            func hasTransaction(matching predicate: (RowItem) -> Bool) -> Bool {
+                items.contains(where: predicate)
+            }
+
+            func amountDecimal(from raw: String) -> Decimal? {
+                Decimal(string: sanitize(raw))
+            }
+
+            func firstMatch(_ pattern: String) -> NSTextCheckingResult? {
+                guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+                return rx.firstMatch(in: text, options: [], range: NSRange(text.startIndex..<text.endIndex, in: text))
+            }
+
+            func group(_ index: Int, in match: NSTextCheckingResult) -> String? {
+                guard match.numberOfRanges > index,
+                      let range = Range(match.range(at: index), in: text) else { return nil }
+                return String(text[range])
+            }
+
+            let date = #"\d{1,2}/\d{1,2}/\d{2,4}"#
+
+            let paymentPattern = #"\b("# + date + #")\s+payment\s*-\s*thank\s+you\b.{0,180}?(-\s*\$?\s*(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2}))"#
+            if let match = firstMatch(paymentPattern),
+               let dateText = group(1, in: match),
+               let paymentDate = parseDate(dateText),
+               let rawAmount = group(2, in: match),
+               let amount = amountDecimal(from: rawAmount),
+               !hasTransaction(matching: { $0.desc.lowercased().contains("payment") && $0.amount.magnitude == amount.magnitude }) {
+                items.append(RowItem(date: paymentDate, desc: "PAYMENT - THANK YOU", amount: amount, rawAmount: rawAmount, balance: nil, account: "creditCard"))
+                AMLogging.log("Recovered CC payment activity from statement text — date=\(dateText) amount=\(amount)", component: LOG_COMPONENT)
+            }
+
+            let closingDate: Date? = {
+                let closingPattern = #"statement\s+closing\s+date\b.{0,80}?("# + date + #")"#
+                guard let match = firstMatch(closingPattern), let dateText = group(1, in: match) else { return nil }
+                return parseDate(dateText)
+            }()
+
+            let interestPattern = #"interest\s+charge\s+on\s+purchases\s+(\$?\s*(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2}))"#
+            if let interestDate = closingDate,
+               let match = firstMatch(interestPattern),
+               let rawAmount = group(1, in: match),
+               let amount = amountDecimal(from: rawAmount),
+               amount > 0,
+               !hasTransaction(matching: { $0.desc.lowercased().contains("interest charge") && $0.amount.magnitude == amount.magnitude }) {
+                items.append(RowItem(date: interestDate, desc: "Interest Charge on Purchases", amount: amount, rawAmount: rawAmount, balance: nil, account: "creditCard"))
+                AMLogging.log("Recovered CC interest charge activity from statement text — amount=\(amount)", component: LOG_COMPONENT)
+            }
+        }
+
+        let docText = rows.flatMap { $0 }.joined(separator: " ")
+        let docTextLower = docText.lowercased()
+        let documentLooksLikeCreditCard = docTextLower.contains("summary of account activity") &&
+            docTextLower.contains("previous balance") &&
+            docTextLower.contains("new balance") &&
+            (docTextLower.contains("minimum payment") || docTextLower.contains("credit limit") || docTextLower.contains("available credit"))
+
+        if documentLooksLikeCreditCard {
+            looksLikeCreditCardActivity = true
+            recoverMissingCreditCardActivity(from: docText, into: &items)
+        }
+
         let signedAmounts = inferSigns(using: items)
         AMLogging.log("Signed amounts: \(signedAmounts)", component: LOG_COMPONENT)
 
@@ -191,6 +254,7 @@ struct PDFBankTransactionsParser: StatementParser {
             let shouldNormalizeAsCreditCardActivity = looksLikeCreditCardActivity &&
                 (accountLabel.isEmpty || accountLabel == "unknown" || accountLabel == "creditcard" || accountLabel == "credit card")
             let amount = normalizeCreditCardActivityAmount(inferredAmount, description: it.desc, rawAmount: it.rawAmount, isCreditCardActivity: shouldNormalizeAsCreditCardActivity)
+            let outputAccountLabel = shouldNormalizeAsCreditCardActivity && (accountLabel.isEmpty || accountLabel == "unknown") ? "creditCard" : it.account
             let hashKey = Hashing.hashKey(date: it.date, amount: amount, payee: it.desc, memo: nil, symbol: nil, quantity: nil)
             let tx = StagedTransaction(
                 datePosted: it.date,
@@ -204,7 +268,7 @@ struct PDFBankTransactionsParser: StatementParser {
                 price: nil,
                 fees: nil,
                 hashKey: hashKey,
-                sourceAccountLabel: it.account,
+                sourceAccountLabel: outputAccountLabel,
                 include: true
             )
             AMLogging.log("TX \(i) built — date=\(it.date), desc=\(it.desc), amount=\(amount), include=true, account=\(it.account ?? "(nil)")", component: LOG_COMPONENT)

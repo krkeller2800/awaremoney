@@ -81,8 +81,9 @@ struct PDFSummaryParser: StatementParser {
                 if let d = parseDate(endStr) { return d }
             }
 
-            // Pattern 2: labeled closing date
-            let labelPattern = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{2,4})"#
+            // Pattern 2: labeled closing date. PDF text extraction can insert nearby table labels
+            // between the label and value, so accept the first date in a short post-label window.
+            let labelPattern = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\b[^0-9A-Za-z]{0,8}.{0,80}?(\d{1,2}/\d{1,2}/\d{2,4})"#
             if let rx = try? NSRegularExpression(pattern: labelPattern, options: [.caseInsensitive]),
                let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
                m.numberOfRanges >= 2,
@@ -92,7 +93,7 @@ struct PDFSummaryParser: StatementParser {
             }
 
             // Pattern 2b: labeled closing date with spelled-out month (e.g., "Closing Date January 13, 2026")
-            let labelPatternWords = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\s*[:\-]?\s*([A-Za-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?)"#
+            let labelPatternWords = #"(?:statement\s+closing\s+date|closing\s+date|cycle\s+ending|period\s+ending)\b[^0-9A-Za-z]{0,8}.{0,80}?([A-Za-z]{3,9}\s+\d{1,2}(?:,\s*\d{4})?)"#
             if let rx = try? NSRegularExpression(pattern: labelPatternWords, options: [.caseInsensitive]),
                let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
                m.numberOfRanges >= 2,
@@ -139,6 +140,20 @@ struct PDFSummaryParser: StatementParser {
             
             return nil
         }
+        func extractBillingCycleDays(from rows: [[String]]) -> Int? {
+            let doc = normalizeSpaces(rows.flatMap { $0 }.joined(separator: " "))
+            let pattern = #"days\s+in\s+billing\s+cycle\b.{0,40}?(\d{1,3})\b"#
+            guard let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let m = rx.firstMatch(in: doc, options: [], range: NSRange(doc.startIndex..<doc.endIndex, in: doc)),
+                  m.numberOfRanges >= 2,
+                  let r1 = Range(m.range(at: 1), in: doc),
+                  let days = Int(String(doc[r1])),
+                  days > 0 && days < 62 else {
+                return nil
+            }
+            return days
+        }
+
         func normalizedLabel(_ raw: String?) -> String? {
             guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !s.isEmpty else { return nil }
             if s.contains("checking") { return "checking" }
@@ -815,7 +830,14 @@ struct PDFSummaryParser: StatementParser {
         AMLogging.log("PDFSummaryParser: docFlags penalty=\(docHasPenaltyDoc) purchases=\(docHasPurchaseDoc) headers=[\(headerSummary)]", component: LOG_COMPONENT)
 
         let statementClosingDate = extractStatementClosingDate(from: rows)
-        AMLogging.log("PDFSummaryParser: statementClosingDate=\(String(describing: statementClosingDate))", component: LOG_COMPONENT)
+        let billingCycleDays = extractBillingCycleDays(from: rows)
+        let previousStatementDate: Date? = {
+            guard let statementClosingDate, let billingCycleDays else { return nil }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            return calendar.date(byAdding: .day, value: -billingCycleDays, to: statementClosingDate)
+        }()
+        AMLogging.log("PDFSummaryParser: statementClosingDate=\(String(describing: statementClosingDate)) billingCycleDays=\(String(describing: billingCycleDays)) previousStatementDate=\(String(describing: previousStatementDate))", component: LOG_COMPONENT)
         
         // Rolling account context inferred from section headers or explicit account field
         var currentAccountContext: String? = nil
@@ -877,6 +899,19 @@ struct PDFSummaryParser: StatementParser {
         let asOfForSummaryStart = earliestDateForSummary
         let asOfForSummaryEnd = statementClosingDate ?? latestDateForSummary
         AMLogging.log("BalanceSummary: asOf dates start=\(String(describing: asOfForSummaryStart)) end=\(String(describing: asOfForSummaryEnd))", component: LOG_COMPONENT)
+
+        func extractBalanceAmountNearLabel(in text: String, labels: [String]) -> Decimal? {
+            let normalized = normalizeSpaces(text)
+            let lower = normalized.lowercased()
+            guard let labelRange = labels.compactMap({ lower.range(of: $0) }).first else { return nil }
+            let labelEnd = lower.distance(from: lower.startIndex, to: labelRange.upperBound)
+            let ns = normalized as NSString
+            let start = max(0, labelEnd)
+            let length = min(96, max(0, ns.length - start))
+            guard length > 0 else { return nil }
+            let window = ns.substring(with: NSRange(location: start, length: length))
+            return extractCurrencyValues(from: window).first
+        }
 
         // Collect only rows whose description clearly indicates statement summary lines
         for row in rows {
@@ -944,8 +979,10 @@ struct PDFSummaryParser: StatementParser {
             }
 
             let date: Date
-            if isCCNewBalance, let cd = statementClosingDate {
+            if (isCCNewBalance || isCCStatementEndingBalance), let cd = statementClosingDate {
                 date = cd
+            } else if (isCCPreviousBalance || isCCStatementBeginningBalance), let pd = previousStatementDate {
+                date = pd
             } else if let d = rowDate {
                 date = d
             } else if isCCNewBalance, let fallback = (statementClosingDate ?? asOfForSummaryEnd ?? asOfForSummaryStart) {
@@ -960,9 +997,19 @@ struct PDFSummaryParser: StatementParser {
                 continue
             }
 
-            // Prefer explicit balance/amount cell
+            // For credit-card balance labels, prefer the amount adjacent to the label. Large PDF
+            // extraction windows can contain advisory amounts like promo-plan notices in the row's
+            // amount cell even though the real statement balance appears near "New balance".
             var amountDec: Decimal? = nil
-            if let balStr = (value(row, map, key: "balance") ?? value(row, map, key: "amount")) {
+            let balanceSourceText = descRawOriginal ?? rowCombinedRaw
+            if isCCNewBalance {
+                amountDec = extractBalanceAmountNearLabel(in: balanceSourceText, labels: ["new balance"])
+            } else if isCCPreviousBalance {
+                amountDec = extractBalanceAmountNearLabel(in: balanceSourceText, labels: ["previous balance"])
+            }
+
+            // Prefer explicit balance/amount cell when the label-local scan did not find a value.
+            if amountDec == nil, let balStr = (value(row, map, key: "balance") ?? value(row, map, key: "amount")) {
                 let cleaned = balStr.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")
                 amountDec = Decimal(string: cleaned)
             }
@@ -2074,6 +2121,45 @@ struct PDFSummaryParser: StatementParser {
             AMLogging.log("PDFSummaryParser: de-duplicated balances by day/label — before=\(before) after=\(balances.count)", component: LOG_COMPONENT)
         }
         
+        if hasCreditCardIndicators, let statementClosingDate, let previousStatementDate {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            let closingDay = calendar.startOfDay(for: statementClosingDate)
+            let previousDay = calendar.startOfDay(for: previousStatementDate)
+            let before = balances.count
+            balances = balances.filter { balance in
+                let label = (balance.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard label == "creditcard" else { return true }
+                let day = calendar.startOfDay(for: balance.asOfDate)
+                return day == closingDay || day == previousDay
+            }
+            var bestCardBalanceByDay: [Date: StagedBalance] = [:]
+            var cardDayOrder: [Date] = []
+            var nonCardBalances: [StagedBalance] = []
+            for balance in balances {
+                let label = (balance.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard label == "creditcard" else {
+                    nonCardBalances.append(balance)
+                    continue
+                }
+                let day = calendar.startOfDay(for: balance.asOfDate)
+                if bestCardBalanceByDay[day] == nil {
+                    cardDayOrder.append(day)
+                    bestCardBalanceByDay[day] = balance
+                    continue
+                }
+                let existingMagnitude = abs((bestCardBalanceByDay[day]!.balance as NSDecimalNumber).doubleValue)
+                let incomingMagnitude = abs((balance.balance as NSDecimalNumber).doubleValue)
+                if incomingMagnitude > existingMagnitude {
+                    bestCardBalanceByDay[day] = balance
+                }
+            }
+            balances = nonCardBalances + cardDayOrder.compactMap { bestCardBalanceByDay[$0] }
+            if balances.count != before {
+                AMLogging.log("PostFilter: normalized CC statement-date balance snapshots — before=\(before) after=\(balances.count)", component: LOG_COMPONENT)
+            }
+        }
+
         if hasCreditCardIndicators {
             // Backfill APR on credit-card snapshots without rewriting their dates. Beginning
             // and ending balances must keep separate dates so statement verification can run.

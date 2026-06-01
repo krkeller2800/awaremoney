@@ -29,6 +29,14 @@ import UniformTypeIdentifiers
     }
 
     // MARK: - API
+    private func showImportProgress() async {
+        vm.isImporting = true
+
+        // Give SwiftUI one frame to present the overlay before synchronous extractors
+        // begin doing PDFKit/XML parsing work on the main actor.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
     // Entry point for importing a picked URL. Provide an optional hint for statement type.
     // This function updates vm.staged or vm.mappingSession and toggles vm.isImporting as needed.
     func importURL(_ url: URL,
@@ -67,10 +75,8 @@ import UniformTypeIdentifiers
 
         // Fallback: let the ImportViewModel handle other formats (CSV/XLSX/ZIP, etc.)
         await MainActor.run {
-            self.vm.isImporting = true
             self.vm.lastPickedLocalURL = url
         }
-        defer { DispatchQueue.main.async { self.vm.isImporting = false } }
 
         await MainActor.run {
             self.vm.handlePickedURL(url)
@@ -82,10 +88,10 @@ import UniformTypeIdentifiers
                                          hint: StatementType?,
                                          settings: SettingsStore) async {
         await MainActor.run {
-            self.vm.isImporting = true
             self.vm.infoMessage = nil
             self.vm.errorMessage = nil
         }
+        await showImportProgress()
         defer { DispatchQueue.main.async { self.vm.isImporting = false } }
 
         // Start security scoped access in case of Files URLs
@@ -282,9 +288,9 @@ import UniformTypeIdentifiers
     // MARK: - OFX/QFX/QBO
     private func handleOFXLikeImport(url: URL, hint: StatementType?) async {
         await MainActor.run {
-            self.vm.isImporting = true
             self.vm.lastPickedLocalURL = url
         }
+        await showImportProgress()
         defer { DispatchQueue.main.async { self.vm.isImporting = false } }
 
         @MainActor func setTypeFromHint() {
@@ -326,9 +332,9 @@ import UniformTypeIdentifiers
     // MARK: - QIF
     private func handleQIFImport(url: URL, hint: StatementType?) async {
         await MainActor.run {
-            self.vm.isImporting = true
             self.vm.lastPickedLocalURL = url
         }
+        await showImportProgress()
         defer { DispatchQueue.main.async { self.vm.isImporting = false } }
 
         do {
