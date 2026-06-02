@@ -605,6 +605,13 @@ enum PDFStatementExtractor {
         var currentFlow: FlowKind = .none
         var currentSection: Section = .unknown
 
+        func setCurrentAccount(_ account: AccountKind) {
+            if currentAccount != account {
+                currentFlow = .none
+            }
+            currentAccount = account
+        }
+
         func currentAccountLabel() -> String {
             switch currentAccount {
             case .checking: return "checking"
@@ -674,7 +681,6 @@ enum PDFStatementExtractor {
             case .unknown: return "unknown"
             }
         }
-
         // Keep a small buffer of recent non-date lines to infer account context
         var recentContext: [String] = []
         func pushContext(_ s: String) {
@@ -734,6 +740,8 @@ enum PDFStatementExtractor {
             // Strong savings signals
             if lower.contains("savings summary") { return true }
             if lower.contains("savings account") { return true }
+            if lower.contains("account number") && lower.contains("savings") && !lower.contains("checking") { return true }
+            if lower.contains("globalproduct") && lower.contains("savings") && !lower.contains("checking") { return true }
             // Generic header-like: contains 'savings', no digits, and mostly uppercase or short
             let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
             let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
@@ -753,6 +761,8 @@ enum PDFStatementExtractor {
                 if lower.contains("from a checking account") || lower.contains("from checking account") { return false }
                 return true
             }
+            if lower.contains("account number") && lower.contains("checking") && !lower.contains("savings") { return true }
+            if lower.contains("globalproduct") && lower.contains("checking") && !lower.contains("savings") { return true }
             // Generic header-like: contains 'checking', no digits, and mostly uppercase or short
             let hasDigits = raw.rangeOfCharacter(from: .decimalDigits) != nil
             let hasLowercase = raw.rangeOfCharacter(from: .lowercaseLetters) != nil
@@ -811,6 +821,17 @@ enum PDFStatementExtractor {
         func isWithdrawalsHeader(_ s: String) -> Bool {
             let lower = s.lowercased()
             return lower.contains("withdrawals") || lower.contains("electronic withdrawals") || lower.contains("checks") || lower.contains("fees") || lower.contains("debits")
+        }
+        func isNeutralTransactionDetailHeader(_ s: String) -> Bool {
+            let lower = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if lower.contains("transaction detail") { return true }
+            let words = lower
+                .split(whereSeparator: { !$0.isLetter })
+                .map(String.init)
+            return words.contains("date") &&
+                words.contains("description") &&
+                words.contains("amount") &&
+                words.contains("balance")
         }
         func isAccountSummaryHeader(_ s: String) -> Bool {
             let l = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1053,6 +1074,35 @@ enum PDFStatementExtractor {
             let dateRaw = groupFrom(ddMatch, in: first, idx: 1)
             var descParts: [String] = []
             let rest = groupFrom(ddMatch, in: first, idx: 2)
+            let firstLineDecimalMoneyRegex = try! NSRegularExpression(
+                pattern: #"\(?[+-]?\s?\$?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}[+-]?\)?(?:\s*(?:CR|DR|CREDIT|DEBIT))?"#,
+                options: [.caseInsensitive]
+            )
+            let restRange = NSRange(location: 0, length: rest.utf16.count)
+            let firstLineDecimalMoneyMatches = firstLineDecimalMoneyRegex.matches(in: rest, options: [], range: restRange)
+            if let amountMatch = firstLineDecimalMoneyMatches.count >= 2 ? firstLineDecimalMoneyMatches.dropLast().last : firstLineDecimalMoneyMatches.last,
+               let amountRange = Range(amountMatch.range, in: rest) {
+                let beforeAmount = String(rest[..<amountRange.lowerBound])
+                let amountRaw = String(rest[amountRange])
+                let balanceRaw: String? = {
+                    guard firstLineDecimalMoneyMatches.count >= 2,
+                          let balanceMatch = firstLineDecimalMoneyMatches.last,
+                          let balanceRange = Range(balanceMatch.range, in: rest) else { return nil }
+                    return String(rest[balanceRange])
+                }()
+                let amountSuffix = balanceRaw == nil ? String(rest[amountRange.upperBound...]) : ""
+                let suffixHasLetters = amountSuffix.rangeOfCharacter(from: .letters) != nil
+                if !beforeAmount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !suffixHasLetters {
+                    descParts.append(beforeAmount)
+                    let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
+                    let desc = cleanDesc(descParts.joined(separator: " "))
+                    if accountOverride == nil {
+                        if isSavingsHeader(desc) { setCurrentAccount(.savings) }
+                        else if isInvestmentHeader(desc) && !docLooksLoan && !docLooksCreditCard { setCurrentAccount(.investment) }
+                    }
+                    return ([date, desc, sanitizeAmount(amountRaw), balanceRaw.map { sanitizeAmount($0) } ?? ""], 1)
+                }
+            }
             if !rest.isEmpty { descParts.append(rest) }
 
             var j = start + 1
@@ -1134,10 +1184,150 @@ enum PDFStatementExtractor {
             let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
             let desc = cleanDesc(descParts.joined(separator: " "))
             if accountOverride == nil {
-                if isSavingsHeader(desc) { currentAccount = .savings }
-                else if isInvestmentHeader(desc) && !docLooksLoan && !docLooksCreditCard { currentAccount = .investment }
+                if isSavingsHeader(desc) { setCurrentAccount(.savings) }
+                else if isInvestmentHeader(desc) && !docLooksLoan && !docLooksCreditCard { setCurrentAccount(.investment) }
             }
             return ([date, desc, amt, balanceStr ?? ""], max(1, j - start))
+        }
+
+        func attemptBankContinuationColumnRows(in srcLines: [String], start: Int) -> (rows: [[String]], consumed: Int)? {
+            guard start < srcLines.count,
+                  accountOverride == nil,
+                  !docLooksLoan else { return nil }
+
+            let hasNearbyCheckingHeader = (max(0, start - 3)..<start).contains { index in
+                isCheckingHeader(srcLines[index])
+            }
+            guard currentAccount == .checking || hasNearbyCheckingHeader else { return nil }
+
+            let first = srcLines[start].trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowerFirst = first.lowercased()
+            let hasBankTransactionTypes = lowerFirst.contains("direct payment") ||
+                lowerFirst.contains("direct deposit") ||
+                lowerFirst.contains("interest earned") ||
+                lowerFirst.contains("withdrawal") ||
+                lowerFirst.contains(" deposit ") ||
+                lowerFirst.hasSuffix(" deposit")
+            guard hasBankTransactionTypes else { return nil }
+
+            let transactionKindPattern = #"Interest Earned|Direct Payment|Direct Deposit|Deposit|Withdrawal|Other"#
+            let headerRegex = try! NSRegularExpression(
+                pattern: "(\(dateToken))\\s+(\(transactionKindPattern))\\b",
+                options: [.caseInsensitive]
+            )
+            func group(_ index: Int, from match: NSTextCheckingResult, in string: String) -> String {
+                guard match.numberOfRanges > index,
+                      let range = Range(match.range(at: index), in: string) else { return "" }
+                return String(string[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let decimalMoneyRegex = try! NSRegularExpression(
+                pattern: #"[+\-−]?\s?\$?\d[\d,]*\.\d{2}"#,
+                options: [.caseInsensitive]
+            )
+
+            func moneyTokens(in line: String) -> [String] {
+                let range = NSRange(location: 0, length: line.utf16.count)
+                return decimalMoneyRegex.matches(in: line, options: [], range: range).compactMap { match in
+                    guard let tokenRange = Range(match.range, in: line) else { return nil }
+                    return String(line[tokenRange]).replacingOccurrences(of: "−", with: "-")
+                }
+            }
+
+            let firstRange = NSRange(location: 0, length: first.utf16.count)
+            let headerMatches = headerRegex.matches(in: first, options: [], range: firstRange)
+            guard headerMatches.count >= 3 else { return nil }
+
+            let records = headerMatches.map { match in
+                (
+                    date: normalizeDateString(group(1, from: match, in: first), inferredYear: inferredYear),
+                    type: group(2, from: match, in: first)
+                )
+            }
+
+            var descriptions: [String] = []
+            if let last = headerMatches.last,
+               let lastRange = Range(last.range, in: first) {
+                let tail = cleanDesc(String(first[lastRange.upperBound...]))
+                if !tail.isEmpty { descriptions.append(tail) }
+            }
+
+            var amounts: [String] = []
+            var balances: [String] = []
+            var transactionMetadataLineCount = 0
+            var j = start + 1
+
+            while j < srcLines.count {
+                let line = srcLines[j].trimmingCharacters(in: .whitespacesAndNewlines)
+                if isPageBreak(line) { break }
+                if isTransactionMetadataLine(line) {
+                    transactionMetadataLineCount += 1
+                    j += 1
+                    continue
+                }
+                if line.isEmpty ||
+                    isTotalsOrSectionLine(line) ||
+                    isNoiseLine(line) {
+                    j += 1
+                    continue
+                }
+
+                let tokens = moneyTokens(in: line)
+                if tokens.count >= records.count {
+                    amounts = Array(tokens.prefix(records.count)).map { sanitizeAmount($0) }
+                    balances = Array(tokens.dropFirst(records.count)).map { sanitizeAmount($0) }
+                    j += 1
+                    break
+                }
+
+                let cleaned = cleanDesc(line)
+                if !cleaned.isEmpty {
+                    descriptions.append(cleaned)
+                }
+                j += 1
+            }
+
+            guard amounts.count == records.count else {
+                return nil
+            }
+            guard transactionMetadataLineCount >= max(3, records.count / 2) else {
+                return nil
+            }
+
+            while j < srcLines.count, balances.count < records.count {
+                let line = srcLines[j].trimmingCharacters(in: .whitespacesAndNewlines)
+                if isPageBreak(line) { break }
+                if isTransactionMetadataLine(line) ||
+                    line.isEmpty ||
+                    isTotalsOrSectionLine(line) ||
+                    isNoiseLine(line) {
+                    j += 1
+                    continue
+                }
+
+                let tokens = moneyTokens(in: line)
+                if tokens.count == 1 {
+                    balances.append(sanitizeAmount(tokens[0]))
+                } else if tokens.count > 1 {
+                    balances.append(contentsOf: tokens.map { sanitizeAmount($0) })
+                }
+                j += 1
+            }
+
+            guard descriptions.count >= records.count,
+                  balances.count >= records.count else {
+                return nil
+            }
+
+            let builtRows = records.indices.map { index in
+                [
+                    records[index].date,
+                    cleanDesc("\(records[index].type) \(descriptions[index])"),
+                    amounts[index],
+                    balances[index]
+                ]
+            }
+            return (builtRows, max(1, j - start))
         }
 
         let inlineCreditCardColumns = extractInlineCreditCardColumnRows(from: lines)
@@ -1173,8 +1363,19 @@ enum PDFStatementExtractor {
                     // Page break reset
                     if isPageBreak(line) {
                         AMLogging.log("PDF page break — resetting section/account state", component: "PDFStatementExtractor")
-                        currentAccount = accountOverride ?? .unknown
-                        currentFlow = .none
+                        let priorAccount = currentAccount
+                        let priorFlow = currentFlow
+                        let nextPageIndex = currentPageIndex + 1
+                        if let accountOverride {
+                            currentAccount = accountOverride
+                        } else if let nextPageDefault = pageDefaults[nextPageIndex] {
+                            currentAccount = nextPageDefault
+                        } else if priorAccount == .checking || priorAccount == .savings {
+                            currentAccount = priorAccount
+                        } else {
+                            currentAccount = .unknown
+                        }
+                        currentFlow = ((currentAccount == priorAccount) && priorFlow != .none) ? priorFlow : .none
                         currentSection = .unknown
                         recentContext.removeAll()
                         currentPageIndex += 1
@@ -1185,9 +1386,9 @@ enum PDFStatementExtractor {
                     pushContext(line)
                     // Update section/account state on non-date lines if no override
                     if accountOverride == nil {
-                        if isSavingsHeader(line) { currentAccount = .savings; AMLogging.log("PDF section: SAVINGS detected at line \(i)", component: "PDFStatementExtractor") }
-                        else if isCheckingHeader(line) { currentAccount = .checking; AMLogging.log("PDF section: CHECKING detected at line \(i)", component: "PDFStatementExtractor") }
-                        else if isInvestmentHeader(line) && !docLooksLoan { currentAccount = .investment; AMLogging.log("PDF section: INVESTMENT detected at line \(i)", component: "PDFStatementExtractor") }
+                        if isSavingsHeader(line) { setCurrentAccount(.savings); AMLogging.log("PDF section: SAVINGS detected at line \(i)", component: "PDFStatementExtractor") }
+                        else if isCheckingHeader(line) { setCurrentAccount(.checking); AMLogging.log("PDF section: CHECKING detected at line \(i)", component: "PDFStatementExtractor") }
+                        else if isInvestmentHeader(line) && !docLooksLoan { setCurrentAccount(.investment); AMLogging.log("PDF section: INVESTMENT detected at line \(i)", component: "PDFStatementExtractor") }
                     }
                     do {
                         let lowerKW = line.lowercased()
@@ -1199,16 +1400,16 @@ enum PDFStatementExtractor {
                     if accountOverride == nil && isAccountMetaLine(line) {
                         let lower = line.lowercased()
                         if lower.contains("loan") || lower.contains("mortgage") {
-                            currentAccount = .loan
+                            setCurrentAccount(.loan)
                             AMLogging.log("PDF account meta => LOAN at line \(i)", component: "PDFStatementExtractor")
                         } else if lower.contains("savings") {
-                            currentAccount = .savings
+                            setCurrentAccount(.savings)
                             AMLogging.log("PDF account meta => SAVINGS at line \(i)", component: "PDFStatementExtractor")
                         } else if lower.contains("checking") {
-                            currentAccount = .checking
+                            setCurrentAccount(.checking)
                             AMLogging.log("PDF account meta => CHECKING at line \(i)", component: "PDFStatementExtractor")
                         } else if !docLooksCreditCard && (lower.contains("brokerage") || lower.contains("investment") || lower.contains("fidelity") || lower.contains("ira")) {
-                            currentAccount = .investment
+                            setCurrentAccount(.investment)
                             AMLogging.log("PDF account meta => INVESTMENT at line \(i)", component: "PDFStatementExtractor")
                         }
                     }
@@ -1219,7 +1420,7 @@ enum PDFStatementExtractor {
                     else if isHoldingsHeader(line) { currentSection = .holdings }
                     else if isActivityHeader(line) {
                         currentSection = .activity
-                        if currentAccount == .unknown && accountOverride == nil && !docLooksLoan && !docLooksCreditCard { currentAccount = .investment }
+                        if currentAccount == .unknown && accountOverride == nil && !docLooksLoan && !docLooksCreditCard { setCurrentAccount(.investment) }
                     }
 
                     // Within Activity, set flow hints for sign normalization
@@ -1230,7 +1431,9 @@ enum PDFStatementExtractor {
                         // Core Fund Activity stays neutral unless specific keywords dictate otherwise
                     }
 
-                    if isDepositsHeader(line) { currentFlow = .deposit; AMLogging.log("PDF flow: DEPOSITS detected at line \(i)", component: "PDFStatementExtractor") }
+                    if isNeutralTransactionDetailHeader(line) {
+                        currentFlow = .none
+                    } else if isDepositsHeader(line) { currentFlow = .deposit; AMLogging.log("PDF flow: DEPOSITS detected at line \(i)", component: "PDFStatementExtractor") }
                     else if isWithdrawalsHeader(line) { currentFlow = .withdrawal; AMLogging.log("PDF flow: WITHDRAWALS detected at line \(i)", component: "PDFStatementExtractor") }
                     i += 1
                     continue
@@ -1254,9 +1457,9 @@ enum PDFStatementExtractor {
                     if docLooksCreditCard { 
                         currentAccount = .unknown
                     } else {
-                        if contextIndicatesSavings() { currentAccount = .savings; AMLogging.log("PDF context => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
-                        else if contextIndicatesChecking() { currentAccount = .checking; AMLogging.log("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
-                        else if contextIndicatesInvestment() && !docLooksLoan { currentAccount = .investment; AMLogging.log("PDF context => INVESTMENT at line \(i)", component: "PDFStatementExtractor") }
+                        if contextIndicatesSavings() { setCurrentAccount(.savings); AMLogging.log("PDF context => SAVINGS at line \(i)", component: "PDFStatementExtractor") }
+                        else if contextIndicatesChecking() { setCurrentAccount(.checking); AMLogging.log("PDF context => CHECKING at line \(i)", component: "PDFStatementExtractor") }
+                        else if contextIndicatesInvestment() && !docLooksLoan { setCurrentAccount(.investment); AMLogging.log("PDF context => INVESTMENT at line \(i)", component: "PDFStatementExtractor") }
                     }
                 }
 
@@ -1268,6 +1471,17 @@ enum PDFStatementExtractor {
                     rows.append(row)
                     AMLogging.log("PDF stacked credit-card row matched (\(accountLabelForRow())) at line \(i) consuming \(stacked.consumed) lines", component: "PDFStatementExtractor")
                     i += stacked.consumed
+                    continue
+                }
+
+                if let continuation = attemptBankContinuationColumnRows(in: lines, start: i) {
+                    for var row in continuation.rows {
+                        if row.count >= 3 { row[2] = applySectionSign(amount: row[2]) }
+                        row.append("checking")
+                        rows.append(row)
+                    }
+                    AMLogging.log("PDF bank continuation column rows matched at line \(i) rows=\(continuation.rows.count)", component: "PDFStatementExtractor")
+                    i += continuation.consumed
                     continue
                 }
 
@@ -1308,20 +1522,16 @@ enum PDFStatementExtractor {
                     var amount = applySectionSign(amount: sanitizeAmount(amtRaw))
                     var balance = balRaw.isEmpty ? "" : sanitizeAmount(balRaw)
 
-                    let sanitizedRawAmount = sanitizeAmount(amtRaw)
-                    let rawAmountLooksLikeAccountSuffix = !balRaw.isEmpty &&
-                        sanitizedRawAmount.range(of: #"^[0-9]{3}$"#, options: .regularExpression) != nil &&
-                        !amtRaw.contains(".") &&
-                        !amtRaw.contains("$") &&
-                        !amtRaw.contains("-") &&
-                        !amtRaw.contains("+")
-                    if rawAmountLooksLikeAccountSuffix {
-                        let decimalMoneyRegex = try! NSRegularExpression(
-                            pattern: #"\(?[+-]?\s?\$?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}[+-]?\)?(?:\s*(?:CR|DR|CREDIT|DEBIT))?"#,
-                            options: [.caseInsensitive]
-                        )
-                        let lineRange = NSRange(location: 0, length: line.utf16.count)
-                        let decimalMoneyMatches = decimalMoneyRegex.matches(in: line, options: [], range: lineRange)
+                    let decimalMoneyRegex = try! NSRegularExpression(
+                        pattern: #"\(?[+-]?\s?\$?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}[+-]?\)?(?:\s*(?:CR|DR|CREDIT|DEBIT))?"#,
+                        options: [.caseInsensitive]
+                    )
+                    let lineRange = NSRange(location: 0, length: line.utf16.count)
+                    let decimalMoneyMatches = decimalMoneyRegex.matches(in: line, options: [], range: lineRange)
+                    let rawAmountIsDecimal = amtRaw.contains(".")
+                    let rawAmountIsCurrency = amtRaw.contains("$")
+                    let shouldPreferDecimalMoney = !rawAmountIsDecimal && !rawAmountIsCurrency && !decimalMoneyMatches.isEmpty
+                    if shouldPreferDecimalMoney {
                         if decimalMoneyMatches.count >= 2,
                            let amountMatch = decimalMoneyMatches.dropLast().last,
                            let balanceMatch = decimalMoneyMatches.last,
@@ -1329,9 +1539,15 @@ enum PDFStatementExtractor {
                            let balanceRange = Range(balanceMatch.range, in: line) {
                             let correctedAmountRaw = String(line[amountRange])
                             let correctedBalanceRaw = String(line[balanceRange])
-                            amount = sanitizeAmount(correctedAmountRaw)
+                            amount = applySectionSign(amount: sanitizeAmount(correctedAmountRaw))
                             balance = sanitizeAmount(correctedBalanceRaw)
-                            AMLogging.log("PDF single-line amount corrected from account suffix at line \(i): raw=\(amtRaw) corrected=\(correctedAmountRaw) balance=\(correctedBalanceRaw)", component: "PDFStatementExtractor")
+                            AMLogging.log("PDF single-line amount corrected from non-decimal token at line \(i): raw=\(amtRaw) corrected=\(correctedAmountRaw) balance=\(correctedBalanceRaw)", component: "PDFStatementExtractor")
+                        } else if let amountMatch = decimalMoneyMatches.last,
+                                  let amountRange = Range(amountMatch.range, in: line) {
+                            let correctedAmountRaw = String(line[amountRange])
+                            amount = applySectionSign(amount: sanitizeAmount(correctedAmountRaw))
+                            desc = cleanDesc(String(line[..<amountRange.lowerBound]))
+                            AMLogging.log("PDF single-line amount corrected from non-decimal token at line \(i): raw=\(amtRaw) corrected=\(correctedAmountRaw)", component: "PDFStatementExtractor")
                         }
                     }
 
@@ -1339,7 +1555,7 @@ enum PDFStatementExtractor {
                     // earlier money values into the description, prefer the first money token as Amount.
                     // This handles generic tables like Amount / Principal / Charge Fee / Balance without
                     // baking in institution-specific column names.
-                    if contextHasStandaloneAmountHeader() && !rawAmountLooksLikeAccountSuffix {
+                    if contextHasStandaloneAmountHeader() && !shouldPreferDecimalMoney {
                         let descRange = NSRange(location: 0, length: descRaw.utf16.count)
                         let embeddedMoneyMatches = amountAnywhereRegex.matches(in: descRaw, options: [], range: descRange)
                         if let firstMoney = embeddedMoneyMatches.first,
@@ -1355,8 +1571,8 @@ enum PDFStatementExtractor {
 
                     // If the description itself indicates account type, update context if no override
                     if accountOverride == nil {
-                        if isSavingsHeader(desc) { currentAccount = .savings }
-                        else if isInvestmentHeader(desc) && !docLooksLoan && !docLooksCreditCard { currentAccount = .investment }
+                        if isSavingsHeader(desc) { setCurrentAccount(.savings) }
+                        else if isInvestmentHeader(desc) && !docLooksLoan && !docLooksCreditCard { setCurrentAccount(.investment) }
                     }
                     rows.append([date, desc, amount, balance, accountLabelForRow()])
                     AMLogging.log("PDF single-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
@@ -1380,7 +1596,7 @@ enum PDFStatementExtractor {
                         let descRaw = groupFrom(ddMatch, in: line, idx: 2)
                         let date = normalizeDateString(dateRaw, inferredYear: inferredYear)
                         let desc = cleanDesc(descRaw)
-                        if accountOverride == nil && isSavingsHeader(desc) { currentAccount = .savings }
+                        if accountOverride == nil && isSavingsHeader(desc) { setCurrentAccount(.savings) }
                         let amount = applySectionSign(amount: sanitizeAmount(next))
                         rows.append([date, desc, amount, "", accountLabelForRow()]) // no balance captured in this shape
                         AMLogging.log("PDF two-line row matched (\(accountLabelForRow())) at line \(i)", component: "PDFStatementExtractor")
@@ -2826,4 +3042,3 @@ enum PDFStatementExtractor {
         return (nil, nil)
     }
 }
-

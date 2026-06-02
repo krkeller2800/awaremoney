@@ -1693,9 +1693,18 @@ struct PDFSummaryParser: StatementParser {
                 AMLogging.log("BalanceSummary: line values=\(values.map { $0.description }.joined(separator: ", ")) label=\(label ?? "nil")", component: LOG_COMPONENT)
 
                 if values.count >= 2 {
-                    // Heuristic: first numeric token is Beginning Balance, last is Ending Balance
-                    let begin = values.first!
-                    let end = values.last!
+                    // Product summary lines can include an account number before the balances.
+                    // For deposit accounts, the last two numeric values are the begin/end balances.
+                    let begin: Decimal
+                    let end: Decimal
+                    if !hasCreditCardIndicators && values.count > 2 && (lower.contains("checking") || lower.contains("savings") || lower.contains("money market")) {
+                        begin = values[values.count - 2]
+                        end = values[values.count - 1]
+                        AMLogging.log("BalanceSummary: using trailing begin/end values for deposit product line values=\(values.map { $0.description }.joined(separator: ", ")) line='" + s + "'", component: LOG_COMPONENT)
+                    } else {
+                        begin = values.first!
+                        end = values.last!
+                    }
 
                     if hasCreditCardIndicators {
                         if let endDate = asOfForSummaryEnd ?? asOfForSummaryStart {

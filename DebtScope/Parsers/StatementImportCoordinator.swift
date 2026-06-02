@@ -245,6 +245,8 @@ import UniformTypeIdentifiers
                 staged.balances = deduplicateStagedBalancesPreferringNonZeroSameDay(staged.balances)
             }
 
+            removeCreditCardPaymentRowsThatMatchBalanceSnapshots(from: &staged)
+
             // Apply APR preference for CC when available
             if hint == .some(.creditCard) {
                 if let fullText = PDFTextExtractor.extractText(from: url), let (apr, scale) = PDFTextExtractor.extractPreferredAPR(from: fullText) {
@@ -374,6 +376,34 @@ import UniformTypeIdentifiers
         }
 
         return deduplicated
+    }
+
+    private func removeCreditCardPaymentRowsThatMatchBalanceSnapshots(from staged: inout StagedImport) {
+        guard !staged.transactions.isEmpty, !staged.balances.isEmpty else { return }
+
+        let creditBalanceMagnitudes = Set(staged.balances.compactMap { balance -> Decimal? in
+            let label = (balance.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard label.contains("credit") || staged.suggestedAccountType == .creditCard else { return nil }
+            return balance.balance.magnitude
+        })
+        guard !creditBalanceMagnitudes.isEmpty else { return }
+
+        let before = staged.transactions.count
+        staged.transactions.removeAll { transaction in
+            let label = (transaction.sourceAccountLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let payee = transaction.payee.lowercased()
+            guard label.contains("credit") || staged.suggestedAccountType == .creditCard else { return false }
+            guard payee.contains("payment") else { return false }
+            return creditBalanceMagnitudes.contains(transaction.amount.magnitude)
+        }
+
+        let removed = before - staged.transactions.count
+        if removed > 0 {
+            AMLogging.always(
+                "StatementImportCoordinator: removed \(removed) credit-card payment row(s) whose amount matched balance snapshots: \(creditBalanceMagnitudes)",
+                component: "Import"
+            )
+        }
     }
 
     private func deduplicateStagedBalancesPreferringNonZeroSameDay(_ snaps: [StagedBalance]) -> [StagedBalance] {

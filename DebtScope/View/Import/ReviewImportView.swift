@@ -87,6 +87,10 @@ struct ReviewImportView: View {
         vm.staged ?? staged
     }
 
+    private var currentStatementCheckDecisionKey: String {
+        StatementCheckService.decisionKey(for: currentStagedForReview)
+    }
+
     private var statementCheckSuccessMessage: String? {
         guard vm.newAccountType != .loan else { return nil }
         guard case .balanced = StatementCheckService.status(staged: currentStagedForReview) else { return nil }
@@ -170,6 +174,10 @@ struct ReviewImportView: View {
                 AMLogging.log("ReviewImportView: top-level onAppear — hasStaged=\(hasStaged) balances=\(balancesCount) hasSentinel=\(hasSentinel) typicalPaymentInput='\(typicalPaymentInput)' parsed=\(String(describing: typicalPaymentParsed))", component: "ReviewImportView")
                 seedTypicalPaymentFromSentinelIfNeeded()
                 computeRoutingAnalysisIfNeeded()
+                refreshPendingStatementCheckIfNeeded()
+            }
+            .onChange(of: currentStatementCheckDecisionKey) { _, _ in
+                refreshPendingStatementCheckIfNeeded()
             }
             .safeAreaInset(edge: .bottom) {
                 Group {
@@ -927,11 +935,13 @@ struct ReviewImportView: View {
 
     private func requestStatementCheckIfNeeded(for staged: StagedImport) -> Bool {
         guard vm.newAccountType != .loan else {
+            clearPendingStatementCheck()
             return false
         }
         guard let result = StatementCheckService.evaluate(staged: staged),
               !result.issues.isEmpty,
               acceptedStatementCheckKey != result.decisionKey else {
+            clearPendingStatementCheck()
             return false
         }
 
@@ -940,6 +950,25 @@ struct ReviewImportView: View {
         isApprovingSave = false
         AMLogging.log("ReviewImportView: Statement check interrupted save — issues=\(result.issues.count)", component: "ReviewImportView")
         return true
+    }
+
+    private func refreshPendingStatementCheckIfNeeded() {
+        guard pendingStatementCheck != nil || showStatementCheckSheet else { return }
+        guard vm.newAccountType != .loan,
+              let result = StatementCheckService.evaluate(staged: currentStagedForReview),
+              !result.issues.isEmpty,
+              acceptedStatementCheckKey != result.decisionKey else {
+            clearPendingStatementCheck()
+            return
+        }
+
+        pendingStatementCheck = result
+        showStatementCheckSheet = true
+    }
+
+    private func clearPendingStatementCheck() {
+        pendingStatementCheck = nil
+        showStatementCheckSheet = false
     }
 
     private func acceptPendingStatementCheck() {

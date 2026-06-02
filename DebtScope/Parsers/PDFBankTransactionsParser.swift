@@ -40,7 +40,7 @@ struct PDFBankTransactionsParser: StatementParser {
             df.timeZone = TimeZone(secondsFromGMT: 0)
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-            for fmt in ["MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy"] {
+            for fmt in ["MM/dd/yy", "M/d/yy", "MM/dd/yyyy", "M/d/yyyy", "MMM d, yyyy", "MMMM d, yyyy"] {
                 df.dateFormat = fmt
                 if let date = df.date(from: trimmed), calendar.component(.year, from: date) >= 1900 {
                     return date
@@ -147,6 +147,18 @@ struct PDFBankTransactionsParser: StatementParser {
             AMLogging.log("inferSigns — items: \(items.count)", component: LOG_COMPONENT)
             var signed: [Decimal] = Array(repeating: 0, count: items.count)
 
+            func explicitlySignedAmount(for item: RowItem) -> Decimal? {
+                let raw = item.rawAmount.trimmingCharacters(in: .whitespacesAndNewlines)
+                let upperRaw = raw.uppercased()
+                if raw.hasPrefix("-") || upperRaw.contains("DR") || upperRaw.contains("DEBIT") || (raw.hasPrefix("(") && raw.hasSuffix(")")) {
+                    return -item.amount.magnitude
+                }
+                if raw.hasPrefix("+") || upperRaw.contains("CR") || upperRaw.contains("CREDIT") {
+                    return item.amount.magnitude
+                }
+                return nil
+            }
+
             // If we have at least two balances, attempt delta-based sign inference
             let withBalances = items.enumerated().compactMap { (idx, it) -> (Int, RowItem)? in
                 guard let _ = it.balance else { return nil }
@@ -155,6 +167,12 @@ struct PDFBankTransactionsParser: StatementParser {
             AMLogging.log("inferSigns — withBalances indices: \(withBalances.map { $0.0 })", component: LOG_COMPONENT)
             if withBalances.count >= 2 {
                 for i in 0..<items.count {
+                    if let explicitAmount = explicitlySignedAmount(for: items[i]) {
+                        AMLogging.log("inferSigns — row \(i) preserving explicit sign amount=\(explicitAmount), raw=\(items[i].rawAmount)", component: LOG_COMPONENT)
+                        signed[i] = explicitAmount
+                        continue
+                    }
+
                     let amt = items[i].amount
                     if let prevIndex = (stride(from: i-1, through: 0, by: -1).first { items[$0].balance != nil }),
                        let currBal = items[i].balance, let prevBal = items[prevIndex].balance {
@@ -215,7 +233,12 @@ struct PDFBankTransactionsParser: StatementParser {
 
             let closingDate: Date? = {
                 let closingPattern = #"statement\s+closing\s+date\b.{0,80}?("# + date + #")"#
-                guard let match = firstMatch(closingPattern), let dateText = group(1, in: match) else { return nil }
+                if let match = firstMatch(closingPattern), let dateText = group(1, in: match), let closingDate = parseDate(dateText) {
+                    return closingDate
+                }
+
+                let rangePattern = #"(?:account\s+summary|open\s+to\s+close\s+date)\b.{0,80}?("# + date + #")\s*(?:–|-|to)\s*("# + date + #")"#
+                guard let match = firstMatch(rangePattern), let dateText = group(2, in: match) else { return nil }
                 return parseDate(dateText)
             }()
 
@@ -231,21 +254,61 @@ struct PDFBankTransactionsParser: StatementParser {
             }
         }
 
+        func removeCreditCardPaymentRowsThatAreActuallyBalances(from items: inout [RowItem], documentText: String) {
+            let balanceMagnitudes = summaryBalanceMagnitudes(in: documentText)
+            guard !balanceMagnitudes.isEmpty else { return }
+
+            let before = items.count
+            items.removeAll { item in
+                let lowerDescription = item.desc.lowercased()
+                guard lowerDescription.contains("payment") else { return false }
+                return balanceMagnitudes.contains(item.amount.magnitude)
+            }
+            let removed = before - items.count
+            if removed > 0 {
+                AMLogging.always(
+                    "Removed \(removed) credit-card payment row(s) whose amount matched statement balances: \(balanceMagnitudes)",
+                    component: LOG_COMPONENT
+                )
+            }
+        }
+
+        func summaryBalanceMagnitudes(in text: String) -> Set<Decimal> {
+            let balanceLabels = ["previous balance", "new balance"]
+            var amounts = Set<Decimal>()
+            for label in balanceLabels {
+                let pattern = label + #"\s*:?\s*([+-]?\s*\$?\s*(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2}))"#
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+                let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                for match in regex.matches(in: text, options: [], range: range) {
+                    guard match.numberOfRanges >= 2,
+                          let amountRange = Range(match.range(at: 1), in: text),
+                          let amount = Decimal(string: sanitize(String(text[amountRange]))) else { continue }
+                    amounts.insert(amount.magnitude)
+                }
+            }
+            return amounts
+        }
+
         let docText = rows.flatMap { $0 }.joined(separator: " ")
         let docTextLower = docText.lowercased()
-        let documentLooksLikeCreditCard = docTextLower.contains("summary of account activity") &&
+        let documentLooksLikeCreditCard = (
+            docTextLower.contains("summary of account activity") ||
+            docTextLower.contains("account summary") ||
+            docTextLower.contains("card ending in")
+        ) &&
             docTextLower.contains("previous balance") &&
             docTextLower.contains("new balance") &&
-            (docTextLower.contains("minimum payment") || docTextLower.contains("credit limit") || docTextLower.contains("available credit"))
+            (docTextLower.contains("minimum payment") || docTextLower.contains("credit limit") || docTextLower.contains("credit line") || docTextLower.contains("available credit"))
 
         if documentLooksLikeCreditCard {
             looksLikeCreditCardActivity = true
+            removeCreditCardPaymentRowsThatAreActuallyBalances(from: &items, documentText: docText)
             recoverMissingCreditCardActivity(from: docText, into: &items)
         }
 
         let signedAmounts = inferSigns(using: items)
         AMLogging.log("Signed amounts: \(signedAmounts)", component: LOG_COMPONENT)
-
         // Build staged transactions; default include=true, propagate sourceAccountLabel
         for i in 0..<items.count {
             let it = items[i]
@@ -320,17 +383,24 @@ struct PDFBankTransactionsParser: StatementParser {
             return -amount.magnitude
         }
 
-        let normalizedDescription = description
-            .lowercased()
+        let lowerDescription = description.lowercased()
+        let normalizedDescription = lowerDescription
             .split(whereSeparator: { !$0.isLetter })
             .joined(separator: " ")
         let words = Set(normalizedDescription.split(separator: " ").map(String.init))
-        let isPayment = words.contains("payment")
+        let fusedPaymentRowCarriesDifferentAmount = embeddedPaymentAmountMagnitude(in: lowerDescription).map { $0 != amount.magnitude } ?? false
+        let isPayment = !fusedPaymentRowCarriesDifferentAmount && (
+            words.contains("payment")
             || words.contains("pymt")
             || words.contains("pmt")
             || words.contains("autopay")
             || (words.contains("auto") && words.contains("pay"))
-        let isCredit = words.contains("refund") || words.contains("return") || words.contains("credit")
+        )
+        let creditPhrases = [
+            "refund", "return", "returned merchandise", "payment reversal",
+            "statement credit", "account credit", "merchant credit", "credit adjustment"
+        ]
+        let isCredit = creditPhrases.contains { normalizedDescription.contains($0) }
 
         // DebtScope stores liability balances as negative values. Credit-card charges increase
         // the liability, so they are negative; payments and credits reduce it, so they are positive.
@@ -339,6 +409,24 @@ struct PDFBankTransactionsParser: StatementParser {
         }
 
         return -amount.magnitude
+    }
+
+    private func embeddedPaymentAmountMagnitude(in lowerDescription: String) -> Decimal? {
+        let amountPattern = #"(-\s*\$?\s*(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2}))"#
+        let pattern = #"payment\s*-\s*thank\s+you\b.{0,160}?"# + amountPattern
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(lowerDescription.startIndex..<lowerDescription.endIndex, in: lowerDescription)
+        guard let match = regex.firstMatch(in: lowerDescription, options: [], range: range),
+              match.numberOfRanges >= 2,
+              let amountRange = Range(match.range(at: 1), in: lowerDescription) else {
+            return nil
+        }
+
+        let token = String(lowerDescription[amountRange])
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        return Decimal(string: token)?.magnitude
     }
     
     private func isHeaderOrTotal(_ desc: String) -> Bool {
@@ -362,7 +450,19 @@ struct PDFBankTransactionsParser: StatementParser {
         }
         normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let summaryBalanceMarkers = [
+            "account summary", "previous balance", "new balance", "payment information",
+            "credit line", "credit limit", "available credit", "payments and credits",
+            "balance transfers", "cash advances", "fees charged", "interest charged"
+        ]
+        if summaryBalanceMarkers.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
         if lower.contains("interest charge") {
+            return false
+        }
+        if lower.contains("interest earned") || lower.contains("interest paid") {
             return false
         }
 

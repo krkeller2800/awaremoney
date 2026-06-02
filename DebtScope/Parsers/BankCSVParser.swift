@@ -62,7 +62,7 @@ struct BankCSVParser: StatementParser {
                 suggestedType: suggestedType
             )
 
-            // Optional running balance column (e.g., Chase CSVs)
+            // Optional running balance column used by some bank CSV exports
             if hasBalanceColumn, let balStr = value(row, map, key: "balance"),
                let bal = Decimal(string: sanitizeAmount(balStr)) {
                 // Track earliest transaction with a running balance

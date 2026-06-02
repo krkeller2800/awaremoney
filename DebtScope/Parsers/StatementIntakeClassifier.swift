@@ -238,6 +238,7 @@ enum StatementIntakeResolver {
             || normalized.contains("savingsaccount")
             || normalized.contains("depositaccount")
             || normalized.contains("certificateaccount")
+            || (normalized.contains("beginningbalance") && normalized.contains("endingbalance") && normalized.contains("credits(+)") && normalized.contains("debits()"))
         let hasLoanSummary = normalized.contains("totalloans")
             || normalized.contains("paymentof")
             || normalized.contains("paymentdue")
@@ -468,6 +469,7 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             ("citi", "Citi"),
             ("chase", "Chase"),
             ("sofi", "SoFi"),
+            ("huntington", "Huntington"),
             ("communitychoice", "Community Choice"),
             ("sloanservicing", "Sloan Servicing"),
             ("sloan", "Sloan Servicing")
@@ -1003,7 +1005,15 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
 
     private func knownTypeTokens() -> [(String, StatementType)] {
         return [
-            // Credit card (generic/network/role terms only) — highest priority
+            // Bank/deposit accounts. These should beat incidental credit-card payee text.
+            ("checkingaccount", .bank),
+            ("savingsaccount", .bank),
+            ("depositaccount", .bank),
+            ("certificateaccount", .bank),
+            ("checking", .bank),
+            ("savings", .bank),
+
+            // Credit card (generic/network/role terms only)
             ("creditcard", .creditCard),
             ("credit-card", .creditCard),
             ("cardmember", .creditCard),
@@ -1033,14 +1043,38 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
         if normalizedAggressive.contains("checkingsummary") || normalizedAggressive.contains("savingssummary") {
             return true
         }
+        if normalizedAggressive.contains("checkingaccount") || normalizedAggressive.contains("savingsaccount") || normalizedAggressive.contains("depositaccount") {
+            return true
+        }
         if normalizedAggressive.contains("checking&savingsaccountbeginningbalance")
             || normalizedAggressive.contains("checkingandsavingsaccountbeginningbalance") {
+            return true
+        }
+        if normalizedAggressive.contains("beginningbalance") &&
+            normalizedAggressive.contains("endingbalance") &&
+            normalizedAggressive.contains("credits(+)") &&
+            normalizedAggressive.contains("debits()") {
             return true
         }
         return false
     }
 
     private func detectTypeInPDF(headerLines: [String], normalizedHeader: String) -> StatementType? {
+        let normalizedAggressive = normalizedHeader
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let hasStrongBankSummary = hasStrongBankSummaryContext(in: normalizedAggressive)
+        if hasStrongBankSummary {
+            AMLogging.log(
+                "IntakeClassifier.detectTypeInPDF: returning bank from strong summary context runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
+                component: "Intake"
+            )
+            return .bank
+        }
+
         for (needle, t) in knownTypeTokens() {
             if normalizedHeader.contains(needle) && isTypeContextPresent(needle: needle, lines: headerLines) {
                 AMLogging.log(
@@ -1050,12 +1084,6 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
                 return t
             }
         }
-        let normalizedAggressive = normalizedHeader
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
         let hasLoanCore = normalizedAggressive.contains("totalloans")
             || normalizedAggressive.contains("principal")
             || normalizedAggressive.contains("interestpaidytd")
@@ -1064,18 +1092,10 @@ public final class StatementIntakeClassifier: StatementIntakeClassifying {
             || normalizedAggressive.contains("balanceforward")
         let hasLoanAPR = normalizedAggressive.contains("annualpercentagerate")
             || normalizedAggressive.contains("interestrate")
-        let hasStrongBankSummary = hasStrongBankSummaryContext(in: normalizedAggressive)
         AMLogging.log(
             "IntakeClassifier.detectTypeInPDF: loanCore=\(hasLoanCore) loanPaymentStructure=\(hasLoanPaymentStructure) loanAPR=\(hasLoanAPR) strongBankSummary=\(hasStrongBankSummary) headerLines=\(headerLines.count) runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
             component: "Intake"
         )
-        if hasStrongBankSummary {
-            AMLogging.log(
-                "IntakeClassifier.detectTypeInPDF: returning bank from strong summary context runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",
-                component: "Intake"
-            )
-            return .bank
-        }
         if hasLoanCore && (hasLoanAPR || hasLoanPaymentStructure) {
             AMLogging.log(
                 "IntakeClassifier.detectTypeInPDF: returning loan from heuristic runtime=\(AMRuntimeDiagnostics.executionEnvironmentDescription)",

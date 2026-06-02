@@ -109,7 +109,13 @@ enum StatementCheckService {
                 continue
             }
 
-            let transactionTotal = transactions.reduce(Decimal.zero) { $0 + $1.amount }
+            let statementAmounts = transactions.map { transaction in
+                (
+                    transaction: transaction,
+                    normalizedAmount: statementAmount(for: transaction, accountLabel: label, beginningBalance: beginning.balance, endingBalance: ending.balance)
+                )
+            }
+            let transactionTotal = statementAmounts.reduce(Decimal.zero) { $0 + $1.normalizedAmount }
             let expectedEnding = beginning.balance + transactionTotal
             let difference = ending.balance - expectedEnding
             checkedAccountCount += 1
@@ -185,6 +191,55 @@ enum StatementCheckService {
                 .map { $0.prefix(1).uppercased() + $0.dropFirst() }
                 .joined(separator: " ")
         }
+    }
+
+    private static func statementAmount(for transaction: StagedTransaction, accountLabel: String, beginningBalance: Decimal, endingBalance: Decimal) -> Decimal {
+        guard accountLabel.contains("credit"), beginningBalance < 0 || endingBalance < 0 else {
+            return transaction.amount
+        }
+
+        let lowerPayee = transaction.payee.lowercased()
+        let normalizedDescription = lowerPayee
+            .split(whereSeparator: { !$0.isLetter })
+            .joined(separator: " ")
+        let words = Set(normalizedDescription.split(separator: " ").map(String.init))
+        let fusedPaymentRowCarriesDifferentAmount = embeddedPaymentAmountMagnitude(in: lowerPayee).map { $0 != transaction.amount.magnitude } ?? false
+        let isPayment = !fusedPaymentRowCarriesDifferentAmount && (
+            words.contains("payment")
+            || words.contains("pymt")
+            || words.contains("pmt")
+            || words.contains("autopay")
+            || (words.contains("auto") && words.contains("pay"))
+        )
+        let creditPhrases = [
+            "refund", "return", "returned merchandise", "payment reversal",
+            "statement credit", "account credit", "merchant credit", "credit adjustment"
+        ]
+        let isCredit = creditPhrases.contains { normalizedDescription.contains($0) }
+
+        if isPayment || isCredit {
+            return transaction.amount.magnitude
+        }
+
+        return -transaction.amount.magnitude
+    }
+
+    private static func embeddedPaymentAmountMagnitude(in lowerDescription: String) -> Decimal? {
+        let amountPattern = #"(-\s*\$?\s*(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2}))"#
+        let pattern = #"payment\s*-\s*thank\s+you\b.{0,160}?"# + amountPattern
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(lowerDescription.startIndex..<lowerDescription.endIndex, in: lowerDescription)
+        guard let match = regex.firstMatch(in: lowerDescription, options: [], range: range),
+              match.numberOfRanges >= 2,
+              let amountRange = Range(match.range(at: 1), in: lowerDescription) else {
+            return nil
+        }
+
+        let token = String(lowerDescription[amountRange])
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        return Decimal(string: token)?.magnitude
     }
 
     private static func absolute(_ value: Decimal) -> Decimal {
