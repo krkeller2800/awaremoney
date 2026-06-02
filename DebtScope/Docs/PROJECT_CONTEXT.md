@@ -181,6 +181,8 @@ Debug flow: UI → selectedAccountID → routing → review → save → SwiftDa
 2.  Always review before save
 3.  Detection is advisory
 4.  Views should not own critical state
+5.  Never make a correction based on institution, make the correction based on problem
+6.  Never use institution name as part of a variable name, use problem name instead
 
 ------------------------------------------------------------------------
 

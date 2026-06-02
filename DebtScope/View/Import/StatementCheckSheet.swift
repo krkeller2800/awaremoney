@@ -258,6 +258,7 @@ enum StatementCheckService {
 struct StatementCheckSheet: View {
     let result: StatementCheckResult
     let currencyCode: String
+    var isReadOnly: Bool = false
     let onImportBalancesOnly: () -> Void
     let onExcludeProblemTransactions: () -> Void
     let onContinueAnyway: () -> Void
@@ -276,7 +277,7 @@ struct StatementCheckSheet: View {
                 }
 
                 if !result.issues.isEmpty {
-                    Section("Accounts That Do Not Match") {
+                    Section(isReadOnly ? "Reconciliation Details" : "Accounts That Do Not Match") {
                         ForEach(result.issues) { issue in
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {
@@ -326,33 +327,46 @@ struct StatementCheckSheet: View {
                     }
                 }
 
-                Section {
-                    Button("Import Balances Only", role: .destructive, action: onImportBalancesOnly)
-                    Button("Exclude Flagged Transactions", role: .destructive, action: onExcludeProblemTransactions)
-                    Button("Continue Anyway", action: onContinueAnyway)
-                } footer: {
-                    Text("These choices apply before account routing. You can also cancel and edit the import review manually.")
+                if !isReadOnly {
+                    Section {
+                        Button("Import Balances Only", role: .destructive, action: onImportBalancesOnly)
+                        Button("Exclude Flagged Transactions", role: .destructive, action: onExcludeProblemTransactions)
+                        Button("Continue Anyway", action: onContinueAnyway)
+                    } footer: {
+                        Text("These choices apply before account routing. You can also cancel and edit the import review manually.")
+                    }
                 }
             }
-            .navigationTitle("Check Import")
+            .navigationTitle(isReadOnly ? "Reconciliation" : "Check Import")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+                    Button(isReadOnly ? "Done" : "Cancel", action: onCancel)
                 }
             }
         }
     }
 
     private var titleText: String {
-        result.issues.isEmpty ? "Could not verify transactions" : "Statement totals do not match"
+        if result.issues.isEmpty {
+            return "Transactions not verified"
+        }
+        return "Statement totals do not match"
     }
 
     private var messageText: String {
-        if result.issues.isEmpty {
-            return "The import includes transactions, but the statement did not provide enough balance information to verify them. Review before saving."
+        if isReadOnly {
+            let importHelp = " To import transaction history, use CSV, OFX/QFX/QBO, QIF, Excel (XLSX/XLS), or ZIP."
+            if result.issues.isEmpty {
+                return "DebtScope saved the snapshot only because the statement did not include enough balance data to verify transactions." + importHelp
+            }
+            return "DebtScope saved the snapshot only because the transactions did not match the statement balances." + importHelp
         }
-        return "The imported transactions do not reconcile to the beginning and ending balances for one or more accounts. Review the affected accounts before saving."
+
+        if result.issues.isEmpty {
+            return "The import includes transactions, but the statement did not provide enough balance information to verify them."
+        }
+        return "The imported transactions do not reconcile to the beginning and ending balances for one or more accounts."
     }
 
     private func checkRow(_ label: String, _ value: String, emphasized: Bool = false) -> some View {

@@ -44,7 +44,7 @@ struct ReviewImportView: View {
     @State private var routingPreviewEffective: [String: RoutingCandidate.Action] = [:]
     @State private var routingPreviewInstitution: String? = nil
     @State private var pendingStatementCheck: StatementCheckResult? = nil
-    @State private var showStatementCheckSheet = false
+    @State private var statementCheckDetailsResult: StatementCheckResult? = nil
     @State private var acceptedStatementCheckKey: String? = nil
     @State private var isApprovingSave = false
     @State private var importLimitReached = false
@@ -67,6 +67,11 @@ struct ReviewImportView: View {
         let lower = staged.sourceFileName.lowercased()
         return lower.hasSuffix(".qfx") || lower.hasSuffix(".ofx") || lower.hasSuffix(".ofc") || lower.hasSuffix(".qbo")
     }
+
+    private var isPDFSource: Bool {
+        staged.sourceFileName.lowercased().hasSuffix(".pdf")
+    }
+
     private var hasStagedPreviewData: Bool {
         return !staged.transactions.isEmpty || !staged.balances.isEmpty || !staged.holdings.isEmpty
     }
@@ -95,6 +100,19 @@ struct ReviewImportView: View {
         guard vm.newAccountType != .loan else { return nil }
         guard case .balanced = StatementCheckService.status(staged: currentStagedForReview) else { return nil }
         return "The imported transactions reconcile to the beginning and ending balances."
+    }
+
+    private var currentStatementCheckResult: StatementCheckResult? {
+        guard isPDFSource, vm.newAccountType != .loan else { return nil }
+        return StatementCheckService.evaluate(staged: currentStagedForReview)
+    }
+
+    private var statementCheckSnapshotOnlyMessage: String? {
+        guard currentStatementCheckResult != nil else { return nil }
+        if currentStagedForReview.balances.contains(where: { $0.include }) {
+            return "Balances only will be saved. Import CSV/QIF/etc for transactions."
+        }
+        return "Import CSV/QIF/etc for transactions."
     }
     
     var body: some View {
@@ -261,19 +279,18 @@ struct ReviewImportView: View {
             .presentationDetents([.large])
             .applySheetSizing()
         }
-        .sheet(isPresented: $showStatementCheckSheet) {
-            if let pendingStatementCheck {
-                StatementCheckSheet(
-                    result: pendingStatementCheck,
-                    currencyCode: settings.currencyCode,
-                    onImportBalancesOnly: applyStatementCheckBalancesOnly,
-                    onExcludeProblemTransactions: applyStatementCheckExcludeFlaggedTransactions,
-                    onContinueAnyway: acceptPendingStatementCheck,
-                    onCancel: cancelPendingStatementCheck
-                )
-                .presentationDetents([.medium, .large])
-                .applySheetSizing()
-            }
+        .sheet(item: $statementCheckDetailsResult) { result in
+            StatementCheckSheet(
+                result: result,
+                currencyCode: settings.currencyCode,
+                isReadOnly: true,
+                onImportBalancesOnly: applyStatementCheckBalancesOnly,
+                onExcludeProblemTransactions: applyStatementCheckExcludeFlaggedTransactions,
+                onContinueAnyway: acceptPendingStatementCheck,
+                onCancel: { statementCheckDetailsResult = nil }
+            )
+            .presentationDetents([.large])
+            .applySheetSizing()
         }
 //        .sheet(isPresented: $showRoutingSheet) {
 //            if let staged = vm.staged {
@@ -499,6 +516,24 @@ struct ReviewImportView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                } else if let message = statementCheckSnapshotOnlyMessage, let result = currentStatementCheckResult {
+                    Section {
+                        Button {
+                            statementCheckDetailsResult = result
+                        } label: {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "info.circle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("\(message) Tap to view reconciliation.")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listRowBackground(Color.orange.opacity(0.08))
                 }
 
                 Group {
@@ -929,6 +964,30 @@ struct ReviewImportView: View {
         showImportLimitAlert = true
     }
 
+    private func applyDefaultStatementCheckRulesIfNeeded(to staged: StagedImport) -> StagedImport {
+        guard isPDFSource,
+              vm.newAccountType != .loan,
+              let result = StatementCheckService.evaluate(staged: staged) else {
+            return staged
+        }
+
+        let message = staged.balances.contains(where: { $0.include })
+            ? "Snapshot saved. Import CSV/QIF for transactions."
+            : "Import CSV/QIF for transactions."
+        var updated = staged
+        for index in updated.transactions.indices {
+            updated.transactions[index].include = false
+        }
+
+        vm.staged = updated
+        vm.infoMessage = message
+        pendingStatementCheck = result
+        acceptedStatementCheckKey = result.decisionKey
+        computeRoutingAnalysisIfNeeded()
+        AMLogging.log("ReviewImportView: PDF transactions skipped by default reconciliation rule — issues=\(result.issues.count) warnings=\(result.warnings.count)", component: "ReviewImportView")
+        return updated
+    }
+
     private func shouldBlockForFreeImportLimit(_ staged: StagedImport) -> Bool {
         staged.parserId != "manual.user" && !PurchaseManager.shared.isPremiumUnlocked
     }
@@ -946,14 +1005,14 @@ struct ReviewImportView: View {
         }
 
         pendingStatementCheck = result
-        showStatementCheckSheet = true
+        statementCheckDetailsResult = result
         isApprovingSave = false
         AMLogging.log("ReviewImportView: Statement check interrupted save — issues=\(result.issues.count)", component: "ReviewImportView")
         return true
     }
 
     private func refreshPendingStatementCheckIfNeeded() {
-        guard pendingStatementCheck != nil || showStatementCheckSheet else { return }
+        guard pendingStatementCheck != nil || statementCheckDetailsResult != nil else { return }
         guard vm.newAccountType != .loan,
               let result = StatementCheckService.evaluate(staged: currentStagedForReview),
               !result.issues.isEmpty,
@@ -963,19 +1022,19 @@ struct ReviewImportView: View {
         }
 
         pendingStatementCheck = result
-        showStatementCheckSheet = true
+        statementCheckDetailsResult = result
     }
 
     private func clearPendingStatementCheck() {
         pendingStatementCheck = nil
-        showStatementCheckSheet = false
+        statementCheckDetailsResult = nil
     }
 
     private func acceptPendingStatementCheck() {
         guard let pendingStatementCheck else { return }
         acceptedStatementCheckKey = pendingStatementCheck.decisionKey
         self.pendingStatementCheck = nil
-        showStatementCheckSheet = false
+        statementCheckDetailsResult = nil
         isApprovingSave = false
     }
 
@@ -987,7 +1046,7 @@ struct ReviewImportView: View {
         vm.staged = staged
         acceptedStatementCheckKey = StatementCheckService.decisionKey(for: staged)
         pendingStatementCheck = nil
-        showStatementCheckSheet = false
+        statementCheckDetailsResult = nil
         isApprovingSave = false
         computeRoutingAnalysisIfNeeded()
     }
@@ -1004,14 +1063,14 @@ struct ReviewImportView: View {
         vm.staged = staged
         acceptedStatementCheckKey = StatementCheckService.decisionKey(for: staged)
         self.pendingStatementCheck = nil
-        showStatementCheckSheet = false
+        statementCheckDetailsResult = nil
         isApprovingSave = false
         computeRoutingAnalysisIfNeeded()
     }
 
     private func cancelPendingStatementCheck() {
         pendingStatementCheck = nil
-        showStatementCheckSheet = false
+        statementCheckDetailsResult = nil
         isApprovingSave = false
     }
 
@@ -1028,7 +1087,7 @@ struct ReviewImportView: View {
                     selectedAccountId = nil
                     vm.selectedAccountID = nil
                     pendingStatementCheck = nil
-                    showStatementCheckSheet = false
+                    statementCheckDetailsResult = nil
                     acceptedStatementCheckKey = nil
                 } label: {
                     HStack(spacing: 6) {
@@ -1074,15 +1133,13 @@ struct ReviewImportView: View {
                         AMLogging.log("ReviewImportView: Auto-appended pending starting balance before save — value=\(pending) date=\(asOf)", component: "ReviewImportView")
                     }
 
-                    guard let stagedForSave = vm.staged else {
+                    guard let initialStagedForSave = vm.staged else {
                         isApprovingSave = false
                         vm.errorMessage = "There is no reviewed import to save."
                         return
                     }
 
-                    if requestStatementCheckIfNeeded(for: stagedForSave) {
-                        return
-                    }
+                    let stagedForSave = applyDefaultStatementCheckRulesIfNeeded(to: initialStagedForSave)
 
                     // Prepare routing from the edited staged import, not the initial immutable view input.
                     let service = ImportRoutingService()
