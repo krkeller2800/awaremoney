@@ -2635,7 +2635,7 @@ enum PDFStatementExtractor {
             let lower = row[1].lowercased()
             return lower.contains("statement beginning balance") || lower.contains("statement ending balance")
         }.count
-        AMLogging.always(
+        AMLogging.log(
             "PDF extraction summary — rows=\(rows.count) transactionLikeRows=\(max(0, rows.count - summaryRowCount)) summaryRows=\(summaryRowCount) accounts=\(accountCounts)",
             component: "PDFStatementExtractor"
         )

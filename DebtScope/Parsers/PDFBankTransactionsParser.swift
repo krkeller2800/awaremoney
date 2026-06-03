@@ -117,7 +117,7 @@ struct PDFBankTransactionsParser: StatementParser {
         AMLogging.log("Parsed items count: \(items.count)", component: LOG_COMPONENT)
         let includedAccountCounts = Dictionary(grouping: items, by: { ($0.account ?? "nil").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
             .mapValues { $0.count }
-        AMLogging.always(
+        AMLogging.log(
             "PDF transaction parse summary — inputRows=\(rows.count) includedItems=\(items.count) accounts=\(includedAccountCounts) skippedMissingDate=\(skippedMissingDate) skippedDateParse=\(skippedDateParse) skippedHeaderOrTotal=\(skippedHeaderOrTotal) skippedMissingAmount=\(skippedMissingAmount) skippedAmountParse=\(skippedAmountParse)",
             component: LOG_COMPONENT
         )
@@ -252,6 +252,25 @@ struct PDFBankTransactionsParser: StatementParser {
                 items.append(RowItem(date: interestDate, desc: "Interest Charge on Purchases", amount: amount, rawAmount: rawAmount, balance: nil, account: "creditCard"))
                 AMLogging.log("Recovered CC interest charge activity from statement text — amount=\(amount)", component: LOG_COMPONENT)
             }
+
+            let amountToken = #"(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(?:\.[0-9]{2})"#
+            let collapsedPurchasePattern = #"\b"# + date + #"\s+payment\s*-\s*thank\s+you\s+("# + date + #")\s+(.{1,160}?)\s+(-\s*\$?\s*"# + amountToken + #")\s+(\$?\s*"# + amountToken + #")\s+(?:\$?\s*0\.00\s+)?(?:fees\b|total\s+fees\b|interest\s+charged\b)"#
+            if let match = firstMatch(collapsedPurchasePattern),
+               let purchaseDateText = group(1, in: match),
+               let purchaseDate = parseDate(purchaseDateText),
+               let descriptionText = group(2, in: match),
+               let rawAmount = group(4, in: match),
+               let amount = amountDecimal(from: rawAmount),
+               amount > 0,
+               !hasTransaction(matching: { item in
+                   item.amount.magnitude == amount.magnitude
+                       && !item.desc.lowercased().contains("payment")
+                       && !item.desc.lowercased().contains("interest charge")
+               }) {
+                let desc = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                items.append(RowItem(date: purchaseDate, desc: desc.isEmpty ? "Credit card purchase" : desc, amount: amount, rawAmount: rawAmount, balance: nil, account: "creditCard"))
+                AMLogging.log("Recovered collapsed credit-card purchase detail — date=\(purchaseDateText) amount=\(amount)", component: LOG_COMPONENT)
+            }
         }
 
         func removeCreditCardPaymentRowsThatAreActuallyBalances(from items: inout [RowItem], documentText: String) {
@@ -266,7 +285,7 @@ struct PDFBankTransactionsParser: StatementParser {
             }
             let removed = before - items.count
             if removed > 0 {
-                AMLogging.always(
+                AMLogging.log(
                     "Removed \(removed) credit-card payment row(s) whose amount matched statement balances: \(balanceMagnitudes)",
                     component: LOG_COMPONENT
                 )

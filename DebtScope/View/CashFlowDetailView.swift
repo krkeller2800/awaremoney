@@ -488,7 +488,7 @@ struct CashFlowDetailView: View {
                     }
                 bankBalanceSummaries = mergeBankBalanceSummaries(bankBalanceSummaries, transactionOnlySummaries)
             }
-            AMLogging.always(
+            AMLogging.log(
                 "CashFlow preview accounts — balanceLabels=\(Array(existingSummaryLabels).sorted()) transactionLabels=\(Array(transactionAccountLabels).sorted()) displayed=\(bankBalanceSummaries.map { $0.id })",
                 component: "Import"
             )
@@ -1214,7 +1214,7 @@ struct CashFlowDetailView: View {
             return updated
         }
         if filteredTransactions.isEmpty && !originalTransactions.isEmpty {
-            AMLogging.always(
+            AMLogging.log(
                 "CashFlow detected-account filter preserved transactions after label mismatch — selected=\(Array(selectedLabels).sorted()) rawTransactionLabels=\(Array(Set(originalTransactions.map { normalizedBankSummaryLabel($0.sourceAccountLabel) })).sorted())",
                 component: "Import"
             )
@@ -1229,7 +1229,7 @@ struct CashFlowDetailView: View {
         }
         staged.transactions = filteredTransactions
 
-        AMLogging.always(
+        AMLogging.log(
             "CashFlow detected-account filter — selected=\(Array(selectedLabels).sorted()) parserLabels=\(Array(parserLabels).sorted()) kept=\(Array(labelsToKeep).sorted()) balances \(originalBalanceCount)->\(staged.balances.count) transactions \(originalTransactionCount)->\(staged.transactions.count)",
             component: "Import"
         )

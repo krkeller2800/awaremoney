@@ -89,7 +89,7 @@ struct BackupRestoreView: View {
             ) { result in
                 switch result {
                 case .success:
-                    AMLogging.always("Backup exported successfully", component: "BackupRestoreView")
+                    AMLogging.log("Backup exported successfully", component: "BackupRestoreView")
                 case .failure(let err):
                     AMLogging.error("Backup export error: \(err.localizedDescription)", component: "BackupRestoreView")
                 }

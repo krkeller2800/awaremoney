@@ -18,7 +18,7 @@ struct RootView: View {
         QuickStartView()
         .onReceive(importRouter.$pendingURL) { url in
             if let url = url {
-                AMLogging.always("Received import URL: \(url.lastPathComponent)", component: "RootView")
+                AMLogging.log("Received import URL: \(url.lastPathComponent)", component: "RootView")
                 let stagedURL = ImportFileStaging.stageToCaches(url)
                 importRouter.quickStartPendingImport = .init(
                     url: stagedURL,

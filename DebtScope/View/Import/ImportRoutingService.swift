@@ -201,7 +201,7 @@ final class ImportRoutingService {
                     currencyCode: currencyCode
                 )
                 context.insert(acct)
-                AMLogging.always("RoutingDebug: resolveAccounts.createNew — label=\(plan.label) id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+                AMLogging.log("RoutingDebug: resolveAccounts.createNew — label=\(plan.label) id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
                 result[plan.label] = acct
                 createdByKey[key] = (acct, currentCounts.tx, currentCounts.bal)
                 AMLogging.log("ImportRoutingService: created account '\(acct.name)' inst='\(normalizedInstitution ?? "nil")' type=\(type)", component: "ImportRoutingService")
@@ -235,7 +235,7 @@ final class ImportRoutingService {
                     struct LocalError: Error {}
                     throw LocalError()
                 }
-                AMLogging.always("RoutingDebug: resolveAccounts.existing BEFORE — id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+                AMLogging.log("RoutingDebug: resolveAccounts.existing BEFORE — id=\(acct.id) name='\(acct.name)' type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
 
                 if applyInstitutionToExisting, let inst = normalizedInstitution {
                     let before = (acct.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,7 +248,7 @@ final class ImportRoutingService {
                 } else {
                     AMLogging.log("ImportRoutingService: using existing account id=\(acct.id) name='\(acct.name)' (no institution overwrite)", component: "ImportRoutingService")
                 }
-                AMLogging.always("RoutingDebug: resolveAccounts.existing AFTER — id=\(acct.id) type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
+                AMLogging.log("RoutingDebug: resolveAccounts.existing AFTER — id=\(acct.id) type=\(acct.typeRaw) inst='\(acct.institutionName ?? "nil")'", component: "RoutingDebug")
 
                 result[plan.label] = acct
             }
@@ -269,7 +269,7 @@ final class ImportRoutingService {
             AMLogging.log("ImportRoutingService: persistMappingsAfterSave — no institution; skipping", component: "ImportRoutingService")
             return
         }
-        AMLogging.always("RoutingDebug: persistMappingsAfterSave start — inst='\(inst)' labels=\(labelToAccount.keys.count)", component: "RoutingDebug")
+        AMLogging.log("RoutingDebug: persistMappingsAfterSave start — inst='\(inst)' labels=\(labelToAccount.keys.count)", component: "RoutingDebug")
 
         // Build a lookup of normalized label -> candidate confidence from the provided plans
         // so we can persist a meaningful confidence instead of a hardcoded 1.0
@@ -299,7 +299,7 @@ final class ImportRoutingService {
                     )
                 ).first
                 let existed = (existing != nil)
-                AMLogging.always("RoutingDebug: upsert mapping — inst='\(inst)' label='\(normalizedLabel)' accountID=\(account.id) conf=\(conf) existed=\(existed)", component: "RoutingDebug")
+                AMLogging.log("RoutingDebug: upsert mapping — inst='\(inst)' label='\(normalizedLabel)' accountID=\(account.id) conf=\(conf) existed=\(existed)", component: "RoutingDebug")
 
                 if let map = existing {
                     map.accountID = account.id
@@ -320,7 +320,7 @@ final class ImportRoutingService {
 
         do {
             try context.save()
-            AMLogging.always("RoutingDebug: persistMappingsAfterSave complete", component: "RoutingDebug")
+            AMLogging.log("RoutingDebug: persistMappingsAfterSave complete", component: "RoutingDebug")
         } catch {
             AMLogging.error("ImportRoutingService: persistMappingsAfterSave save failed — \(error.localizedDescription)", component: "ImportRoutingService")
         }

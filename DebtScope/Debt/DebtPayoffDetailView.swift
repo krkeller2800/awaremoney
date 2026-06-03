@@ -954,7 +954,7 @@ struct DebtPayoffDetailView: View {
                     }
                 bankBalanceSummaries = mergeBankBalanceSummaries(bankBalanceSummaries, transactionOnlySummaries)
             }
-            AMLogging.always(
+            AMLogging.log(
                 "DebtPayoff preview accounts — balanceLabels=\(Array(existingSummaryLabels).sorted()) transactionLabels=\(Array(transactionAccountLabels).sorted()) displayed=\(bankBalanceSummaries.map { $0.id })",
                 component: "DebtPayoffDetailView"
             )
@@ -1957,8 +1957,9 @@ struct DebtPayoffDetailView: View {
             staged.suggestedAccountType = resolvedType
             vm.newAccountType = resolvedType
         }
+        
 
-        AMLogging.always(
+        AMLogging.log(
             "DebtPayoff detected-account filter — selected=\(Array(selectedLabels).sorted()) parserLabels=\(Array(parserLabels).sorted()) kept=\(Array(labelsToKeep).sorted()) balances \(originalBalanceCount)->\(staged.balances.count) transactions \(originalTransactionCount)->\(staged.transactions.count)",
             component: "DebtPayoffDetailView"
         )

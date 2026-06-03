@@ -1255,9 +1255,9 @@ struct ReviewImportView: View {
                         let afterSnap = snapshotAccounts(modelContext)
                         let changes = diffAccounts(before: beforeSnap, after: afterSnap)
                         if changes.isEmpty {
-                            AMLogging.always("RoutingDebug: No account type/institution changes across Approve & Save", component: "RoutingDebug")
+                            AMLogging.log("RoutingDebug: No account type/institution changes across Approve & Save", component: "RoutingDebug")
                         } else {
-                            AMLogging.always("RoutingDebug: Account changes across Approve & Save — \(changes.joined(separator: " | "))", component: "RoutingDebug")
+                            AMLogging.log("RoutingDebug: Account changes across Approve & Save — \(changes.joined(separator: " | "))", component: "RoutingDebug")
                         }
                         let routedIDs = Set(labelToAccount.values.map { $0.id })
                         // For each changed id, indicate whether it was routed this run
@@ -1269,7 +1269,7 @@ struct ReviewImportView: View {
                         self.selectedAccountId = nil
                         showRoutingSheet = false
                         dismiss()
-                        AMLogging.always("RoutingDebug: Changes across save — routedIDs=\(Array(routedIDs)) details=\(annotated.joined(separator: " | "))", component: "RoutingDebug")
+                        AMLogging.log("RoutingDebug: Changes across save — routedIDs=\(Array(routedIDs)) details=\(annotated.joined(separator: " | "))", component: "RoutingDebug")
                     } catch {
                         isApprovingSave = false
                         let nsError = error as NSError

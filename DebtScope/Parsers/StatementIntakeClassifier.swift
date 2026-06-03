@@ -84,6 +84,9 @@ enum StatementIntakeResolver {
         classifierType: StatementType?,
         fallbackType: StatementType?
     ) -> StatementType? {
+        if classifierType == .bank && fallbackType == .creditCard {
+            return .creditCard
+        }
         if fallbackType == .bank && classifierType == .creditCard {
             return .bank
         }

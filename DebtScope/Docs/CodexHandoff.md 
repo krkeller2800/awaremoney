@@ -1,41 +1,41 @@
 # Codex Handoff
 
 ## Current Focus
-- Import review reconciliation was simplified for parsed PDF statements.
-- PDF transactions are only saved when statement math verifies against beginning and ending balances.
-- If PDF transaction math cannot be verified or does not match, DebtScope saves the balance snapshot only.
-- Structured transaction files remain the recommended path for transaction history.
+- PDF credit-card import classification and reconciliation were stabilized after recent regressions.
+- The Comenity/IKEA statement now balances after recovering a collapsed purchase amount from the transaction detail text.
+- The Amazon/Synchrony statement now routes as a credit card instead of bank/checking/brokerage.
+- The user manually confirmed Amazon balances and every other tested statement still balances.
 
-## Files Changed
-- `DebtScope/View/Import/ReviewImportView.swift`
-- `DebtScope/View/Import/StatementCheckSheet.swift`
+## Important Constraints
+- Do not use institution names in variable/helper names for general parser fixes.
+- Avoid broad parser/classification changes without logs proving the failing layer.
+- Watch for index/range safety in PDF text parsing paths.
+- Preserve bank statement behavior; do not let weak credit-card signals override true bank summaries.
 
-## ReviewImportView Notes
-- `currentStatementCheckResult` computes PDF-only reconciliation review state.
-- `statementCheckSnapshotOnlyMessage` shows the orange import-review row.
-- The orange row is a single tappable line:
-  `Balances only will be saved. Import CSV/QIF/etc for transactions. Tap to view reconciliation.`
-- Tapping the orange row sets `statementCheckDetailsResult` and opens the reconciliation sheet.
-- The reconciliation sheet uses item-based presentation instead of a boolean, preventing blank presentations.
-- The reconciliation sheet now presents with `.large` only.
-- `applyDefaultStatementCheckRulesIfNeeded(to:)` excludes all PDF transactions when reconciliation fails or cannot verify, then continues saving the snapshot.
-- QFX/OFX/QBO/QIF/CSV/Excel/ZIP transaction imports are not blocked by this PDF rule.
+## Relevant Files Changed
+- `DebtScope/Parsers/PDFBankTransactionsParser.swift`
+  - Added a general recovery for collapsed credit-card transaction detail where a purchase amount is separated from the merchant line.
+  - This fixed the Comenity/IKEA out-of-balance difference caused by a missing `$74.18` purchase.
+- `DebtScope/Parsers/StatementIntakeClassifier.swift`
+  - Resolver now handles the proven conflict `classifier=bank fallback=creditCard` by choosing `.creditCard`.
+  - Existing opposite rule remains: a bank fallback can still override a weak credit-card classifier.
 
-## StatementCheckSheet Notes
-- `StatementCheckSheet` supports `isReadOnly`.
-- In read-only mode, action buttons are hidden.
-- The title is `Statement totals do not match` for arithmetic mismatches.
-- The mismatch message explains that DebtScope saved the snapshot only because transactions did not match statement balances.
-- The unverifiable message explains that the statement lacked enough balance data to verify transactions.
-- Both read-only messages include supported transaction import types:
-  CSV, OFX/QFX/QBO, QIF, Excel (XLSX/XLS), or ZIP.
-- Read-only mismatch details use the section title `Reconciliation Details`.
+## Investigation Notes
+- Earlier broader changes in `ImportViewModel.swift` and `StatementIntakeClassifier.swift` had no effect on Amazon and were rolled back.
+- Logs showed the real Amazon failure path:
+  - `classifier=bank`
+  - `fallback=creditCard`
+  - `final=bank`
+- `PDFSummaryParser` was already detecting credit-card indicators and coercing parsed snapshot labels to credit card during fallback.
+- The wrong final type came from resolver precedence, not transaction parsing or the import view-model guesser.
 
 ## Validation
-- Xcode live diagnostics were clean for `ReviewImportView.swift` and `StatementCheckSheet.swift`.
-- Full Xcode project build completed successfully after the changes.
+- Live diagnostics were clean for touched files.
+- Full Xcode project build succeeded after the resolver fix.
+- User manually confirmed:
+  - Amazon credit-card statement now identifies and balances.
+  - Other tested statements still balance.
 
-## Follow-Up Checks
-- Manually test a PDF with matching totals: green success row should appear and transactions should save.
-- Manually test a PDF with mismatched totals: orange row should appear, reconciliation sheet should open full-size, and only snapshots should save.
-- Manually test a structured file import: transactions should still save through the existing flow.
+## Next Step
+- If the current manual regression set remains clean, commit the import fixes.
+- If another statement regresses, collect resolver/parser logs first before changing code.

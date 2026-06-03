@@ -51,7 +51,7 @@ struct DebtScopeApp: App {
             }
             if fixes > 0 {
                 try context.save()
-                AMLogging.always("Account ID repair completed — fixes=\(fixes)", component: "App")
+                AMLogging.log("Account ID repair completed — fixes=\(fixes)", component: "App")
             } else {
                 AMLogging.log("Account ID repair not needed — all IDs valid/unique", component: "App")
             }
@@ -71,7 +71,7 @@ struct DebtScopeApp: App {
         } catch {
             AMLogging.log("Failed to create Application Support directory: \(error)", component: "App")
         }
-        AMLogging.log("Application Support directory path: \(appSupport.path)", component: "App")
+        AMLogging.always("Application Support directory path: \(appSupport.path)", component: "App")
         if let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
             AMLogging.always("Documents directory path: \(documents.path)", component: "App")
         }
@@ -110,7 +110,7 @@ struct DebtScopeApp: App {
                        let type = rv.contentType,
                        type.conforms(to: .debtScopeBackup) {
                         Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
-                        AMLogging.always("App opened with backup (UTType): \(url.lastPathComponent)", component: "App")
+                        AMLogging.log("App opened with backup (UTType): \(url.lastPathComponent)", component: "App")
                         return
                     }
 
@@ -118,10 +118,10 @@ struct DebtScopeApp: App {
                     let ext = url.pathExtension.lowercased()
                     if ["dsbackup", "debtscopebackup", "json"].contains(ext) {
                         Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
-                        AMLogging.always("App opened with backup (ext): \(url.lastPathComponent)", component: "App")
+                        AMLogging.log("App opened with backup (ext): \(url.lastPathComponent)", component: "App")
                     } else {
                         importRouter.pendingURL = url
-                        AMLogging.always("App opened with non-backup file: \(url.lastPathComponent)", component: "App")
+                        AMLogging.log("App opened with non-backup file: \(url.lastPathComponent)", component: "App")
                     }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
@@ -157,12 +157,12 @@ struct DebtScopeApp: App {
         let dir = storeURL.deletingLastPathComponent()
         var isDir: ObjCBool = false
         let dirExists = fm.fileExists(atPath: dir.path, isDirectory: &isDir) && isDir.boolValue
-        AMLogging.always("SwiftData diagnostics — parent dir exists=\(dirExists) path=\(dir.path)", component: "App")
+        AMLogging.log("SwiftData diagnostics — parent dir exists=\(dirExists) path=\(dir.path)", component: "App")
         // Probe writability by attempting to write a tiny temp file in the parent directory
         let probe = dir.appendingPathComponent(".ds_writability_probe")
         do {
             try "ok".data(using: .utf8)!.write(to: probe, options: .atomic)
-            AMLogging.always("SwiftData diagnostics — write probe succeeded at \(probe.lastPathComponent)", component: "App")
+            AMLogging.log("SwiftData diagnostics — write probe succeeded at \(probe.lastPathComponent)", component: "App")
             try? fm.removeItem(at: probe)
         } catch {
             AMLogging.error("SwiftData diagnostics — write probe FAILED in parent dir: \(error)", component: "App")
@@ -174,15 +174,15 @@ struct DebtScopeApp: App {
         // Log store URL details
         let fm = FileManager.default
         let exists = fm.fileExists(atPath: storeURL.path)
-        AMLogging.always("SwiftData diagnostics — storeURL=\(storeURL.path) exists=\(exists)", component: "App")
-        AMLogging.always("SwiftData diagnostics — firstError=\(firstError)", component: "App")
-        AMLogging.always("SwiftData diagnostics — secondError=\(secondError)", component: "App")
+        AMLogging.log("SwiftData diagnostics — storeURL=\(storeURL.path) exists=\(exists)", component: "App")
+        AMLogging.log("SwiftData diagnostics — firstError=\(firstError)", component: "App")
+        AMLogging.log("SwiftData diagnostics — secondError=\(secondError)", component: "App")
 
         // Try building an in-memory container with the full schema to distinguish file vs schema issues
         do {
             let memoryConfig = ModelConfiguration(isStoredInMemoryOnly: true)
             _ = try ModelContainer(for: schema, configurations: memoryConfig)
-            AMLogging.always("In-memory ModelContainer succeeded — issue likely with on-disk configuration or path", component: "App")
+            AMLogging.log("In-memory ModelContainer succeeded — issue likely with on-disk configuration or path", component: "App")
         } catch {
             AMLogging.error("In-memory ModelContainer failed as well — schema issue likely: \(error)", component: "App")
         }
@@ -241,7 +241,7 @@ struct DebtScopeApp: App {
                     try fm.removeItem(at: destination)
                 }
                 try fm.copyItem(at: source, to: destination)
-                AMLogging.always("Preserved recovery copy: \(destination.lastPathComponent)", component: "App")
+                AMLogging.log("Preserved recovery copy: \(destination.lastPathComponent)", component: "App")
             } catch {
                 AMLogging.error("Failed to preserve recovery copy for \(source.lastPathComponent): \(error)", component: "App")
             }

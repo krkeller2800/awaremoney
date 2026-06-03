@@ -163,6 +163,7 @@ Debug flow: UI → selectedAccountID → routing → review → save → SwiftDa
 -   NetWorth = net worth logic
 -   Import = import pipeline
 -   Parser = file parsing
+-   Never use institution name as part of a variable name, use problem name instead
 
 ------------------------------------------------------------------------
 
@@ -181,9 +182,9 @@ Debug flow: UI → selectedAccountID → routing → review → save → SwiftDa
 2.  Always review before save
 3.  Detection is advisory
 4.  Views should not own critical state
-5.  Never make a correction based on institution, make the correction based on problem
-6.  Never use institution name as part of a variable name, use problem name instead
-
+5.  Never make a correction based on institution, make the correction based on the problem
+6.  When starting a new Codex conversation, read `CodexHandoff.md` first to understand the current workflow status, active goal, constraints, and next step.
+7.  When asked to update the handoff, replace the contents of `CodexHandoff.md` with a concise current handoff. Do not append history.
 ------------------------------------------------------------------------
 
 ## Prompting ChatGPT

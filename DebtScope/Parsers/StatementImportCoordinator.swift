@@ -399,7 +399,7 @@ import UniformTypeIdentifiers
 
         let removed = before - staged.transactions.count
         if removed > 0 {
-            AMLogging.always(
+            AMLogging.log(
                 "StatementImportCoordinator: removed \(removed) credit-card payment row(s) whose amount matched balance snapshots: \(creditBalanceMagnitudes)",
                 component: "Import"
             )

@@ -24,7 +24,7 @@ enum AMLogConfig {
     private static let verboseDefault: Bool = false
     #endif
 
-    /// Controls whether `AMLogging.log` emits messages. `.always` and `.error` are unaffected.
+    /// Controls whether `AMLogging.log` emits messages. `.log` and `.error` are unaffected.
     static var verbose: Bool {
         get {
             if UserDefaults.standard.object(forKey: "verbose_logging") != nil {

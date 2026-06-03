@@ -99,14 +99,14 @@ struct ImportFlowView: View {
                 }
             }
             if let kind = mapped {
-                AMLogging.always("ImportFlowView: Intake classified external URL '" + stagedURL.lastPathComponent + "' as \(String(describing: detection.type)) inst=\(detection.institution ?? "nil") conf=\(detection.confidence) runtime=\(runtime)", component: "Import")
+                AMLogging.log("ImportFlowView: Intake classified external URL '" + stagedURL.lastPathComponent + "' as \(String(describing: detection.type)) inst=\(detection.institution ?? "nil") conf=\(detection.confidence) runtime=\(runtime)", component: "Import")
                 // Proceed directly using the mapped kind
                 applyExternal(kind: kind, url: stagedURL)
                 importRouter.pendingURL = nil
                 pendingExternalURL = nil
                 externalImportActive = false
             } else {
-                AMLogging.always("ImportFlowView: Intake could not determine statement type for '" + stagedURL.lastPathComponent + "' — presenting doc kind chooser runtime=\(runtime)", component: "Import")
+                AMLogging.log("ImportFlowView: Intake could not determine statement type for '" + stagedURL.lastPathComponent + "' — presenting doc kind chooser runtime=\(runtime)", component: "Import")
                 showDocKindSheet = true
             }
         }
@@ -136,13 +136,13 @@ struct ImportFlowView: View {
         case .ofx, .qif, .excel, .zip:
             vm.userSelectedDocHint = nil
         }
-        AMLogging.always("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
+        AMLogging.log("ImportFlowView: applyExternal called with kind=\(kind.rawValue) url=\(url.lastPathComponent)", component: "Import")
         beginCoordinatorImport(url, hint: statementHint(from: vm.newAccountType), source: "external-\(kind.rawValue)")
     }
 
     private func clearPreviousImportReviewIfNeeded(fileName: String, source: String) {
         guard vm.staged != nil || vm.mappingSession != nil else { return }
-        AMLogging.always(
+        AMLogging.log(
             "ImportFlowView: clearing previous staged review before \(source) file=\(fileName)",
             component: "Import"
         )
@@ -152,7 +152,7 @@ struct ImportFlowView: View {
 
     private func beginCoordinatorImport(_ url: URL, hint: StatementType?, source: String) {
         clearPreviousImportReviewIfNeeded(fileName: url.lastPathComponent, source: source)
-        AMLogging.always(
+        AMLogging.log(
             "ImportFlowView: begin coordinator import source=\(source) file=\(url.lastPathComponent) hint=\(String(describing: hint))",
             component: "Import"
         )
@@ -703,7 +703,7 @@ struct ImportFlowView: View {
             }
             .onReceive(vm.$staged) { (staged: StagedImport?) in
                 if let staged {
-                    AMLogging.always("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
+                    AMLogging.log("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
                     externalImportActive = false
                 } else {
                     AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
@@ -1047,7 +1047,7 @@ struct ImportFlowView: View {
         }
         .onReceive(vm.$staged) { (staged: StagedImport?) in
             if let staged {
-                AMLogging.always("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
+                AMLogging.log("ImportFlowView: staged import ready — \(stagedLabelSummary(staged))", component: "Import")
                 externalImportActive = false
             } else {
                 AMLogging.log("ImportFlowView: staged import cleared", component: "Import")
