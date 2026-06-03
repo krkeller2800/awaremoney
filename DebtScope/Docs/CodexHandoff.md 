@@ -1,0 +1,41 @@
+# Codex Handoff
+
+## Current Focus
+- Import review reconciliation was simplified for parsed PDF statements.
+- PDF transactions are only saved when statement math verifies against beginning and ending balances.
+- If PDF transaction math cannot be verified or does not match, DebtScope saves the balance snapshot only.
+- Structured transaction files remain the recommended path for transaction history.
+
+## Files Changed
+- `DebtScope/View/Import/ReviewImportView.swift`
+- `DebtScope/View/Import/StatementCheckSheet.swift`
+
+## ReviewImportView Notes
+- `currentStatementCheckResult` computes PDF-only reconciliation review state.
+- `statementCheckSnapshotOnlyMessage` shows the orange import-review row.
+- The orange row is a single tappable line:
+  `Balances only will be saved. Import CSV/QIF/etc for transactions. Tap to view reconciliation.`
+- Tapping the orange row sets `statementCheckDetailsResult` and opens the reconciliation sheet.
+- The reconciliation sheet uses item-based presentation instead of a boolean, preventing blank presentations.
+- The reconciliation sheet now presents with `.large` only.
+- `applyDefaultStatementCheckRulesIfNeeded(to:)` excludes all PDF transactions when reconciliation fails or cannot verify, then continues saving the snapshot.
+- QFX/OFX/QBO/QIF/CSV/Excel/ZIP transaction imports are not blocked by this PDF rule.
+
+## StatementCheckSheet Notes
+- `StatementCheckSheet` supports `isReadOnly`.
+- In read-only mode, action buttons are hidden.
+- The title is `Statement totals do not match` for arithmetic mismatches.
+- The mismatch message explains that DebtScope saved the snapshot only because transactions did not match statement balances.
+- The unverifiable message explains that the statement lacked enough balance data to verify transactions.
+- Both read-only messages include supported transaction import types:
+  CSV, OFX/QFX/QBO, QIF, Excel (XLSX/XLS), or ZIP.
+- Read-only mismatch details use the section title `Reconciliation Details`.
+
+## Validation
+- Xcode live diagnostics were clean for `ReviewImportView.swift` and `StatementCheckSheet.swift`.
+- Full Xcode project build completed successfully after the changes.
+
+## Follow-Up Checks
+- Manually test a PDF with matching totals: green success row should appear and transactions should save.
+- Manually test a PDF with mismatched totals: orange row should appear, reconciliation sheet should open full-size, and only snapshots should save.
+- Manually test a structured file import: transactions should still save through the existing flow.
