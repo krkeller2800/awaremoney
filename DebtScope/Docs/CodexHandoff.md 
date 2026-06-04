@@ -1,27 +1,31 @@
 # Codex Handoff
 
 ## Current Focus
-- Income & Bills UI work from this conversation is complete.
-- User validated the final Frequency/Day of Month pencil behavior with "perfect".
+- Backup/restore transaction persistence issue is fixed.
+- Root cause was `BackupImporter` intentionally skipping `backup.transactions` during restore while `BackupExporter` already wrote them into the manifest.
 
 ## Completed Changes
-- `DebtScope/Debt/Income & Bills/IncomeAndBillsView.swift`
-  - Income list subtitles now prefer `CashFlowItem.ssaWednesday` before legacy `[SSA_WED]` note tokens.
-  - SSA income displays as `Social Security • 2nd/3rd/4th Wednesday` instead of falling back to `Monthly • Day 1`.
-  - Add/edit bill Frequency and Day of Month pencil controls now use compact `Menu` popovers with direct choices.
-- `DebtScope/View/CashFlowItemEditorView.swift`
-  - Edit bill Frequency and Day of Month pencil controls now use compact `Menu` popovers with direct choices.
-  - Prior attempted inline-expanding picker behavior was reverted.
+- `DebtScope/Backup/BackupImporter.swift`
+  - Added transaction insert/update counts to `BackupImportSummary`.
+  - Preloads existing `Transaction` records by `id`.
+  - Restores transactions with upsert behavior after accounts and import batches are available.
+  - Reattaches restored transactions to their account and import batch relationships.
+  - Preserves transaction fields: date, amount, payee, memo, kind, hash key, excluded/user-edited/user-modified flags, import hash, original amount/date, symbol, and quantity.
+  - No longer marks transactions as skipped.
+- `DebtScope/Backup/BackupExporter.swift`
+  - Exports `tx.kind.rawValue` directly instead of reflecting a non-existent `kindRaw` stored property.
+- `DebtScope/Backup/BackupOpenHandler.swift`
+  - Restore summary now reports transaction inserted/updated counts.
+- `DebtScope/Backup/BackupRestoreView.swift`
+  - Restore summary now reports transaction inserted/updated counts.
 
 ## Validation
-- Live diagnostics were clean for `IncomeAndBillsView.swift` and `CashFlowItemEditorView.swift`.
-- Full Xcode project build succeeded after the final changes.
-- User confirmed the final pencil/menu behavior is correct.
+- Live diagnostics were clean for `BackupExporter.swift`, `BackupOpenHandler.swift`, and `BackupRestoreView.swift`.
+- Xcode could not retrieve live diagnostics for `BackupImporter.swift`, but the full Xcode project build succeeded.
 
-## Paused Background Context
-- Import spinner investigation remains unresolved and paused.
-- If that work resumes, start from the two supported import entry points: QuickStart import button and iOS document-open handling.
-- Avoid speculative spinner changes until the actual active SwiftUI host for those flows is confirmed.
+## Known Remaining Behavior
+- Existing backups made before the exporter kind fix can still restore transactions; missing `kindRaw` values default to `.bank`.
+- Holdings remain skipped during restore, matching prior behavior.
 
 ## Recommended Next Step
-- Commit the completed Income & Bills changes.
+- Commit the backup/restore transaction fix.

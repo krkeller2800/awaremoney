@@ -299,7 +299,7 @@ enum BackupExporter {
                 amount: tx.amount,
                 payee: tx.payee,
                 memo: tx.memo,
-                kindRaw: Self.reflectValue(tx, key: "kindRaw", as: String.self), // best-effort if available, safe via reflection
+                kindRaw: tx.kind.rawValue,
                 isExcluded: tx.isExcluded,
                 isUserEdited: Self.reflectValue(tx, key: "isUserEdited", as: Bool.self),
                 isUserModified: tx.isUserModified,

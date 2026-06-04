@@ -145,6 +145,7 @@ struct BackupRestoreView: View {
         parts.append("CSV Mappings: +\(s.csvMappingsInserted), \(s.csvMappingsUpdated) updated")
         parts.append("Cash Flow Items: +\(s.cashFlowsInserted), \(s.cashFlowsUpdated) updated")
         parts.append("Links: +\(s.linksInserted), \(s.linksUpdated) updated")
+        parts.append("Transactions: +\(s.transactionsInserted), \(s.transactionsUpdated) updated")
         if s.transactionsSkipped > 0 { parts.append("Transactions skipped: \(s.transactionsSkipped)") }
         if s.holdingsSkipped > 0 { parts.append("Holdings skipped: \(s.holdingsSkipped)") }
         return parts.joined(separator: "\n")

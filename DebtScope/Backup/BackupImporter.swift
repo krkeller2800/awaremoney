@@ -45,6 +45,8 @@ struct BackupImportSummary: Sendable {
     var billFundingAllocationsUpdated = 0
     var linksInserted = 0
     var linksUpdated = 0
+    var transactionsInserted = 0
+    var transactionsUpdated = 0
     var transactionsSkipped = 0
     var holdingsSkipped = 0
 }
@@ -187,6 +189,12 @@ enum BackupImporter {
             return Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
         }()
         var balanceMap = existingBalances
+
+        let existingTransactions: [UUID: Transaction] = {
+            let all = (try? context.fetch(FetchDescriptor<Transaction>())) ?? []
+            return Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        }()
+        var transactionMap = existingTransactions
 
         let existingMappings: [UUID: CSVColumnMapping] = {
             let all = (try? context.fetch(FetchDescriptor<CSVColumnMapping>())) ?? []
@@ -401,6 +409,56 @@ enum BackupImporter {
             }
         }
 
+        // Transactions (upsert)
+        for dto in backup.transactions {
+            let acct = dto.accountID.flatMap { accountMap[$0] }
+            let batch = dto.importBatchID.flatMap { batchMap[$0] }
+            let kind = dto.kindRaw.flatMap(Transaction.Kind.init(rawValue:)) ?? .bank
+
+            if let existing = transactionMap[dto.id] {
+                existing.datePosted = dto.datePosted
+                existing.amount = dto.amount
+                existing.payee = dto.payee
+                existing.memo = dto.memo
+                existing.kind = kind
+                existing.hashKey = dto.hashKey
+                existing.account = acct
+                existing.importBatch = batch
+                existing.isExcluded = dto.isExcluded
+                existing.isUserEdited = dto.isUserEdited ?? false
+                existing.isUserModified = dto.isUserModified
+                existing.importHashKey = dto.importHashKey
+                existing.originalAmount = dto.originalAmount
+                existing.originalDate = dto.originalDate
+                existing.symbol = dto.symbol
+                existing.quantity = dto.quantity
+                summary.transactionsUpdated += 1
+            } else {
+                let tx = Transaction(
+                    id: dto.id,
+                    datePosted: dto.datePosted,
+                    amount: dto.amount,
+                    payee: dto.payee,
+                    memo: dto.memo,
+                    kind: kind,
+                    hashKey: dto.hashKey,
+                    symbol: dto.symbol,
+                    quantity: dto.quantity,
+                    account: acct,
+                    importBatch: batch,
+                    isUserEdited: dto.isUserEdited ?? false,
+                    isExcluded: dto.isExcluded,
+                    isUserModified: dto.isUserModified,
+                    importHashKey: dto.importHashKey,
+                    originalAmount: dto.originalAmount,
+                    originalDate: dto.originalDate
+                )
+                context.insert(tx)
+                transactionMap[dto.id] = tx
+                summary.transactionsInserted += 1
+            }
+        }
+
         // Asset-Liability Links (upsert by asset+liability)
         do {
             let allLinks = try context.fetch(FetchDescriptor<AssetLiabilityLink>())
@@ -420,8 +478,7 @@ enum BackupImporter {
             // Ignore link import errors silently
         }
 
-        // Transactions & Holdings are currently skipped to avoid initializer mismatches.
-        summary.transactionsSkipped = backup.transactions.count
+        // Holdings are currently skipped to avoid initializer mismatches.
         summary.holdingsSkipped = backup.holdingSnapshots.count
 
         try context.save()
