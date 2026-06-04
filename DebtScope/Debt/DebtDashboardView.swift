@@ -142,7 +142,7 @@ struct DebtDashboardView: View {
                 oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
                 discretionaryReserveAmount: debtDiscretionaryReserveAmount
             ), avail > 0 {
-                return " • Adj Budget: \(formatAmount(avail))"
+                return " • Debt Budget: \(formatAmount(avail))"
             }
             return ""
         }()
@@ -887,7 +887,7 @@ struct DebtDetailView: View {
                 oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
                 discretionaryReserveAmount: debtDiscretionaryReserveAmount
             ), avail > 0 {
-                return " • Adj Budget: \(formatAmount(avail))"
+                return " • Debt Budget: \(formatAmount(avail))"
             }
             return ""
         }()

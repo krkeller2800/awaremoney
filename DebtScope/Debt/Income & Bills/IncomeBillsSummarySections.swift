@@ -92,7 +92,7 @@ struct IncomeBillsSummarySections: View {
             if isPad {
                 Section {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                        metricCard(title: "Net for Debt", value: formatCurrency(monthlyNetForDebt), valueColor: monthlyNetForDebt < 0 ? .red : .primary)
+                        metricCard(title: "Recurring Cash After Bills", value: formatCurrency(monthlyNetForDebt), valueColor: monthlyNetForDebt < 0 ? .red : .primary)
                         metricCard(title: "Income", value: formatCurrency(monthlyIncomeTotal))
                         metricCard(title: "Bills", value: formatCurrency(monthlyBillsTotal))
                         if reserveSeedingThisMonthTotal() > 0 {
@@ -135,7 +135,7 @@ struct IncomeBillsSummarySections: View {
                     if reserveSeedingThisMonthTotal() > 0 {
                         LabeledContent("Reserve Seeding (This Month)") { Text(formatCurrency(reserveSeedingThisMonthTotal())) }
                     }
-                    LabeledContent("Net for Debt") { Text(formatCurrency(monthlyNetForDebt)) }
+                    LabeledContent("Recurring Cash After Bills") { Text(formatCurrency(monthlyNetForDebt)) }
                         .foregroundStyle(monthlyNetForDebt < 0 ? .red : .primary)
 
                     if monthlyIncomeTotal > 0 {

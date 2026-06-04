@@ -106,10 +106,10 @@ final class PayoffPlanProvider {
         var budgetText = ""
         if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
             if let formatted = currency(Decimal(debtBudgetOverrideAmount), code: settings.currencyCode) {
-                budgetText = " • Adj Budget: \(formatted)"
+                budgetText = " • Debt Budget: \(formatted)"
             }
         } else if discretionaryReserveAmount > 0, let formatted = currency(PlanBudgetDisplay.discretionaryReserve(from: discretionaryReserveAmount), code: settings.currencyCode) {
-            budgetText = " • Reserve: \(formatted)"
+            budgetText = " • Hold Back: \(formatted)"
         }
         return "Start now • \(strategyText)\(budgetText)"
     }

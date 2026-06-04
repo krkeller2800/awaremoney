@@ -158,14 +158,14 @@ struct DebtAmortizationScheduleView: View {
     @ViewBuilder
     private func scheduleDetailRows(for row: DebtAmortizationMonthRow) -> some View {
         amountRow("Available Cash", row.availableCash)
-        amountRow("Discretionary Reserve Target", row.discretionaryReserve)
-        amountRow("Available For Debt", row.availableForDebt)
+        amountRow("Hold Back Cash", row.discretionaryReserve)
+        amountRow("Debt Budget", row.availableForDebt)
         amountRow("Total Debt Payment", row.totalDebtPayment)
         amountRow("Interest", row.interest)
         amountRow("Ending Debt Balance", row.endingDebtBalance)
-        amountRow("Discretionary Remaining", row.discretionaryRemaining)
+        amountRow("Cash Left After Debt", row.discretionaryRemaining)
         if row.belowReserveTarget > 0 {
-            amountRow("Below Reserve Target", row.belowReserveTarget, color: .orange)
+            amountRow("Below Holdback Target", row.belowReserveTarget, color: .orange)
         }
     }
 
