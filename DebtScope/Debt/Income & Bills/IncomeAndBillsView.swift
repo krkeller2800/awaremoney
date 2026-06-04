@@ -533,13 +533,17 @@ struct IncomeAndBillsView: View {
 
     private func subtitle(for item: CashFlowItem) -> String {
         var parts: [String] = []
-        parts.append(label(for: item.frequency))
-        if let ssa = extractSSAWednesday(from: item.notes) {
+        if let ssa = ssaWednesday(for: item) {
+            parts.append("Social Security")
             parts.append("\(ordinal(ssa)) Wednesday")
         } else if let date = item.firstPaymentDate {
+            parts.append(label(for: item.frequency))
             parts.append(date.formatted(date: .abbreviated, time: .omitted))
         } else if let d = item.dayOfMonth {
+            parts.append(label(for: item.frequency))
             parts.append("Day \(d)")
+        } else {
+            parts.append(label(for: item.frequency))
         }
         return parts.joined(separator: " • ")
     }
@@ -581,6 +585,13 @@ struct IncomeAndBillsView: View {
             }
         }
         return nil
+    }
+
+    private func ssaWednesday(for item: CashFlowItem) -> Int? {
+        if let ssaWednesday = item.ssaWednesday, (2...4).contains(ssaWednesday) {
+            return ssaWednesday
+        }
+        return extractSSAWednesday(from: item.notes)
     }
 
     private func ordinal(_ n: Int) -> String {
@@ -801,10 +812,16 @@ private struct AddCashFlowItemView: View {
                             if initialKind != .income {
                                 Spacer(minLength: 8)
 
-                                Button(action: {
-                                    dismissKeyboardOnly()
-                                    showFrequencyPicker = true
-                                }) {
+                                Menu {
+                                    Button("Monthly") { frequency = .monthly }
+                                    Button("Twice per month") { frequency = .semimonthly }
+                                    Button("Every 2 weeks") { frequency = .biweekly }
+                                    Button("Weekly") { frequency = .weekly }
+                                    Button("Yearly") { frequency = .yearly }
+                                    Button("Quarterly") { frequency = .quarterly }
+                                    Button("Semiannual") { frequency = .semiAnnual }
+                                    Button("One-time") { frequency = .oneTime }
+                                } label: {
                                     Image(systemName: "pencil").imageScale(.small)
                                 }
                                 .buttonStyle(.plain)
@@ -837,10 +854,12 @@ private struct AddCashFlowItemView: View {
                                     if initialKind != .income {
                                         Spacer(minLength: 8)
 
-                                        Button(action: {
-                                            dismissKeyboardOnly()
-                                            showDayOfMonthPicker = true
-                                        }) {
+                                        Menu {
+                                            Button("None") { dayOfMonth = nil }
+                                            ForEach(1...31, id: \.self) { d in
+                                                Button("\(d)") { dayOfMonth = d }
+                                            }
+                                        } label: {
                                             Image(systemName: "pencil").imageScale(.small)
                                         }
                                         .buttonStyle(.plain)
@@ -1270,10 +1289,16 @@ private struct EditCashFlowItemView: View {
 
                             if !isIncome {
                                 Spacer(minLength: 8)
-                                Button(action: {
-                                    dismissKeyboardOnly()
-                                    showFrequencyPicker = true
-                                }) {
+                                Menu {
+                                    Button("Monthly") { frequency = .monthly }
+                                    Button("Twice per month") { frequency = .semimonthly }
+                                    Button("Every 2 weeks") { frequency = .biweekly }
+                                    Button("Weekly") { frequency = .weekly }
+                                    Button("Yearly") { frequency = .yearly }
+                                    Button("Quarterly") { frequency = .quarterly }
+                                    Button("Semiannual") { frequency = .semiAnnual }
+                                    Button("One-time") { frequency = .oneTime }
+                                } label: {
                                     Image(systemName: "pencil").imageScale(.small)
                                 }
                                 .buttonStyle(.plain)
@@ -1305,10 +1330,12 @@ private struct EditCashFlowItemView: View {
 
                                     if !isIncome {
                                         Spacer(minLength: 8)
-                                        Button(action: {
-                                            dismissKeyboardOnly()
-                                            showDayOfMonthPicker = true
-                                        }) {
+                                        Menu {
+                                            Button("None") { dayOfMonth = nil }
+                                            ForEach(1...31, id: \.self) { d in
+                                                Button("\(d)") { dayOfMonth = d }
+                                            }
+                                        } label: {
                                             Image(systemName: "pencil").imageScale(.small)
                                         }
                                         .buttonStyle(.plain)

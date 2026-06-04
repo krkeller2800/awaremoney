@@ -1823,7 +1823,10 @@ struct DebtPayoffDetailView: View {
 
         let routedURL = stageURLToCaches(url)
         self.lastImportedURL = routedURL
+        detectionSheetModel = nil
+        isPreparingDetectionReview = false
         Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
             if let fallbackAccountType {
                 vm.newAccountType = fallbackAccountType
             }
@@ -1838,7 +1841,6 @@ struct DebtPayoffDetailView: View {
                 aprScale: fallbackAPRScale
             )
             applyDetectedAccountSelections(selectedDetectedAccounts)
-            detectionSheetModel = nil
         }
     }
 
@@ -2122,14 +2124,14 @@ struct DebtPayoffDetailView: View {
         }
     }
 
-    // Binding that shows the sheet whenever vm.staged or vm.mappingSession is non-nil and clears state on dismissal
+    // Binding that shows the sheet while an import is running or ready for review.
     private var isImportSheetPresented: Binding<Bool> {
         Binding(get: {
             !isPreparingDetectionReview &&
             detectionSheetModel == nil &&
-            (vm.staged != nil || vm.mappingSession != nil)
+            (vm.isImporting || vm.staged != nil || vm.mappingSession != nil)
         }, set: { presented in
-            if !presented {
+            if !presented && !vm.isImporting {
                 // Seed preview with the last picked local URL if available
                 if let url = vm.lastPickedLocalURL {
                     self.lastImportedURL = url
@@ -2342,6 +2344,7 @@ struct DebtPayoffDetailView: View {
         .sheet(isPresented: isImportSheetPresented) {
             ImportSheetContentView(vm: vm)
                 .environment(\.modelContext, modelContext)
+                .interactiveDismissDisabled(vm.isImporting)
         }
         .sheet(isPresented: $showStatementSheet) {
             statementSheetContent
@@ -2432,4 +2435,3 @@ struct DebtPayoffDetailView: View {
         }
     }
 }
-

@@ -282,10 +282,20 @@ public struct CashFlowItemEditorView: View {
                         ForEach(1...31, id: \.self) { d in Text("\(d)").tag(Optional(d)) }
                     }
                     Spacer(minLength: 8)
-                    Button(action: {
-                        dismissKeyboardOnly()
-                        showDayOfMonthPicker = true
-                    }) {
+                    Menu {
+                        Button("None") {
+                            dayOfMonth = nil
+                            applyChanges()
+                            detectScheduleChangeAndPromptIfNeeded()
+                        }
+                        ForEach(1...31, id: \.self) { d in
+                            Button("\(d)") {
+                                dayOfMonth = d
+                                applyChanges()
+                                detectScheduleChangeAndPromptIfNeeded()
+                            }
+                        }
+                    } label: {
                         Image(systemName: "pencil").imageScale(.small)
                     }
                     .buttonStyle(.plain)
@@ -654,10 +664,16 @@ public struct CashFlowItemEditorView: View {
                         Text("One-time").tag(PaymentFrequency.oneTime)
                     }
                     Spacer(minLength: 8)
-                    Button(action: {
-                        dismissKeyboardOnly()
-                        showFrequencyPicker = true
-                    }) {
+                    Menu {
+                        Button("Monthly") { frequency = .monthly }
+                        Button("Twice per month") { frequency = .semimonthly }
+                        Button("Every 2 weeks") { frequency = .biweekly }
+                        Button("Weekly") { frequency = .weekly }
+                        Button("Yearly") { frequency = .yearly }
+                        Button("Quarterly") { frequency = .quarterly }
+                        Button("Semiannual") { frequency = .semiAnnual }
+                        Button("One-time") { frequency = .oneTime }
+                    } label: {
                         Image(systemName: "pencil").imageScale(.small)
                     }
                     .buttonStyle(.plain)

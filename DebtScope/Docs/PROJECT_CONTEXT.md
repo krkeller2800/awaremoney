@@ -69,6 +69,11 @@ Date? = nil @Published private(set) var confidence: Double = 1.0
 
 ## Import Pipeline
 
+The app now has only two supported import entry points:
+  1. Tapping the import button in `QuickStartView`.
+  2. Tapping/opening a statement file on an iOS device where DebtScope is installed.
+Future investigations must start from those two flows and avoid assuming older/legacy import entry points are still user-facing.
+
 Supported types: PDF, CSV, TSV, TXT, XLSX, XLS, ZIP, QFX, OFX, QBO, QIF
 
 Flow: 1. Select file 2. Detect institution/type 3. Parse 4. Route 5.

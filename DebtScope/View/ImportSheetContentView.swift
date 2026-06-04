@@ -39,10 +39,29 @@ struct ImportSheetContentView: View {
                         autoSaveWhenReady: false
                     )
                 }
+            } else if vm.isImporting {
+                ImportProgressSheetView()
             } else {
                 EmptyView()
             }
         }
+    }
+}
+
+struct ImportProgressSheetView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.large)
+
+            Text("Importing...")
+                .font(.headline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Importing")
     }
 }
 
