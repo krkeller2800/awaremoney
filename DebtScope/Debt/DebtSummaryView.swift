@@ -1701,6 +1701,15 @@ struct DebtPlanSheetView: View {
                         .onChange(of: tempDebtPaymentReinvestmentRate) { _, _ in
                             autoApplyEmbeddedPlanIfPossible()
                         }
+                    
+                    let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                    let preview = previewPlanForTempSettings(startMonth: startMonth)
+                    if let impact = nextPayoffImpact(for: preview ?? currentPlan, startMonth: startMonth),
+                       impact.discretionaryIncrease > 0 {
+                        Text("Est. monthly increase to Cash Left After Debt after next payoff: \(formatAmount(impact.discretionaryIncrease))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .disabled(reinvestmentControlDisabled)
                 .opacity(reinvestmentControlDisabled ? 0.45 : 1)
@@ -1910,6 +1919,15 @@ struct DebtPlanSheetView: View {
                                     .onChange(of: tempDebtPaymentReinvestmentRate) { _, _ in
                                         autoApplyEmbeddedPlanIfPossible()
                                     }
+                                
+                                let startMonth = normalizeToMonth(tempPlanMode == .projectedAtDate ? tempPlanDate : Date())
+                                let preview = previewPlanForTempSettings(startMonth: startMonth)
+                                if let impact = nextPayoffImpact(for: preview ?? currentPlan, startMonth: startMonth),
+                                   impact.discretionaryIncrease > 0 {
+                                    Text("Est. monthly cash increase after next payoff: \(formatAmount(impact.discretionaryIncrease))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .disabled(tempStrategy == .minimumsOnly || tempBaselineBudgetSourceRaw == "recurringNet")
                             .opacity((tempStrategy == .minimumsOnly || tempBaselineBudgetSourceRaw == "recurringNet") ? 0.45 : 1)
