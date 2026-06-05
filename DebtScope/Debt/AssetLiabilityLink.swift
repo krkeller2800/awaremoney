@@ -7,6 +7,8 @@ import Foundation
     
     // Relationship to the liability account
     var liability: Account
+    var assetID: UUID?
+    var liabilityID: UUID?
     
     // The date when the link starts
     var startDate: Date
@@ -18,6 +20,8 @@ import Foundation
     init(asset: Account, liability: Account, startDate: Date, endDate: Date? = nil) {
         self.asset = asset
         self.liability = liability
+        self.assetID = asset.id
+        self.liabilityID = liability.id
         self.startDate = startDate
         self.endDate = endDate
     }

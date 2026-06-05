@@ -27,6 +27,8 @@ struct AccountDetailView: View {
     @State private var cachedDerivedBalance: Decimal? = nil
     @State private var cachedEarliestTransactionDate: Date? = nil
     @State private var showDeleteAlert = false
+    @State private var manualAssetValueDraft: String = ""
+    @State private var manualAssetValueDraftAccountID: UUID? = nil
 
     @Query(filter: #Predicate<Account> { $0.typeRaw == "loan" }, sort: [SortDescriptor(\Account.name, order: .forward)]) private var liabilityAccounts: [Account]
 
@@ -42,6 +44,7 @@ struct AccountDetailView: View {
     private enum Field: Hashable {
         case institution
         case paymentAmount
+        case assetValue
     }
 
     private var isEditing: Bool { focusedField != nil }
@@ -146,17 +149,23 @@ struct AccountDetailView: View {
             }
         }
         .task(id: accountID) {
-            AMLogging.log("AccountDetailView task(id:) skipped relationship refresh for accountID=\(accountID)", component: "AccountDetailView")
+            await recomputeAccountDerivedData(accountID: accountID)
+            loadAssetLiabilityLink(assetID: accountID)
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            AMLogging.log("AccountDetailView received transactionsDidChange for accountID=\(accountID); relationship refresh skipped", component: "AccountDetailView")
+            Task {
+                await recomputeAccountDerivedData(accountID: accountID)
+            }
         }
         .onAppear {
             AMLogging.log("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
         }
         .onChange(of: focusedField) { _, newValue in
             guard let field = newValue else { return }
-            if field == .institution || field == .paymentAmount {
+            if field == .assetValue, let account {
+                prepareManualAssetValueDraft(for: account)
+            }
+            if field == .institution || field == .paymentAmount || field == .assetValue {
                 selectAllInFirstResponder()
             }
         }
@@ -262,7 +271,7 @@ struct AccountDetailView: View {
                         if suppressLinkOnChange { return }
                         // If the selection becomes nil because the currently linked account isn't in the available options (e.g., filtered out),
                         // don't delete the existing link.
-                        if newVal == nil, let active = activeAssetLink, !liabilityAccounts.contains(where: { $0.id == active.liability.id }) {
+                        if newVal == nil, let activeLiabilityID = activeAssetLink?.liabilityID, !liabilityAccounts.contains(where: { $0.id == activeLiabilityID }) {
                             return
                         }
                         updateAssetLiabilityLink(for: account, to: newVal)
@@ -390,6 +399,29 @@ struct AccountDetailView: View {
             }
 
             Section(header: GroupedSectionHeader("Balance Info")) {
+                if account.isManualAsset {
+                    LabeledContent("Asset Value") {
+                        HStack(spacing: 6) {
+                            TextField("0.00", text: manualAssetValueBinding(for: account))
+                                .multilineTextAlignment(.trailing)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .assetValue)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+
+                            Button {
+                                focusedField = .assetValue
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .foregroundStyle(.secondary)
+                                    .imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit asset value")
+                        }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text("Transactional Balance")
@@ -466,7 +498,7 @@ struct AccountDetailView: View {
         .padding(.horizontal, isRegularWidth ? 0 : 16)
         .frame(maxWidth: .infinity, alignment: .center)
         .overlay(alignment: .topTrailing) {
-            if !isRegularWidth {
+            if !isRegularWidth && !account.isManualAsset {
                 NavigationLink {
                     AccountTransactionsListView(accountID: account.id)
                 } label: {
@@ -700,10 +732,72 @@ struct AccountDetailView: View {
         )
     }
 
+    private func manualAssetValueBinding(for account: Account) -> Binding<String> {
+        Binding(
+            get: {
+                if focusedField == .assetValue, manualAssetValueDraftAccountID == account.id {
+                    return manualAssetValueDraft
+                }
+                guard let balance = lastBalanceSnapshot(for: account)?.balance else { return "" }
+                return formatAmountForInput(balance)
+            },
+            set: { newValue in
+                manualAssetValueDraft = newValue
+                manualAssetValueDraftAccountID = account.id
+
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let parsed = parseCurrencyInput(trimmed) else {
+                    if trimmed.isEmpty, let snapshot = lastBalanceSnapshot(for: account) {
+                        snapshot.balance = .zero
+                        snapshot.accountID = account.id
+                        snapshot.isUserModified = true
+                        cachedDerivedBalance = .zero
+                        try? modelContext.save()
+                        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                    }
+                    return
+                }
+
+                if let snapshot = lastBalanceSnapshot(for: account) {
+                    snapshot.balance = parsed
+                    snapshot.accountID = account.id
+                    snapshot.isUserModified = true
+                } else {
+                    let snapshot = BalanceSnapshot(
+                        asOfDate: .now,
+                        balance: parsed,
+                        account: account,
+                        isUserCreated: true,
+                        isUserModified: true
+                    )
+                    modelContext.insert(snapshot)
+                    account.balanceSnapshots.append(snapshot)
+                }
+
+                cachedDerivedBalance = parsed
+                try? modelContext.save()
+                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+            }
+        )
+    }
+
+    private func prepareManualAssetValueDraft(for account: Account) {
+        guard manualAssetValueDraftAccountID != account.id else { return }
+        manualAssetValueDraft = lastBalanceSnapshot(for: account).map { editableDecimalString($0.balance) } ?? ""
+        manualAssetValueDraftAccountID = account.id
+    }
+
+    private func editableDecimalString(_ amount: Decimal) -> String {
+        NSDecimalNumber(decimal: amount).stringValue
+    }
+
     private func focusOrder(for account: Account) -> [Field] {
         var arr: [Field] = [.institution]
         if account.type == .loan || account.type == .creditCard {
             arr.append(.paymentAmount)
+        }
+        if account.isManualAsset {
+            arr.append(.assetValue)
         }
         return arr
     }
@@ -821,7 +915,7 @@ struct AccountDetailView: View {
     }
 
     private func fetchEarliestTransactionDate(in context: ModelContext, accountID: UUID) async throws -> Date? {
-        let predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID }
+        let predicate = #Predicate<Transaction> { tx in tx.accountID == accountID }
         var descriptor = FetchDescriptor<Transaction>(predicate: predicate)
         descriptor.sortBy = [SortDescriptor(\Transaction.datePosted, order: .forward)]
         descriptor.fetchLimit = 1
@@ -830,7 +924,7 @@ struct AccountDetailView: View {
     }
 
     private func fetchLatestBalanceSnapshotData(in context: ModelContext, accountID: UUID) throws -> (balance: Decimal?, asOfDate: Date?) {
-        let predicate = #Predicate<BalanceSnapshot> { snapshot in snapshot.account?.id == accountID }
+        let predicate = #Predicate<BalanceSnapshot> { snapshot in snapshot.accountID == accountID }
         var descriptor = FetchDescriptor<BalanceSnapshot>(predicate: predicate)
         descriptor.sortBy = [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]
         descriptor.fetchLimit = 1
@@ -845,9 +939,9 @@ struct AccountDetailView: View {
         let snapshotDateForLog = since
         if let sinceDate = since {
             let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: sinceDate)) ?? sinceDate
-            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID && tx.datePosted >= nextDay }
+            predicate = #Predicate<Transaction> { tx in tx.accountID == accountID && tx.datePosted >= nextDay }
         } else {
-            predicate = #Predicate<Transaction> { tx in tx.account?.id == accountID }
+            predicate = #Predicate<Transaction> { tx in tx.accountID == accountID }
         }
         let descriptor = FetchDescriptor<Transaction>(predicate: predicate)
         let results = try context.fetch(descriptor)
@@ -874,12 +968,12 @@ struct AccountDetailView: View {
         defer { suppressLinkOnChange = false }
         do {
             let pred = #Predicate<AssetLiabilityLink> { link in
-                link.asset.id == assetID && link.endDate == nil
+                link.assetID == assetID && link.endDate == nil
             }
             let desc = FetchDescriptor<AssetLiabilityLink>(predicate: pred)
             if let link = try modelContext.fetch(desc).first {
                 self.activeAssetLink = link
-                self.linkedLiabilityID = link.liability.id
+                self.linkedLiabilityID = link.liabilityID
             } else {
                 self.activeAssetLink = nil
                 self.linkedLiabilityID = nil
@@ -894,14 +988,14 @@ struct AccountDetailView: View {
         // Fetch any existing active links for this asset
 
         // No-op if selection hasn't changed
-        if (self.activeAssetLink == nil && newLiabilityID == nil) || (self.activeAssetLink?.liability.id == newLiabilityID) {
+        if (self.activeAssetLink == nil && newLiabilityID == nil) || (self.activeAssetLink?.liabilityID == newLiabilityID) {
             return
         }
 
         do {
             let assetID = asset.id
             let pred = #Predicate<AssetLiabilityLink> { link in
-                link.asset.id == assetID && link.endDate == nil
+                link.assetID == assetID && link.endDate == nil
             }
             let desc = FetchDescriptor<AssetLiabilityLink>(predicate: pred)
             let existing = try modelContext.fetch(desc)

@@ -15,6 +15,7 @@ final class BalanceSnapshot {
     var balance: Decimal
     var interestRateAPR: Decimal?
     var interestRateScale: Int?
+    var accountID: UUID?
 
     // Provenance
     var isUserCreated: Bool = false
@@ -43,6 +44,7 @@ final class BalanceSnapshot {
         self.interestRateAPR = interestRateAPR
         self.interestRateScale = interestRateScale
         self.account = account
+        self.accountID = account?.id
         self.importBatch = importBatch
         self.isUserCreated = isUserCreated
         self.isExcluded = isExcluded

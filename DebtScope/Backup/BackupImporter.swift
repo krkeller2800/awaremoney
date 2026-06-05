@@ -390,6 +390,7 @@ enum BackupImporter {
                 existing.isExcluded = dto.isExcluded
                 existing.isUserModified = dto.isUserModified
                 existing.account = acct
+                existing.accountID = acct?.id
                 existing.importBatch = batch
                 summary.balanceSnapsUpdated += 1
             } else {
@@ -425,6 +426,7 @@ enum BackupImporter {
                 existing.kind = kind
                 existing.hashKey = dto.hashKey
                 existing.account = acct
+                existing.accountID = acct?.id
                 existing.importBatch = batch
                 existing.isExcluded = dto.isExcluded
                 existing.isUserEdited = dto.isUserEdited ?? false
@@ -466,7 +468,9 @@ enum BackupImporter {
             let allLinks = try context.fetch(FetchDescriptor<AssetLiabilityLink>())
             for dto in backup.assetLiabilityLinks {
                 guard let asset = accountMap[dto.assetID], let liability = accountMap[dto.liabilityID] else { continue }
-                if let existing = allLinks.first(where: { $0.asset.id == asset.id && $0.liability.id == liability.id && $0.endDate == nil }) {
+                if let existing = allLinks.first(where: { ($0.assetID ?? $0.asset.id) == asset.id && ($0.liabilityID ?? $0.liability.id) == liability.id && $0.endDate == nil }) {
+                    existing.assetID = asset.id
+                    existing.liabilityID = liability.id
                     existing.startDate = dto.startDate
                     existing.endDate = dto.endDate
                     summary.linksUpdated += 1

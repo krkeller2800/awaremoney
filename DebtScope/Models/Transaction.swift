@@ -28,6 +28,7 @@ final class Transaction {
     var externalId: String? // From statement if available
     var hashKey: String     // For de-duping <= derived from fields
     var linkedTransactionId: UUID?
+    var accountID: UUID?
 
     // Brokerage fields (optional)
     var symbol: String?
@@ -88,6 +89,7 @@ final class Transaction {
         self.price = price
         self.fees = fees
         self.account = account
+        self.accountID = account?.id
         self.importBatch = importBatch
         self.isUserCreated = isUserCreated
         self.isUserEdited = isUserEdited

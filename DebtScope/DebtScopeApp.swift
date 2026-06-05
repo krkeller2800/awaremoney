@@ -61,7 +61,7 @@ struct DebtScopeApp: App {
     }
 
     init() {
-        let schema = Schema(DebtScopeSchemaV2.models)
+        let schema = Schema(DebtScopeSchemaV4.models)
 
         // Ensure Application Support directory exists and build a file URL for the store
         let fm = FileManager.default

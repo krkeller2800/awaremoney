@@ -1658,19 +1658,20 @@ private struct QuickStartAssetsDetailView: View {
         guard asset.supportsLinkedLiability else { return nil }
         let assetID = asset.id
         let predicate = #Predicate<AssetLiabilityLink> { link in
-            link.asset.id == assetID && link.endDate == nil
+            link.assetID == assetID && link.endDate == nil
         }
         let descriptor = FetchDescriptor<AssetLiabilityLink>(predicate: predicate)
         return try? modelContext.fetch(descriptor).first
     }
 
     private func linkedLiability(for asset: Account) -> Account? {
-        activeLink(for: asset)?.liability
+        guard let liabilityID = activeLink(for: asset)?.liabilityID else { return nil }
+        return loanAccounts.first { $0.id == liabilityID }
     }
 
     private func loanBinding(for asset: Account) -> Binding<UUID?> {
         Binding(
-            get: { linkedLiability(for: asset)?.id },
+            get: { activeLink(for: asset)?.liabilityID },
             set: { newValue in
                 updateLoanLink(for: asset, loanID: newValue)
             }
@@ -1683,6 +1684,8 @@ private struct QuickStartAssetsDetailView: View {
         if let existing = activeLink(for: asset) {
             if let loanID, let loan = loanAccounts.first(where: { $0.id == loanID }) {
                 existing.liability = loan
+                existing.liabilityID = loan.id
+                existing.assetID = asset.id
                 existing.endDate = nil
             } else {
                 existing.endDate = Date.now
