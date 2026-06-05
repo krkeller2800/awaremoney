@@ -1116,6 +1116,9 @@ private struct QuickStartAssetsDetailView: View {
 
     @State private var selectedAssetPersistentID: PersistentIdentifier? = nil
     @State private var showAddAssetSheet = false
+    @State private var assetBalanceDraft: String = ""
+    @State private var assetBalanceDraftAccountID: UUID? = nil
+    @State private var assetBalanceDraftField: AssetEditField? = nil
     @FocusState private var focusedAssetField: AssetEditField?
 
     private enum AssetEditField: Hashable {
@@ -1195,7 +1198,10 @@ private struct QuickStartAssetsDetailView: View {
             }
         }
         .onChange(of: focusedAssetField) { _, newValue in
-            guard newValue != nil else { return }
+            guard let newValue else { return }
+            if (newValue == .value || newValue == .balance), let selectedAsset {
+                prepareAssetBalanceDraft(for: selectedAsset, field: newValue)
+            }
             selectFocusedAssetText()
         }
         .task(id: assetAccounts.map(\.persistentModelID)) {
@@ -1373,32 +1379,32 @@ private struct QuickStartAssetsDetailView: View {
                 detailSection("Balance Info") {
                     editableTextRow(
                         "Value",
-                        text: balanceTextBinding(for: asset),
+                        text: balanceTextBinding(for: asset, field: .value),
                         placeholder: "0.00",
-                        keyboardType: .decimalPad,
+                        keyboardType: .numbersAndPunctuation,
                         field: .value
                     )
-                    if let snapshot = latestSnapshot(for: asset) {
-                        editableTextRow(
-                            "Balance",
-                            text: balanceTextBinding(for: asset),
-                            placeholder: "0.00",
-                            keyboardType: .decimalPad,
-                            field: .balance
-                        )
-                        detailRow(
-                            "As Of",
-                            value: snapshot.asOfDate.formatted(date: .abbreviated, time: .omitted)
-                        )
-                    } else {
-                        editableTextRow(
-                            "Balance",
-                            text: balanceTextBinding(for: asset),
-                            placeholder: "0.00",
-                            keyboardType: .decimalPad,
-                            field: .balance
-                        )
-                    }
+//                    if let snapshot = latestSnapshot(for: asset) {
+//                        editableTextRow(
+//                            "Balance",
+//                            text: balanceTextBinding(for: asset, field: .balance),
+//                            placeholder: "0.00",
+//                            keyboardType: .decimalPad,
+//                            field: .balance
+//                        )
+//                        detailRow(
+//                            "As Of",
+//                            value: snapshot.asOfDate.formatted(date: .abbreviated, time: .omitted)
+//                        )
+//                    } else {
+//                        editableTextRow(
+//                            "Balance",
+//                            text: balanceTextBinding(for: asset, field: .balance),
+//                            placeholder: "0.00",
+//                            keyboardType: .decimalPad,
+//                            field: .balance
+//                        )
+//                    }
                 }
 
                 detailSection("Financing") {
@@ -1477,19 +1483,27 @@ private struct QuickStartAssetsDetailView: View {
         )
     }
 
-    private func balanceTextBinding(for account: Account) -> Binding<String> {
+    private func balanceTextBinding(for account: Account, field: AssetEditField) -> Binding<String> {
         Binding(
             get: {
-                if let balance = latestBalance(for: account) {
-                    return formatDecimalForInput(balance)
+                if focusedAssetField == field,
+                   assetBalanceDraftAccountID == account.id,
+                   assetBalanceDraftField == field {
+                    return assetBalanceDraft
                 }
-                return ""
+                guard let balance = latestBalance(for: account) else { return "" }
+                return format(amount: balance)
             },
             set: { newValue in
+                assetBalanceDraft = newValue
+                assetBalanceDraftAccountID = account.id
+                assetBalanceDraftField = field
+
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let parsed = parseDecimalInput(trimmed) else {
                     if trimmed.isEmpty, let snapshot = latestSnapshot(for: account) {
                         snapshot.balance = .zero
+                        snapshot.accountID = account.id
                         snapshot.isUserModified = true
                         saveModelContext()
                     }
@@ -1498,6 +1512,7 @@ private struct QuickStartAssetsDetailView: View {
 
                 if let snapshot = latestSnapshot(for: account) {
                     snapshot.balance = parsed
+                    snapshot.accountID = account.id
                     snapshot.isUserModified = true
                 } else {
                     let snapshot = BalanceSnapshot(
@@ -1513,6 +1528,13 @@ private struct QuickStartAssetsDetailView: View {
                 saveModelContext()
             }
         )
+    }
+
+    private func prepareAssetBalanceDraft(for account: Account, field: AssetEditField) {
+        guard assetBalanceDraftAccountID != account.id || assetBalanceDraftField != field else { return }
+        assetBalanceDraft = latestBalance(for: account).map { formatDecimalForInput($0) } ?? ""
+        assetBalanceDraftAccountID = account.id
+        assetBalanceDraftField = field
     }
 
     private func liabilityMagnitude(for liability: Account) -> Decimal {

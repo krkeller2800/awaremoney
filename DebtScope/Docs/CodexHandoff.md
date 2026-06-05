@@ -33,6 +33,7 @@
   - Changed active asset-liability lookup to use `AssetLiabilityLink.assetID`.
   - Changed linked-liability lookup and picker binding to use `liabilityID`.
   - Keeps `assetID`/`liabilityID` synced when changing an existing linked liability.
+  - Fixed iPad/regular-width Quick Start asset `Value` and `Balance` rows so they keep raw editable numeric draft text while focused, then show formatted currency when not focused.
 
 ## Validation
 - Xcode live diagnostics clean for touched files during this checkpoint.
@@ -40,7 +41,10 @@
 - Real iPhone smoke test reported by user:
   - Launch crash is gone.
   - Quick Start asset tap opens the asset detail successfully.
-  - `Asset Value` accepts full numeric entry and shows formatted currency when not editing.
+  - iPhone `Asset Value` accepts full numeric entry and shows formatted currency when not editing.
+- Xcode validation after iPad Quick Start formatting fix:
+  - `QuickStartView.swift` live diagnostics clean.
+  - Full Xcode project build succeeded.
 
 ## Known Constraints / Risks
 - Existing legacy rows may have nil mirror IDs until they are touched/imported or newly created. The current path avoids launch-time backfill because dereferencing invalidated SwiftData relationships at launch caused a fatal real-device crash.
@@ -48,5 +52,5 @@
 - Other screens still contain relationship-backed predicates outside this asset-detail path. This checkpoint only addresses the Quick Start/manual asset and Account Detail path involved in the real-device crash.
 
 ## Recommended Next Step
-- Commit this checkpoint now that launch, Quick Start asset navigation, and manual asset value editing passed real-device smoke testing.
-- After the commit, consider a separate focused pass to replace relationship-backed predicates in other screens with safer scalar-ID lookups where appropriate.
+- Quickly verify on iPad/regular-width Quick Start that asset `Value` and `Balance` rows accept multi-digit editing while focused and show currency formatting after focus leaves.
+- If that passes, commit this checkpoint before broadening scalar-ID cleanup to other screens.
