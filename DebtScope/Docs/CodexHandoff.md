@@ -1,43 +1,24 @@
 # Codex Handoff
 
 ## Current Focus
-- Backup/restore transaction persistence issue is fixed.
-- Root cause was `BackupImporter` intentionally skipping `backup.transactions` during restore while `BackupExporter` already wrote them into the manifest.
-
-## Completed Changes
-- `DebtScope/Backup/BackupImporter.swift`
-  - Added transaction insert/update counts to `BackupImportSummary`.
-  - Preloads existing `Transaction` records by `id`.
-  - Restores transactions with upsert behavior after accounts and import batches are available.
-  - Reattaches restored transactions to their account and import batch relationships.
-  - Preserves transaction fields: date, amount, payee, memo, kind, hash key, excluded/user-edited/user-modified flags, import hash, original amount/date, symbol, and quantity.
-  - No longer marks transactions as skipped.
-- `DebtScope/Backup/BackupExporter.swift`
-  - Exports `tx.kind.rawValue` directly instead of reflecting a non-existent `kindRaw` stored property.
-- `DebtScope/Backup/BackupOpenHandler.swift`
-  - Restore summary now reports transaction inserted/updated counts.
-- `DebtScope/Backup/BackupRestoreView.swift`
-  - Restore summary now reports transaction inserted/updated counts.
-
-## Validation
-- Live diagnostics were clean for `BackupExporter.swift`, `BackupOpenHandler.swift`, and `BackupRestoreView.swift`.
-- Xcode could not retrieve live diagnostics for `BackupImporter.swift`, but the full Xcode project build succeeded.
-
-## Known Remaining Behavior
-- Existing backups made before the exporter kind fix can still restore transactions; missing `kindRaw` values default to `.bank`.
-- Holdings remain skipped during restore, matching prior behavior.
-
-
-## New Feature: Payoff Impact Preview
-- Added a dynamic preview in `DebtPlanSheetView` that shows the estimated monthly cash increase after the next debt payoff.
-- The calculation is based on the "Reinvest paid-off payments" slider: `Retired Payment * (1 - Reinvestment Rate)`.
-- This helps users visualize the immediate cash flow benefit of lowering the reinvestment rate versus the accelerated payoff of higher reinvestment.
-- Integrated into both the standalone `DebtPlanSheetView` and the embedded version in `DebtSummaryView`.
+- Debt Summary plan settings terminology was simplified around cash available, debt budget, holdback, and cash left after debt.
+- A payoff impact preview was added near the reinvestment slider to estimate cash freed after the next payoff.
 
 ## Completed Changes
 - `DebtScope/Debt/DebtSummaryView.swift`
-  - Added `let startMonth`, `let preview`, and `nextPayoffImpact` logic to the reinvestment slider `VStack`.
-  - Added `Text` view to display "Est. monthly cash increase after next payoff" when impact is greater than 0.
+  - Renamed user-facing plan labels from `Adj Budget`/`Discretionary Reserve`/`Net for Debt` toward `Debt Budget`, `Hold Back Cash`, `Cash Left After Debt`, and `Recurring Cash After Bills`.
+  - Reworked plan setting rows to avoid label truncation and dim only non-editable value fields.
+  - Added payoff impact preview text near the reinvestment slider in both embedded and sheet plan editors.
+  - Updated payoff impact preview to use the prior recurring payment before payoff, falling back to configured minimum/payment for first-month payoffs, instead of using the final payoff-month lump.
+- `DebtScope/Debt/DebtPayoffEngine.swift`
+  - Updated released-budget reduction in both planner paths to use prior recurring payment, falling back to minimum payment, instead of the payoff-month lump.
+- `DebtScope/Debt/PayoffPlanProvider.swift`, `DebtScope/Debt/DebtDashboardView.swift`, `DebtScope/Debt/DebtAmortizationScheduleView.swift`, and `DebtScope/Debt/Income & Bills/IncomeBillsSummarySections.swift`
+  - Updated related user-facing budget/holdback labels for consistency.
+
+## Validation
+- Live diagnostics were clean for the edited debt summary-related files before the payoff impact calculation fix.
+- After the latest payoff impact calculation fix, run live diagnostics for `DebtSummaryView.swift` and `DebtPayoffEngine.swift`, then run a full Xcode build.
 
 ## Recommended Next Step
-- Commit the backup/restore transaction fix.
+- Validate the latest calculation fix.
+- If clean, commit the debt plan terminology and payoff impact work.

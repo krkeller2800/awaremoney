@@ -276,9 +276,9 @@ public enum DebtPayoffEngine {
                 if oldBal > 0 && newBal == 0 && payoffDates[id] == nil {
                     payoffDates[id] = monthDate
                     payoffOrder.append(id)
-                    let payoffMonthPayment = payments[id] ?? 0
                     let previousPayment = months.last?.payments[id] ?? 0
-                    let retiredPayment = max(payoffMonthPayment, previousPayment).rounded(2)
+                    let minimumPayment = minPayments[id] ?? 0
+                    let retiredPayment = (previousPayment > 0 ? previousPayment : minimumPayment).rounded(2)
                     releasedBudgetReduction += (retiredPayment * (1 - clampedReinvestmentRate)).rounded(2)
                 }
             }
@@ -544,9 +544,9 @@ public enum DebtPayoffEngine {
                 if oldBal > 0 && newBal == 0 && payoffDates[id] == nil {
                     payoffDates[id] = monthDate
                     payoffOrder.append(id)
-                    let payoffMonthPayment = payments[id] ?? 0
                     let previousPayment = months.last?.payments[id] ?? 0
-                    let retiredPayment = max(payoffMonthPayment, previousPayment).rounded(2)
+                    let minimumPayment = minPayments[id] ?? 0
+                    let retiredPayment = (previousPayment > 0 ? previousPayment : minimumPayment).rounded(2)
                     releasedBudgetReduction += (retiredPayment * (1 - clampedReinvestmentRate)).rounded(2)
                 }
             }

@@ -1564,7 +1564,7 @@ struct DebtPlanSheetView: View {
                 title: discretionaryReserveFieldIsEditable ? "Hold Back Cash" : "Cash Left After Debt",
                 hint: discretionaryReserveFieldIsEditable
                     ? "Reduces the cash sent to debt payoff"
-                    : "Amount left after debt"
+                    : "Amount left after monthly bills and debt payments"
             )
             .layoutPriority(1)
 
@@ -2487,12 +2487,17 @@ struct DebtPlanSheetView: View {
             .map(\.key)
         let paidOffAccounts = accounts.filter { paidOffAccountIDs.contains($0.id) }
         let payoffMonthIndex = plan.months.firstIndex { calendar.isDate($0.date, equalTo: nextPayoffMonth, toGranularity: .month) }
+        let paidOffAccountsByID = Dictionary(uniqueKeysWithValues: paidOffAccounts.map { ($0.id, $0) })
         let releasedPayments = paidOffAccountIDs.reduce(Decimal(0)) { total, accountID in
-            let payoffMonthPayment = payoffMonthIndex.map { plan.months[$0].payments[accountID] ?? 0 } ?? 0
             let previousPayment = payoffMonthIndex.flatMap { index in
                 index > 0 ? plan.months[index - 1].payments[accountID] : nil
             } ?? 0
-            return total + max(payoffMonthPayment, previousPayment).rounded(2)
+            let fallbackPayment: Decimal = {
+                guard let account = paidOffAccountsByID[accountID] else { return 0 }
+                return monthlyPayment(for: account, balance: absDecimal(latestBalance(account)))
+            }()
+            let retiredPayment = (previousPayment > 0 ? previousPayment : fallbackPayment).rounded(2)
+            return total + retiredPayment
         }
         let reinvestmentRate = Decimal(tempDebtPaymentReinvestmentRate)
         let discretionaryIncrease = (releasedPayments * (1 - reinvestmentRate)).rounded(2)
