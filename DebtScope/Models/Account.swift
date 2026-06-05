@@ -71,9 +71,21 @@ final class Account {
         case checking, savings, creditCard, loan, cash, brokerage, property, other
     }
 
+    enum AssetCategory: String, Codable, CaseIterable {
+        case property
+        case vehicle
+        case business
+        case collectible
+        case crypto
+        case retirement
+        case hsa
+        case other
+    }
+
     @Attribute(.unique) var id: UUID = UUID()
     var name: String
     var typeRaw: String
+    var assetCategoryRaw: String?
     var institutionName: String?
     var currencyCode: String // e.g., "USD"
     var last4: String?
@@ -91,6 +103,7 @@ final class Account {
         id: UUID = UUID(),
         name: String,
         type: AccountType,
+        assetCategory: AssetCategory? = nil,
         institutionName: String? = nil,
         currencyCode: String = "USD",
         last4: String? = nil,
@@ -99,6 +112,7 @@ final class Account {
         self.id = id
         self.name = name
         self.typeRaw = type.rawValue
+        self.assetCategoryRaw = assetCategory?.rawValue
         self.institutionName = institutionName
         self.currencyCode = currencyCode
         self.last4 = last4
@@ -109,9 +123,28 @@ final class Account {
 @MainActor
 extension Account {
     var isLiability: Bool { type == AccountType.loan || type == AccountType.creditCard }
+    var isManualAsset: Bool {
+        type == .property || (type == .other && assetCategoryRaw != nil)
+    }
+    var supportsLinkedLiability: Bool { isManualAsset }
+    var showsLoanToValue: Bool {
+        assetCategory == .property || assetCategory == .vehicle
+    }
     var type: AccountType {
         get { AccountType(rawValue: typeRaw) ?? AccountType.other }
         set { typeRaw = newValue.rawValue }
+    }
+    var assetCategory: AssetCategory {
+        get {
+            if let raw = assetCategoryRaw, let category = AssetCategory(rawValue: raw) {
+                return category
+            }
+            return type == .property ? .property : .other
+        }
+        set {
+            assetCategoryRaw = newValue.rawValue
+            type = newValue == .property ? .property : .other
+        }
     }
     var creditCardPaymentMode: CreditCardPaymentMode? {
         get {
@@ -133,6 +166,21 @@ extension Account {
             } else {
                 loanTermsJSON = nil
             }
+        }
+    }
+}
+
+extension Account.AssetCategory {
+    var displayName: String {
+        switch self {
+        case .property: return "Property"
+        case .vehicle: return "Vehicle"
+        case .business: return "Business"
+        case .collectible: return "Collectible"
+        case .crypto: return "Crypto"
+        case .retirement: return "Retirement"
+        case .hsa: return "HSA"
+        case .other: return "Other"
         }
     }
 }

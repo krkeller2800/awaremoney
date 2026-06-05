@@ -1109,22 +1109,31 @@ private struct QuickStartIncomeBillsSummaryView: View {
 
 private struct QuickStartAssetsDetailView: View {
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
-    @Query private var links: [AssetLiabilityLink]
     @Query(filter: #Predicate<Account> { $0.typeRaw == "loan" }, sort: [SortDescriptor(\Account.name, order: .forward)]) private var loanAccounts: [Account]
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var settings: SettingsStore
 
-    @State private var selectedAssetID: UUID? = nil
+    @State private var selectedAssetPersistentID: PersistentIdentifier? = nil
     @State private var showAddAssetSheet = false
+    @FocusState private var focusedAssetField: AssetEditField?
+
+    private enum AssetEditField: Hashable {
+        case name
+        case description
+        case value
+        case balance
+    }
+
+    private let assetEditFieldOrder: [AssetEditField] = [.name, .description, .value, .balance]
 
     private var assetAccounts: [Account] {
-        accounts.filter { $0.type == .property || $0.type == .other }
+        accounts.filter(\.isManualAsset)
     }
 
     private var selectedAsset: Account? {
-        guard let selectedAssetID else { return nil }
-        return assetAccounts.first(where: { $0.id == selectedAssetID })
+        guard let selectedAssetPersistentID else { return nil }
+        return assetAccounts.first(where: { $0.persistentModelID == selectedAssetPersistentID })
     }
 
     private var isCompactLayout: Bool {
@@ -1145,23 +1154,53 @@ private struct QuickStartAssetsDetailView: View {
                     showAddAssetSheet = true
                 }
             }
+
+            ToolbarItemGroup(placement: .keyboard) {
+                if focusedAssetField != nil {
+                    Button {
+                        focusPreviousAssetField()
+                    } label: {
+                        Image(systemName: "chevron.up")
+                    }
+                    .disabled(isFirstAssetEditFieldFocused)
+
+                    Button {
+                        focusNextAssetField()
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .disabled(isLastAssetEditFieldFocused)
+
+                    Spacer()
+
+                    Button {
+                        focusedAssetField = nil
+                    } label: {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showAddAssetSheet) {
             ManualAssetSheet()
         }
         .onAppear {
-            if selectedAssetID == nil {
-                selectedAssetID = assetAccounts.first?.id
+            if selectedAssetPersistentID == nil {
+                selectedAssetPersistentID = assetAccounts.first?.persistentModelID
             }
         }
-        .onChange(of: assetAccounts.map(\.id), initial: false) { _, ids in
-            if !ids.contains(where: { $0 == selectedAssetID }) {
-                selectedAssetID = ids.first
+        .onChange(of: assetAccounts.map(\.persistentModelID), initial: false) { _, ids in
+            if !ids.contains(where: { $0 == selectedAssetPersistentID }) {
+                selectedAssetPersistentID = ids.first
             }
         }
-        .task(id: assetAccounts.map(\.id)) {
-            if selectedAssetID == nil {
-                selectedAssetID = assetAccounts.first?.id
+        .onChange(of: focusedAssetField) { _, newValue in
+            guard newValue != nil else { return }
+            selectFocusedAssetText()
+        }
+        .task(id: assetAccounts.map(\.persistentModelID)) {
+            if selectedAssetPersistentID == nil {
+                selectedAssetPersistentID = assetAccounts.first?.persistentModelID
             }
         }
     }
@@ -1178,9 +1217,10 @@ private struct QuickStartAssetsDetailView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 14) {
-                        ForEach(assetAccounts, id: \.id) { account in
+                        ForEach(assetAccounts, id: \.persistentModelID) { account in
+                            let persistentID = account.persistentModelID
                             NavigationLink {
-                                assetDetailContent(for: account, title: "Details")
+                                QuickStartAccountDetailByPersistentID(persistentID: persistentID)
                                     .navigationBarTitleDisplayMode(.inline)
                             } label: {
                                 assetCard(for: account, isSelected: false)
@@ -1198,7 +1238,7 @@ private struct QuickStartAssetsDetailView: View {
     private var regularBody: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                Text("Property")
+                Text("Assets")
                     .font(.title2.bold())
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 16)
@@ -1215,11 +1255,12 @@ private struct QuickStartAssetsDetailView: View {
                     } else {
                         ScrollView {
                             VStack(spacing: 14) {
-                                ForEach(assetAccounts, id: \.id) { account in
+                                ForEach(assetAccounts, id: \.persistentModelID) { account in
+                                    let persistentID = account.persistentModelID
                                     Button {
-                                        selectedAssetID = account.id
+                                        selectedAssetPersistentID = persistentID
                                     } label: {
-                                        assetCard(for: account, isSelected: selectedAssetID == account.id)
+                                        assetCard(for: account, isSelected: selectedAssetPersistentID == persistentID)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -1259,7 +1300,7 @@ private struct QuickStartAssetsDetailView: View {
                 Text(account.name)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text(linkedLiability(for: account)?.name ?? "No loan linked")
+                Text(account.assetCategory.displayName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1309,7 +1350,11 @@ private struct QuickStartAssetsDetailView: View {
                 }
 
                 detailSection("Details") {
-                    editableTextRow("Name", text: binding(for: asset, keyPath: \.name))
+                    editableTextRow(
+                        "Name",
+                        text: binding(for: asset, keyPath: \.name),
+                        field: .name
+                    )
                     editableTextRow(
                         "Description",
                         text: Binding(
@@ -1319,9 +1364,10 @@ private struct QuickStartAssetsDetailView: View {
                                 saveModelContext()
                             }
                         ),
-                        placeholder: "Description (optional)"
+                        placeholder: "Description (optional)",
+                        field: .description
                     )
-                    detailRow("Type", value: asset.type == .property ? "Property" : "Other Asset")
+                    categoryPickerRow(for: asset)
                 }
 
                 detailSection("Balance Info") {
@@ -1329,14 +1375,16 @@ private struct QuickStartAssetsDetailView: View {
                         "Value",
                         text: balanceTextBinding(for: asset),
                         placeholder: "0.00",
-                        keyboardType: .decimalPad
+                        keyboardType: .decimalPad,
+                        field: .value
                     )
                     if let snapshot = latestSnapshot(for: asset) {
                         editableTextRow(
                             "Balance",
                             text: balanceTextBinding(for: asset),
                             placeholder: "0.00",
-                            keyboardType: .decimalPad
+                            keyboardType: .decimalPad,
+                            field: .balance
                         )
                         detailRow(
                             "As Of",
@@ -1347,32 +1395,29 @@ private struct QuickStartAssetsDetailView: View {
                             "Balance",
                             text: balanceTextBinding(for: asset),
                             placeholder: "0.00",
-                            keyboardType: .decimalPad
+                            keyboardType: .decimalPad,
+                            field: .balance
                         )
                     }
                 }
 
                 detailSection("Financing") {
-                    if asset.type == .property {
-                        loanPickerRow(for: asset)
-                    } else {
-                        detailRow("Loan Account", value: "Not applicable")
-                    }
+                    loanPickerRow(for: asset)
                     if let loan = linkedLiability(for: asset) {
-                        detailRow("Loan Balance", value: format(amount: liabilityMagnitude(for: loan)))
-                        detailRow("Equity", value: format(amount: equity(for: asset, liability: loan)))
-                        if let ltv = ltv(for: asset, liability: loan) {
+                        detailRow("Liability Balance", value: format(amount: liabilityMagnitude(for: loan)))
+                        detailRow("Net Equity", value: format(amount: equity(for: asset, liability: loan)))
+                        if asset.showsLoanToValue, let ltv = ltv(for: asset, liability: loan) {
                             detailRow("LTV", value: formatPercent(ltv))
                         }
                     } else {
-                        Text("Link a loan to track equity and LTV.")
+                        Text("Link a liability to track net equity. LTV is shown for property and vehicle assets.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 detailSection("Status") {
-                    detailRow("Linked Loan", value: linkedLiability(for: asset)?.name ?? "Unlinked")
+                    detailRow("Linked Liability", value: linkedLiability(for: asset)?.name ?? "Unlinked")
                     detailRow("Asset Count", value: "\(assetAccounts.count)")
                 }
             }
@@ -1392,13 +1437,13 @@ private struct QuickStartAssetsDetailView: View {
 
         VStack(alignment: .leading, spacing: 4) {
             if let liability {
-                Text("Linked loan: \(liability.name)")
+                Text("Linked liability: \(liability.name)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Equity: \(format(amount: equity))")
+                Text("Net equity: \(format(amount: equity))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                if assetBalance > .zero {
+                if account.showsLoanToValue, assetBalance > .zero {
                     Text("LTV: \(formatPercent(debtMagnitude / assetBalance))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1520,11 +1565,29 @@ private struct QuickStartAssetsDetailView: View {
         .background(.background)
     }
 
+    private func categoryPickerRow(for asset: Account) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("Bucket")
+                .foregroundStyle(.primary)
+            Spacer()
+            Picker("Bucket", selection: assetCategoryBinding(for: asset)) {
+                ForEach(Account.AssetCategory.allCases, id: \.self) { category in
+                    Text(category.displayName).tag(category)
+                }
+            }
+            .labelsHidden()
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(.background)
+    }
+
     private func editableTextRow(
         _ label: String,
         text: Binding<String>,
         placeholder: String = "",
-        keyboardType: UIKeyboardType = .default
+        keyboardType: UIKeyboardType = .default,
+        field: AssetEditField
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
@@ -1532,19 +1595,77 @@ private struct QuickStartAssetsDetailView: View {
             Spacer()
             TextField(placeholder, text: text)
                 .multilineTextAlignment(.trailing)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .keyboardType(keyboardType)
-                .textInputAutocapitalization(.words)
+                .textInputAutocapitalization(keyboardType == .default ? .words : .never)
                 .autocorrectionDisabled()
+                .focused($focusedAssetField, equals: field)
+                .onTapGesture {
+                    focusedAssetField = field
+                    selectFocusedAssetText()
+                }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(.background)
     }
 
+    private var focusedAssetFieldIndex: Int? {
+        guard let focusedAssetField else { return nil }
+        return assetEditFieldOrder.firstIndex(of: focusedAssetField)
+    }
+
+    private var isFirstAssetEditFieldFocused: Bool {
+        focusedAssetFieldIndex == assetEditFieldOrder.startIndex
+    }
+
+    private var isLastAssetEditFieldFocused: Bool {
+        focusedAssetFieldIndex == assetEditFieldOrder.index(before: assetEditFieldOrder.endIndex)
+    }
+
+    private func focusPreviousAssetField() {
+        guard let index = focusedAssetFieldIndex, index > assetEditFieldOrder.startIndex else { return }
+        focusedAssetField = assetEditFieldOrder[index - 1]
+    }
+
+    private func focusNextAssetField() {
+        guard let index = focusedAssetFieldIndex, index < assetEditFieldOrder.index(before: assetEditFieldOrder.endIndex) else { return }
+        focusedAssetField = assetEditFieldOrder[index + 1]
+    }
+
+    private func selectFocusedAssetText() {
+        DispatchQueue.main.async {
+            UIApplication.shared.sendAction(
+                #selector(UIResponderStandardEditActions.selectAll(_:)),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+        }
+    }
+
+    private func assetCategoryBinding(for asset: Account) -> Binding<Account.AssetCategory> {
+        Binding(
+            get: { asset.assetCategory },
+            set: { newValue in
+                asset.assetCategory = newValue
+                saveModelContext()
+            }
+        )
+    }
+
+    private func activeLink(for asset: Account) -> AssetLiabilityLink? {
+        guard asset.supportsLinkedLiability else { return nil }
+        let assetID = asset.id
+        let predicate = #Predicate<AssetLiabilityLink> { link in
+            link.asset.id == assetID && link.endDate == nil
+        }
+        let descriptor = FetchDescriptor<AssetLiabilityLink>(predicate: predicate)
+        return try? modelContext.fetch(descriptor).first
+    }
+
     private func linkedLiability(for asset: Account) -> Account? {
-        guard asset.type == .property else { return nil }
-        return links.first(where: { $0.asset.id == asset.id && $0.endDate == nil })?.liability
+        activeLink(for: asset)?.liability
     }
 
     private func loanBinding(for asset: Account) -> Binding<UUID?> {
@@ -1557,9 +1678,9 @@ private struct QuickStartAssetsDetailView: View {
     }
 
     private func updateLoanLink(for asset: Account, loanID: UUID?) {
-        guard asset.type == .property else { return }
+        guard asset.supportsLinkedLiability else { return }
 
-        if let existing = links.first(where: { $0.asset.id == asset.id && $0.endDate == nil }) {
+        if let existing = activeLink(for: asset) {
             if let loanID, let loan = loanAccounts.first(where: { $0.id == loanID }) {
                 existing.liability = loan
                 existing.endDate = nil
@@ -1576,10 +1697,10 @@ private struct QuickStartAssetsDetailView: View {
 
     private func loanPickerRow(for asset: Account) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("Loan Account")
+            Text("Linked Liability")
                 .foregroundStyle(.primary)
             Spacer()
-            Picker("Loan Account", selection: loanBinding(for: asset)) {
+            Picker("Linked Liability", selection: loanBinding(for: asset)) {
                 Text("None").tag(nil as UUID?)
                 ForEach(loanAccounts.filter { $0.id != asset.id }, id: \.id) { loan in
                     Text(loan.name).tag(Optional(loan.id))

@@ -48,6 +48,7 @@ struct AccountDTO: Codable {
     let id: UUID
     let name: String
     let typeRaw: String
+    let assetCategoryRaw: String?
     let institutionName: String?
     let currencyCode: String
     let last4: String?
@@ -281,6 +282,7 @@ enum BackupExporter {
                 id: surrogateID(for: acct),
                 name: acct.name,
                 typeRaw: acct.typeRaw,
+                assetCategoryRaw: acct.assetCategoryRaw,
                 institutionName: acct.institutionName,
                 currencyCode: acct.currencyCode,
                 last4: acct.last4,

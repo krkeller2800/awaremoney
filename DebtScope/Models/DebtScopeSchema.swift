@@ -27,14 +27,23 @@ enum DebtScopeSchemaV2: VersionedSchema {
     }
 }
 
+enum DebtScopeSchemaV3: VersionedSchema {
+    static var versionIdentifier = Schema.Version(3, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        DebtScopeSchemaV2.models
+    }
+}
+
 enum DebtScopeMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [DebtScopeSchemaV1.self, DebtScopeSchemaV2.self]
+        [DebtScopeSchemaV1.self, DebtScopeSchemaV2.self, DebtScopeSchemaV3.self]
     }
 
     static var stages: [MigrationStage] {
         [
-            .lightweight(fromVersion: DebtScopeSchemaV1.self, toVersion: DebtScopeSchemaV2.self)
+            .lightweight(fromVersion: DebtScopeSchemaV1.self, toVersion: DebtScopeSchemaV2.self),
+            .lightweight(fromVersion: DebtScopeSchemaV2.self, toVersion: DebtScopeSchemaV3.self)
         ]
     }
 }

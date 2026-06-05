@@ -101,13 +101,13 @@ struct AccountDetailView: View {
                             .environment(\.modelContext, modelContext)
                     }
                 }
-                .alert("Delete this property?", isPresented: $showDeleteAlert) {
+                .alert("Delete this asset?", isPresented: $showDeleteAlert) {
                     Button("Delete", role: .destructive) {
                         deleteAccount(account)
                     }
                     Button("Cancel", role: .cancel) { }
                 } message: {
-                    Text("This will permanently delete the property and all associated balances and transactions.")
+                    Text("This will permanently delete the asset and all associated balances and transactions.")
                 }
                 .toolbar {
                     ToolbarItemGroup(placement: .topBarTrailing) {
@@ -120,13 +120,13 @@ struct AccountDetailView: View {
                             .accessibilityLabel("Help")
                         }
 
-                        if account.type == .property {
+                        if account.isManualAsset {
                             Button(role: .destructive) {
                                 showDeleteAlert = true
                             } label: {
                                 Image(systemName: "trash")
                             }
-                            .accessibilityLabel("Delete Property")
+                            .accessibilityLabel("Delete Asset")
                         }
                     }
                 }
@@ -145,16 +145,11 @@ struct AccountDetailView: View {
                 dismiss()
             }
         }
-        .task(id: account?.id) {
-            AMLogging.log("AccountDetailView task(id:) fired for accountID=\(accountID)", component: "AccountDetailView")
-            if let account = account {
-                await recomputeAccountDerivedData(for: account)
-                await MainActor.run { loadAssetLiabilityLink(for: account) }
-            }
+        .task(id: accountID) {
+            AMLogging.log("AccountDetailView task(id:) skipped relationship refresh for accountID=\(accountID)", component: "AccountDetailView")
         }
         .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
-            AMLogging.log("AccountDetailView received transactionsDidChange for accountID=\(accountID)", component: "AccountDetailView")
-            Task { if let account = account { await recomputeAccountDerivedData(for: account) } }
+            AMLogging.log("AccountDetailView received transactionsDidChange for accountID=\(accountID); relationship refresh skipped", component: "AccountDetailView")
         }
         .onAppear {
             AMLogging.log("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
@@ -189,15 +184,15 @@ struct AccountDetailView: View {
         List {
             Section(header: GroupedSectionHeader("Details")) {
                 LabeledContent("Name", value: account.name)
-                LabeledContent(account.type == .property ? "Description" : "Institution") {
+                LabeledContent(account.isManualAsset ? "Description" : "Institution") {
                     HStack(spacing: 6) {
-                        TextField(account.type == .property ? "Description (optional)" : "Institution name", text: Binding<String>(
+                        TextField(account.isManualAsset ? "Description (optional)" : "Institution name", text: Binding<String>(
                             get: { account.institutionName ?? "" },
                             set: { newVal in
                                 let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
                                 account.institutionName = trimmed
-                                // Keep account name in sync with institution when edited here (non-property accounts only)
-                                if account.type != .property, account.name != trimmed {
+                                // Keep account name in sync with institution when edited here (non-manual accounts only)
+                                if !account.isManualAsset, account.name != trimmed {
                                     account.name = trimmed
                                 }
                                 do { try modelContext.save() } catch {}
@@ -217,15 +212,23 @@ struct AccountDetailView: View {
                                 .imageScale(.small)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Edit \(account.type == .property ? "description" : "institution")")
+                        .accessibilityLabel("Edit \(account.isManualAsset ? "description" : "institution")")
                     }
                 }
-                if account.type != .property && isInvalidInstitutionName(account.institutionName) {
+                if !account.isManualAsset && isInvalidInstitutionName(account.institutionName) {
                     Text("Required. We couldn't derive this from your import.")
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
-                LabeledContent("Type", value: account.type.rawValue.capitalized)
+                if account.isManualAsset {
+                    Picker("Bucket", selection: assetCategoryBinding(for: account)) {
+                        ForEach(Account.AssetCategory.allCases, id: \.self) { category in
+                            Text(category.displayName).tag(category)
+                        }
+                    }
+                } else {
+                    LabeledContent("Type", value: account.type.rawValue.capitalized)
+                }
                 if account.type == .brokerage && account.balanceSnapshots.isEmpty && account.holdingSnapshots.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
@@ -240,7 +243,7 @@ struct AccountDetailView: View {
                 }
             }
 
-            if account.type == .property {
+            if account.supportsLinkedLiability {
                 Section(header: GroupedSectionHeader("Financing")) {
                     HStack(spacing: 6) {
                         Picker("Liability Account", selection: $linkedLiabilityID) {
@@ -265,7 +268,7 @@ struct AccountDetailView: View {
                         updateAssetLiabilityLink(for: account, to: newVal)
                     }
 
-                    // Show Equity and LTV when a liability is linked and we have balances
+                    // Show net equity for linked assets; LTV only applies to property and vehicle buckets.
                     if let liabID = linkedLiabilityID,
                        let liab = liabilityAccounts.first(where: { $0.id == liabID }) {
                         let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
@@ -274,18 +277,20 @@ struct AccountDetailView: View {
                             return bal < 0 ? -bal : bal
                         }()
                         if assetVal != 0 {
-                            LabeledContent("Equity") {
+                            LabeledContent("Net Equity") {
                                 Text(format(amount: assetVal - debtMag))
                             }
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("LTV")
-                                Spacer()
-                                Text(formatPercent(debtMag / assetVal))
+                            if account.showsLoanToValue {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("LTV")
+                                    Spacer()
+                                    Text(formatPercent(debtMag / assetVal))
+                                }
                             }
                         }
                     }
                     DisclosureGroup(isExpanded: $showLTVInfo) {
-                        Text("LTV = loan amount ÷ property value.\nExample: $80,000 on $100,000 = 80%.")
+                        Text("LTV = liability amount ÷ asset value. It is shown for property and vehicle assets.\nExample: $80,000 on $100,000 = 80%.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .transition(.opacity.combined(with: .move(edge: .leading)))
@@ -302,7 +307,7 @@ struct AccountDetailView: View {
                     .accessibilityLabel(showLTVInfo ? "Hide LTV definition" : "Show LTV definition")
 
                     
-                    Text("Link a loan to track equity and LTV.")
+                    Text("Link a liability to track net equity. LTV is shown for property and vehicle assets.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -509,23 +514,23 @@ struct AccountDetailView: View {
             return (prefix + format(amount: delta), delta >= 0 ? .green : .red)
         }()
 
-        // Linked liability (for properties)
+        // Linked liability for manually tracked assets.
         let linkedLiability: Account? = {
-            guard account.type == .property, let liabID = linkedLiabilityID else { return nil }
+            guard account.supportsLinkedLiability, let liabID = linkedLiabilityID else { return nil }
             return liabilityAccounts.first(where: { $0.id == liabID })
         }()
 
-        // Compute Equity and LTV when applicable (properties with a linked loan)
+        // Compute net equity for linked assets; LTV only applies to property and vehicle buckets.
         func computeEquityAndLTV() -> (String?, String?) {
             let assetVal: Decimal = lastBalanceSnapshot(for: account)?.balance ?? 0
-            guard account.type == .property, let liab = linkedLiability else {
+            guard let liab = linkedLiability else {
                 return (nil, nil)
             }
             let liabilityBalance = lastBalanceSnapshot(for: liab)?.balance ?? 0
             let debtMag: Decimal = liabilityBalance < 0 ? -liabilityBalance : liabilityBalance
             guard assetVal != 0 else { return (nil, nil) }
             let equityText = format(amount: assetVal - debtMag)
-            let ltvText = formatPercent(debtMag / assetVal)
+            let ltvText = account.showsLoanToValue ? formatPercent(debtMag / assetVal) : nil
             return (equityText, ltvText)
         }
 
@@ -644,14 +649,14 @@ struct AccountDetailView: View {
                         }
                     }
 
-                    // Equity & LTV
-                    if let eq = equityText { cell(title: "Equity", value: eq, sub: nil) }
+                    // Net equity & LTV
+                    if let eq = equityText { cell(title: "Net Equity", value: eq, sub: nil) }
                     if let ltv = ltvText { cell(title: "LTV", value: ltv, sub: nil) }
 
-                    // Property-specific linked loan info
-                    if account.type == .property {
-                        if let name = linkedLoanName { cell(title: "Loan", value: name, sub: nil) }
-                        if let bal = linkedLoanBalance { cell(title: "Loan Bal", value: bal, sub: nil) }
+                    // Linked liability info for manual assets
+                    if account.supportsLinkedLiability {
+                        if let name = linkedLoanName { cell(title: "Liability", value: name, sub: nil) }
+                        if let bal = linkedLoanBalance { cell(title: "Liab Bal", value: bal, sub: nil) }
                     }
 
                     // Loan/Credit Card items
@@ -682,6 +687,17 @@ struct AccountDetailView: View {
         #else
         return false
         #endif
+    }
+
+    private func assetCategoryBinding(for account: Account) -> Binding<Account.AssetCategory> {
+        Binding(
+            get: { account.assetCategory },
+            set: { newValue in
+                account.assetCategory = newValue
+                try? modelContext.save()
+                NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+            }
+        )
     }
 
     private func focusOrder(for account: Account) -> [Field] {
@@ -762,13 +778,12 @@ struct AccountDetailView: View {
         sortedSnapshots(for: account).first
     }
 
-    private func recomputeAccountDerivedData(for account: Account) async {
+    private func recomputeAccountDerivedData(accountID id: UUID) async {
         let t0 = Date()
         let container = modelContext.container
         let bg = ModelContext(container)
         bg.autosaveEnabled = false
 
-        let id = await MainActor.run { account.id }
         AMLogging.log("recompute start id=\(id)", component: "AccountDetailView")
 
         do {
@@ -854,11 +869,10 @@ struct AccountDetailView: View {
         return nf.string(from: NSDecimalNumber(decimal: amount)) ?? "\(amount)"
     }
 
-    private func loadAssetLiabilityLink(for account: Account) {
+    private func loadAssetLiabilityLink(assetID: UUID) {
         suppressLinkOnChange = true
         defer { suppressLinkOnChange = false }
         do {
-            let assetID = account.id
             let pred = #Predicate<AssetLiabilityLink> { link in
                 link.asset.id == assetID && link.endDate == nil
             }

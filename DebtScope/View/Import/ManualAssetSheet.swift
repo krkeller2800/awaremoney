@@ -12,6 +12,7 @@ struct ManualAssetSheet: View {
     @State private var valueText: String = ""
     @State private var asOfDate: Date = Date()
     @State private var institution: String = ""
+    @State private var selectedAssetCategory: Account.AssetCategory = .property
     @State private var wasValueFocused: Bool = false
 
     // Focus management for keyboard navigation
@@ -95,6 +96,7 @@ struct ManualAssetSheet: View {
     }
 
     private var computedLTV: Decimal? {
+        guard selectedAssetCategory == .property || selectedAssetCategory == .vehicle else { return nil }
         guard let assetValue = enteredAssetValue, assetValue > 0 else { return nil }
         return selectedLiabilityDebtMagnitude / assetValue
     }
@@ -109,7 +111,12 @@ struct ManualAssetSheet: View {
                     TextField("Description (optional)", text: $institution)
                         .focused($focusedField, equals: .institution)
                         .selectAllOnFocus()
-                    Label("Use this to add assets like a home, car, or other property you track manually.", systemImage: "info.circle")
+                    Picker("Bucket", selection: $selectedAssetCategory) {
+                        ForEach(Account.AssetCategory.allCases, id: \.self) { category in
+                            Text(category.displayName).tag(category)
+                        }
+                    }
+                    Label("Use this to add manually tracked assets like a home, vehicle, business, collectible, crypto, retirement account, HSA, or other asset.", systemImage: "info.circle")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .labelStyle(.titleAndIcon)
@@ -140,7 +147,7 @@ struct ManualAssetSheet: View {
                     }
 
                     if let equity = computedEquity {
-                        LabeledContent("Equity") {
+                        LabeledContent("Net Equity") {
                             Text(equity as NSNumber, formatter: currencyFormatter)
                         }
                     }
@@ -153,12 +160,12 @@ struct ManualAssetSheet: View {
                 }
 
                 Section(footer:
-                    Text("This will create a Property asset and a single balance snapshot.")
+                    Text("This will create a \(selectedAssetCategory.displayName) asset and a single balance snapshot.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 ) { EmptyView() }
             }
-            .navigationTitle("Add Property Asset")
+            .navigationTitle("Add Asset")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     PlanToolbarButton("Cancel",fixedWidth: 70) {
@@ -271,7 +278,8 @@ struct ManualAssetSheet: View {
         let trimmedInstitution = institution.trimmingCharacters(in: .whitespacesAndNewlines)
         let acct = Account(
             name: trimmedName,
-            type: .property,
+            type: selectedAssetCategory == .property ? .property : .other,
+            assetCategory: selectedAssetCategory,
             institutionName: trimmedInstitution.isEmpty ? nil : trimmedInstitution,
             currencyCode: settings.currencyCode
         )

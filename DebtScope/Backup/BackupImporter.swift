@@ -219,6 +219,7 @@ enum BackupImporter {
             if let existing = accountMap[dto.id] {
                 existing.name = dto.name
                 existing.typeRaw = dto.typeRaw
+                existing.assetCategoryRaw = dto.assetCategoryRaw
                 existing.institutionName = dto.institutionName
                 existing.currencyCode = dto.currencyCode
                 existing.last4 = dto.last4
@@ -236,6 +237,7 @@ enum BackupImporter {
                     last4: dto.last4,
                     createdAt: dto.createdAt
                 )
+                acct.assetCategoryRaw = dto.assetCategoryRaw
                 acct.loanTerms = dto.loanTerms
                 acct.creditCardPaymentModeRaw = dto.creditCardPaymentModeRaw
                 context.insert(acct)
