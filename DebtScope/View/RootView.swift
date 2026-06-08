@@ -7,12 +7,15 @@
 
 import SwiftUI
 import Combine
+import SwiftData
 
 struct RootView: View {
     @State private var isShowingBackupAlert: Bool = false
     @State private var showImportFlow: Bool = false
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var importRouter: ImportOpenRouter
     @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
+    @EnvironmentObject private var settings: SettingsStore
     
     var body: some View {
         QuickStartView()
@@ -34,14 +37,26 @@ struct RootView: View {
         }
         .alert("Import Backup", isPresented: $isShowingBackupAlert) {
             Button("OK", role: .cancel) {
-                // Clear the coordinator message when the alert is dismissed
                 backupCoordinator.alertMessage = nil
             }
         } message: {
             Text(backupCoordinator.alertMessage ?? "")
         }
-        .onChange(of: backupCoordinator.alertMessage) { oldValue, newValue in
-            // Present the alert whenever a new message appears
+        .sheet(item: Binding(
+            get: { backupCoordinator.pendingRestoreSummary },
+            set: { newValue in
+                if newValue == nil {
+                    backupCoordinator.cancelPendingRestore()
+                }
+            }
+        )) { summary in
+            BackupRestoreConfirmationView(summary: summary) {
+                backupCoordinator.cancelPendingRestore()
+            } onRestore: {
+                backupCoordinator.performPendingRestore(context: modelContext, settings: settings)
+            }
+        }
+        .onChange(of: backupCoordinator.alertMessage) { _, newValue in
             isShowingBackupAlert = (newValue != nil)
         }
     }

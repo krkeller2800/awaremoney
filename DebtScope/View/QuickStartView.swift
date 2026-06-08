@@ -765,7 +765,7 @@ struct QuickStartView: View {
                             .onAppear {
                                 selection = topic
                             }
-                            .navigationTitle(topic.title)
+                            .navigationTitle(topic == .cashFlow ? "Flow" : topic.title)
                             .navigationBarTitleDisplayMode(.inline)
                     }
                 }

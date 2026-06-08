@@ -15,6 +15,13 @@ struct BackupRestoreView: View {
 
     // Import
     @State private var showImporter = false
+    @State private var pendingRestore: PendingRestore? = nil
+    @State private var pendingRestoreSummary: BackupRestorePreflight.RestoreSummary? = nil
+
+    private enum PendingRestore {
+        case wrapper(FileWrapper)
+        case data(Data)
+    }
 
     // Share
     @State private var shareURL: URL? = nil
@@ -102,26 +109,21 @@ struct BackupRestoreView: View {
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    let started = url.startAccessingSecurityScopedResource()
-                    defer { if started { url.stopAccessingSecurityScopedResource() } }
-                    do {
-                        // Try to read as a file package (directory). If not a directory, fall back to Data.
-                        var isDir: ObjCBool = false
-                        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-                        if isDir.boolValue {
-                            let wrapper = try FileWrapper(url: url, options: .immediate)
-                            let summary = try BackupImporter.importBackup(wrapper: wrapper, context: modelContext, settings: settings)
-                            backupCoordinator.alertMessage = makeSummaryText(from: summary)
-                        } else {
-                            let data = try Data(contentsOf: url)
-                            let summary = try BackupImporter.importBackup(data: data, context: modelContext, settings: settings)
-                            backupCoordinator.alertMessage = makeSummaryText(from: summary)
-                        }
-                    } catch {
-                        backupCoordinator.alertMessage = "Import failed: \(error.localizedDescription)"
-                    }
+                    prepareRestore(from: url)
                 case .failure(let err):
                     backupCoordinator.alertMessage = "Import canceled: \(err.localizedDescription)"
+                }
+            }
+            .sheet(item: $pendingRestoreSummary) { summary in
+                BackupRestoreConfirmationView(summary: summary) {
+                    pendingRestore = nil
+                    pendingRestoreSummary = nil
+                } onRestore: {
+                    if let pendingRestore {
+                        performRestore(pendingRestore)
+                    }
+                    pendingRestore = nil
+                    pendingRestoreSummary = nil
                 }
             }
             .sheet(item: $shareItem, onDismiss: {
@@ -133,6 +135,59 @@ struct BackupRestoreView: View {
                 ActivityView(activityItems: [item.url])
                     .ignoresSafeArea()
             }
+        }
+    }
+
+    private func prepareRestore(from url: URL) {
+        let started = url.startAccessingSecurityScopedResource()
+        defer { if started { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            let payload = try readRestorePayload(from: url)
+            if BackupRestorePreflight.shouldConfirmRestore(context: modelContext) {
+                pendingRestore = payload
+                pendingRestoreSummary = try restoreSummary(for: payload)
+            } else {
+                performRestore(payload)
+            }
+        } catch {
+            backupCoordinator.alertMessage = "Import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func readRestorePayload(from url: URL) throws -> PendingRestore {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if isDir.boolValue {
+            return .wrapper(try FileWrapper(url: url, options: .immediate))
+        }
+        return .data(try Data(contentsOf: url))
+    }
+
+    private func restoreSummary(for restore: PendingRestore) throws -> BackupRestorePreflight.RestoreSummary {
+        let appCounts = BackupRestorePreflight.appDataCounts(context: modelContext)
+        let backupCounts: BackupRestorePreflight.BackupDataCounts
+        switch restore {
+        case .wrapper(let wrapper):
+            backupCounts = try BackupRestorePreflight.backupDataCounts(wrapper: wrapper)
+        case .data(let data):
+            backupCounts = try BackupRestorePreflight.backupDataCounts(data: data)
+        }
+        return BackupRestorePreflight.restoreSummary(appCounts: appCounts, backupCounts: backupCounts)
+    }
+
+    private func performRestore(_ restore: PendingRestore) {
+        do {
+            let summary: BackupImportSummary
+            switch restore {
+            case .wrapper(let wrapper):
+                summary = try BackupImporter.importBackup(wrapper: wrapper, context: modelContext, settings: settings)
+            case .data(let data):
+                summary = try BackupImporter.importBackup(data: data, context: modelContext, settings: settings)
+            }
+            backupCoordinator.alertMessage = makeSummaryText(from: summary)
+        } catch {
+            backupCoordinator.alertMessage = "Import failed: \(error.localizedDescription)"
         }
     }
 

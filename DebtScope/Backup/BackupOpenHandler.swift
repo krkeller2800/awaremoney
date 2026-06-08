@@ -7,31 +7,82 @@ import Combine
 @MainActor
 final class BackupOpenCoordinator: ObservableObject {
     @Published var alertMessage: String? = nil
+    @Published var pendingRestoreSummary: BackupRestorePreflight.RestoreSummary? = nil
 
-    nonisolated func handleOpen(url: URL, context: ModelContext, settings: SettingsStore) async {
-        guard url.pathExtension == "ambackup" || url.pathExtension == "json" else {
-            await MainActor.run { self.alertMessage = "Unsupported file type." }
+    private enum PendingRestore {
+        case wrapper(FileWrapper)
+        case data(Data)
+    }
+
+    private var pendingRestore: PendingRestore? = nil
+
+    func handleOpen(url: URL, context: ModelContext, settings: SettingsStore) async {
+        guard ["dsbackup", "debtscopebackup", "ambackup", "json"].contains(url.pathExtension.lowercased()) else {
+            alertMessage = "Unsupported file type."
             return
         }
         let didStart = url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         do {
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-            if isDir.boolValue {
-                let wrapper = try FileWrapper(url: url, options: .immediate)
-                let summary = try await BackupImporter.importBackup(wrapper: wrapper, context: context, settings: settings)
-                let text = await Self.makeSummaryText(from: summary)
-                await MainActor.run { self.alertMessage = text }
+            let payload = try Self.readRestorePayload(from: url)
+            if BackupRestorePreflight.shouldConfirmRestore(context: context) {
+                pendingRestore = payload
+                pendingRestoreSummary = try Self.restoreSummary(for: payload, context: context)
             } else {
-                let data = try Data(contentsOf: url)
-                let summary = try await BackupImporter.importBackup(data: data, context: context, settings: settings)
-                let text = await Self.makeSummaryText(from: summary)
-                await MainActor.run { self.alertMessage = text }
+                let summary = try Self.importRestore(payload, context: context, settings: settings)
+                alertMessage = Self.makeSummaryText(from: summary)
             }
         } catch {
-            await MainActor.run { self.alertMessage = "Import failed: \(error.localizedDescription)" }
+            alertMessage = "Import failed: \(error.localizedDescription)"
         }
+    }
+
+    func cancelPendingRestore() {
+        pendingRestore = nil
+        pendingRestoreSummary = nil
+    }
+
+    func performPendingRestore(context: ModelContext, settings: SettingsStore) {
+        guard let pendingRestore else { return }
+        self.pendingRestore = nil
+        pendingRestoreSummary = nil
+
+        do {
+            let summary = try Self.importRestore(pendingRestore, context: context, settings: settings)
+            alertMessage = Self.makeSummaryText(from: summary)
+        } catch {
+            alertMessage = "Import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private nonisolated static func readRestorePayload(from url: URL) throws -> PendingRestore {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if isDir.boolValue {
+            return .wrapper(try FileWrapper(url: url, options: .immediate))
+        }
+        return .data(try Data(contentsOf: url))
+    }
+
+    private static func importRestore(_ restore: PendingRestore, context: ModelContext, settings: SettingsStore) throws -> BackupImportSummary {
+        switch restore {
+        case .wrapper(let wrapper):
+            return try BackupImporter.importBackup(wrapper: wrapper, context: context, settings: settings)
+        case .data(let data):
+            return try BackupImporter.importBackup(data: data, context: context, settings: settings)
+        }
+    }
+
+    private static func restoreSummary(for restore: PendingRestore, context: ModelContext) throws -> BackupRestorePreflight.RestoreSummary {
+        let appCounts = BackupRestorePreflight.appDataCounts(context: context)
+        let backupCounts: BackupRestorePreflight.BackupDataCounts
+        switch restore {
+        case .wrapper(let wrapper):
+            backupCounts = try BackupRestorePreflight.backupDataCounts(wrapper: wrapper)
+        case .data(let data):
+            backupCounts = try BackupRestorePreflight.backupDataCounts(data: data)
+        }
+        return BackupRestorePreflight.restoreSummary(appCounts: appCounts, backupCounts: backupCounts)
     }
 
     private static func makeSummaryText(from s: BackupImportSummary) -> String {
