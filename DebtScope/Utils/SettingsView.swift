@@ -130,7 +130,7 @@ struct SettingsView: View {
                 Button("Delete All Data", role: .destructive) { performAppDataReset() }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This will permanently delete all accounts, transactions, balances, holdings, imports, mappings, and cash flow items. This action cannot be undone.")
+                Text("This will permanently delete all accounts, transactions, balances, holdings, imports, mappings, bill funding, and cash flow items. This action cannot be undone.")
             }
             .alert(
                 "Reset Complete",
@@ -168,12 +168,15 @@ struct SettingsView: View {
 
             // Delete in dependency-safe order
             try deleteAll(AssetLiabilityLink.self)
+            try deleteAll(BillFundingAllocation.self)
+            try deleteAll(AccountImportMapping.self)
             try deleteAll(BalanceSnapshot.self)
             try deleteAll(HoldingSnapshot.self)
             try deleteAll(Transaction.self)
             try deleteAll(ImportBatch.self)
             try deleteAll(CSVColumnMapping.self)
             try deleteAll(CashFlowItem.self)
+            try deleteAll(Security.self)
             try deleteAll(Account.self)
 
             try modelContext.save()

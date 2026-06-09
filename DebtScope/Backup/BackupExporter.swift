@@ -538,8 +538,8 @@ enum BackupExporter {
 import SwiftUI
 
 @MainActor final class BackupPackageDocument: @preconcurrency FileDocument {
-    static var readableContentTypes: [UTType] { [.debtScopeBackup] }
-    static var writableContentTypes: [UTType] { [.debtScopeBackup] }
+    static var readableContentTypes: [UTType] { [.debtScopeBackupPackage] }
+    static var writableContentTypes: [UTType] { [.debtScopeBackupPackage] }
 
     let rootWrapper: FileWrapper
 

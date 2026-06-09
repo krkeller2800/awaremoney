@@ -17,7 +17,8 @@ final class BackupOpenCoordinator: ObservableObject {
     private var pendingRestore: PendingRestore? = nil
 
     func handleOpen(url: URL, context: ModelContext, settings: SettingsStore) async {
-        guard ["dsbackup", "debtscopebackup", "ambackup", "json"].contains(url.pathExtension.lowercased()) else {
+        let ext = url.pathExtension.lowercased()
+        guard UTType.debtScopeBackupExtensions.contains(ext) || ext == "json" else {
             alertMessage = "Unsupported file type."
             return
         }

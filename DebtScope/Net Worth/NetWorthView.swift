@@ -152,6 +152,7 @@ struct NetWorthView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Overview")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

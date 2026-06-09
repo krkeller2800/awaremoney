@@ -22,50 +22,88 @@
 				<string>com.komakode.qif</string>
 			</array>
 		</dict>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>DebtScope Backup</string>
-			<key>LSHandlerRank</key>
-			<string>Owner</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.komakode.debtscope.backup</string>
-			</array>
-			<key>LSSupportsOpeningDocumentsInPlace</key>
-			<true/>
-			<key>LSTypeIsPackage</key>
-			<true/>
-			<key>UISupportsDocumentBrowser</key>
-			<false/>
-		</dict>
-	</array>
+			<dict>
+				<key>CFBundleTypeName</key>
+				<string>DebtScope Backup</string>
+				<key>CFBundleTypeRole</key>
+				<string>Viewer</string>
+				<key>LSHandlerRank</key>
+				<string>Owner</string>
+				<key>LSItemContentTypes</key>
+				<array>
+					<string>com.komakode.debtscope.backup</string>
+				</array>
+			</dict>
+			<dict>
+				<key>CFBundleTypeName</key>
+				<string>DebtScope Backup Package</string>
+				<key>CFBundleTypeRole</key>
+				<string>Viewer</string>
+				<key>LSHandlerRank</key>
+				<string>Owner</string>
+				<key>LSItemContentTypes</key>
+				<array>
+					<string>com.komakode.debtscope.backup-package</string>
+				</array>
+				<key>LSTypeIsPackage</key>
+				<true/>
+			</dict>
+		</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>UISupportsDocumentBrowser</key>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>com.apple.package</string>
-				<string>public.data</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>DebtScope Backup</string>
-			<key>UTTypeIconFiles</key>
-			<array/>
-			<key>UTTypeIdentifier</key>
-			<string>com.komakode.debtscope.backup</string>
-			<key>UTTypeTagSpecification</key>
 			<dict>
-				<key>public.filename-extension</key>
+				<key>UTTypeConformsTo</key>
 				<array>
-					<string>ambackup</string>
+					<string>public.content</string>
+					<string>public.data</string>
 				</array>
-				<key>public.mime-type</key>
-				<string>application/vnd.debtscope.backup</string>
+				<key>UTTypeDescription</key>
+				<string>DebtScope Backup</string>
+				<key>UTTypeIconFiles</key>
+				<array/>
+				<key>UTTypeIdentifier</key>
+				<string>com.komakode.debtscope.backup</string>
+				<key>UTTypeTagSpecification</key>
+				<dict>
+					<key>public.filename-extension</key>
+					<array>
+						<string>ambackup</string>
+						<string>debtscopebackup</string>
+					</array>
+					<key>public.mime-type</key>
+					<string>application/vnd.debtscope.backup</string>
+				</dict>
 			</dict>
-		</dict>
-	</array>
+			<dict>
+				<key>UTTypeConformsTo</key>
+				<array>
+					<string>com.apple.package</string>
+					<string>public.content</string>
+					<string>public.data</string>
+				</array>
+				<key>UTTypeDescription</key>
+				<string>DebtScope Backup Package</string>
+				<key>UTTypeIconFiles</key>
+				<array/>
+				<key>UTTypeIdentifier</key>
+				<string>com.komakode.debtscope.backup-package</string>
+				<key>UTTypeTagSpecification</key>
+				<dict>
+					<key>public.filename-extension</key>
+					<array>
+						<string>dsbackup</string>
+					</array>
+					<key>public.mime-type</key>
+					<string>application/vnd.debtscope.backup-package</string>
+				</dict>
+			</dict>
+		</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>

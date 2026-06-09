@@ -23,6 +23,10 @@ struct BackupRestoreView: View {
         case data(Data)
     }
 
+    private var restoreAllowedContentTypes: [UTType] {
+        [.debtScopeBackup, .json, .data]
+    }
+
     // Share
     @State private var shareURL: URL? = nil
     private struct ShareItem: Identifiable {
@@ -55,7 +59,7 @@ struct BackupRestoreView: View {
                             let (data, _) = try BackupExporter.makeBackup(context: modelContext, settings: settings)
                             let df = DateFormatter()
                             df.dateFormat = "yyyy-MM-dd_HHmmss"
-                            let name = "DebtScope-Backup-\(df.string(from: Date())).dsbackup"
+                            let name = "DebtScope-Backup-\(df.string(from: Date())).ambackup"
                             let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
                             try? FileManager.default.removeItem(at: tmp)
                             try data.write(to: tmp, options: .atomic)
@@ -91,7 +95,7 @@ struct BackupRestoreView: View {
             .fileExporter(
                 isPresented: $showExporter,
                 document: backupDoc,
-                contentType: .debtScopeBackup,
+                contentType: .debtScopeBackupPackage,
                 defaultFilename: "DebtScope-Backup"
             ) { result in
                 switch result {
@@ -103,7 +107,7 @@ struct BackupRestoreView: View {
             }
             .fileImporter(
                 isPresented: $showImporter,
-                allowedContentTypes: [UTType.debtScopeBackup, .json, .data],
+                allowedContentTypes: restoreAllowedContentTypes,
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
@@ -139,6 +143,11 @@ struct BackupRestoreView: View {
     }
 
     private func prepareRestore(from url: URL) {
+        guard isSupportedRestoreURL(url) else {
+            backupCoordinator.alertMessage = "Unsupported file type."
+            return
+        }
+
         let started = url.startAccessingSecurityScopedResource()
         defer { if started { url.stopAccessingSecurityScopedResource() } }
 
@@ -153,6 +162,11 @@ struct BackupRestoreView: View {
         } catch {
             backupCoordinator.alertMessage = "Import failed: \(error.localizedDescription)"
         }
+    }
+
+    private func isSupportedRestoreURL(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return UTType.debtScopeBackupExtensions.contains(ext) || ext == "json"
     }
 
     private func readRestorePayload(from url: URL) throws -> PendingRestore {

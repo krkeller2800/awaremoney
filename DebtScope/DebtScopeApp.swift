@@ -108,7 +108,7 @@ struct DebtScopeApp: App {
                     // Prefer UTType match first
                     if let rv = try? url.resourceValues(forKeys: [.contentTypeKey]),
                        let type = rv.contentType,
-                       type.conforms(to: .debtScopeBackup) {
+                       type.conforms(to: .debtScopeBackup) || type.conforms(to: .debtScopeBackupPackage) {
                         Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
                         AMLogging.log("App opened with backup (UTType): \(url.lastPathComponent)", component: "App")
                         return
@@ -116,7 +116,7 @@ struct DebtScopeApp: App {
 
                     // Fallback: extension checks (accept legacy too)
                     let ext = url.pathExtension.lowercased()
-                    if ["dsbackup", "debtscopebackup", "json"].contains(ext) {
+                    if UTType.debtScopeBackupExtensions.contains(ext) || ext == "json" {
                         Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
                         AMLogging.log("App opened with backup (ext): \(url.lastPathComponent)", component: "App")
                     } else {
