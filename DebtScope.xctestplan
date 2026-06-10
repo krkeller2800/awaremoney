@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "9AFC5D0C-8D7D-4119-ACD3-2A3DB3098699",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:DebtScope.xcodeproj",
+      "identifier" : "DF1800CB2F23D66800F6A522",
+      "name" : "DebtScope"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:DebtScope.xcodeproj",
+        "identifier" : "DFA98BDB2F72D5840092FF67",
+        "name" : "DebtScopeTests"
+      }
+    }
+  ],
+  "version" : 1
+}

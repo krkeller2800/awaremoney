@@ -141,6 +141,81 @@ struct DebtScopeAssistantServiceTests {
         #expect(summary == nil)
     }
 
+    @Test("Cash flow summary handles empty data and clamps requested months")
+    func cashFlowSummaryHandlesEmptyDataAndClampsRequestedMonths() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.cashFlowSummary(months: 99)
+
+        #expect(summary.currencyCode == "USD")
+        #expect(summary.monthsCovered == 24)
+        #expect(summary.incomeItemCount == 0)
+        #expect(summary.billItemCount == 0)
+        #expect(summary.monthlyIncome == 0)
+        #expect(summary.monthlyBills == 0)
+        #expect(summary.recurringNet == 0)
+        #expect(summary.nonMonthlyIncomeMonthlyAverage == 0)
+        #expect(summary.upcomingBills.isEmpty)
+        #expect(summary.missingDataNotes.contains("No income items are configured yet."))
+        #expect(summary.missingDataNotes.contains("No bill items are configured yet."))
+    }
+
+    @Test("Upcoming bills clamps day window and returns display-safe summaries")
+    func upcomingBillsClampsDayWindowAndReturnsDisplaySafeSummaries() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        let calendar = Calendar.current
+        let now = Date()
+        let checking = Account(name: "Bills Checking", type: .checking)
+        let paycheck = CashFlowItem(
+            kind: .income,
+            name: "Paycheck",
+            amount: 3_000,
+            frequency: .monthly,
+            dayOfMonth: 1
+        )
+        let tomorrow = try #require(calendar.date(byAdding: .day, value: 1, to: now))
+        let ninetyOneDaysOut = try #require(calendar.date(byAdding: .day, value: 91, to: now))
+        let dueSoon = CashFlowItem(
+            kind: .bill,
+            name: "Rent",
+            amount: 1_250,
+            frequency: .oneTime,
+            firstPaymentDate: tomorrow,
+            account: checking,
+            fundingIncomeID: paycheck.id
+        )
+        let outsideClamp = CashFlowItem(
+            kind: .bill,
+            name: "Annual Fee",
+            amount: 95,
+            frequency: .oneTime,
+            firstPaymentDate: ninetyOneDaysOut
+        )
+
+        context.insert(checking)
+        context.insert(paycheck)
+        context.insert(dueSoon)
+        context.insert(outsideClamp)
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let oneDayBills = try service.upcomingBills(days: 0)
+        let clampedBills = try service.upcomingBills(days: 500)
+
+        #expect(oneDayBills.map(\.name) == ["Rent"])
+        let rentSummary = try #require(oneDayBills.first)
+        #expect(rentSummary.amount == 1_250)
+        #expect(rentSummary.frequency == .oneTime)
+        #expect(rentSummary.accountName == "Bills Checking")
+        #expect(rentSummary.fundingSourceName == "Paycheck")
+        #expect(rentSummary.reserveBalance == nil)
+
+        #expect(clampedBills.map(\.name) == ["Rent"])
+    }
+
     private func makeInMemoryContext() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
@@ -160,6 +235,9 @@ struct DebtScopeAssistantServiceTests {
         UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
         UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
         UserDefaults.standard.set(false, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set(0.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(0.0, forKey: "debtDiscretionaryReserveAmount")
+        UserDefaults.standard.set(12, forKey: "oneTimeIncomeDefaultSpreadMonths")
         return settings
     }
 

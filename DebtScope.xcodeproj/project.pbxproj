@@ -31,6 +31,7 @@
 
 /* Begin PBXFileReference section */
 		DF1800CC2F23D66800F6A522 /* DebtScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DebtScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF6E82F72FDA1EC90070401F /* DebtScope.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = DebtScope.xctestplan; sourceTree = "<group>"; };
 		DFA98BDC2F72D5840092FF67 /* DebtScopeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DebtScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -42,6 +43,17 @@
 			);
 			target = DF1800CB2F23D66800F6A522 /* DebtScope */;
 		};
+		DF6E82F22FDA1CCB0070401F /* Exceptions for "DebtScope" folder in "DebtScopeTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Testing/BillReservePlannerTests.swift,
+				Testing/DebtScopeAssistantServiceTests.swift,
+				Testing/IncomeSchedulerTests.swift,
+				Testing/ReservePlannerTests.swift,
+				Testing/ReserveUpdaterTests.swift,
+			);
+			target = DFA98BDB2F72D5840092FF67 /* DebtScopeTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +61,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				DF4E536A2F7318BE004D7621 /* Exceptions for "DebtScope" folder in "DebtScope" target */,
+				DF6E82F22FDA1CCB0070401F /* Exceptions for "DebtScope" folder in "DebtScopeTests" target */,
 			);
 			path = DebtScope;
 			sourceTree = "<group>";
@@ -76,6 +89,7 @@
 		DF1800C32F23D66800F6A522 = {
 			isa = PBXGroup;
 			children = (
+				DF6E82F72FDA1EC90070401F /* DebtScope.xctestplan */,
 				DF1800CE2F23D66800F6A522 /* DebtScope */,
 				DF1800CD2F23D66800F6A522 /* Products */,
 			);
@@ -432,7 +446,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/awaremoney.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/awaremoney";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DebtScope.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DebtScope";
 			};
 			name = Debug;
 		};
@@ -453,7 +467,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/awaremoney.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/awaremoney";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DebtScope.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DebtScope";
 			};
 			name = Release;
 		};
