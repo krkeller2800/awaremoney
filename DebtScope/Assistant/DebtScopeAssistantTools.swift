@@ -184,7 +184,10 @@ private enum DebtScopeAssistantToolEncoding {
 
     @MainActor
     static func logFailure(toolName: String, error: Error) {
-        AMLogging.error("Assistant tool failed name=\(toolName): \(error.localizedDescription)", component: "DebtScopeAssistantTools")
+        AMLogging.error(
+            "Assistant tool failed name=\(toolName) errorType=\(String(describing: type(of: error)))",
+            component: "DebtScopeAssistantTools"
+        )
     }
 }
 #endif

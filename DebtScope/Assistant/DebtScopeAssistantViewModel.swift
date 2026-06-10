@@ -115,7 +115,10 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                 self.messages.append(AssistantMessage(role: .systemNotice, text: message))
                 self.isLoading = false
                 self.resetSession(clearMessages: false)
-                AMLogging.error("Assistant response failed: \(error.localizedDescription)", component: "DebtScopeAssistantViewModel")
+                AMLogging.error(
+                    "Assistant response failed errorType=\(String(describing: type(of: error)))",
+                    component: "DebtScopeAssistantViewModel"
+                )
             }
         }
     }

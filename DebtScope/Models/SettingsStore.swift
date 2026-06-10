@@ -42,7 +42,13 @@ final class SettingsStore: ObservableObject {
 
     // Assistant
     @Published var assistantEnabled: Bool {
-        didSet { UserDefaults.standard.set(assistantEnabled, forKey: "assistant_enabled") }
+        didSet {
+            UserDefaults.standard.set(assistantEnabled, forKey: "assistant_enabled")
+            if !assistantEnabled {
+                assistantIncludeTransactions = false
+                assistantRetainConversationHistory = false
+            }
+        }
     }
 
     @Published var assistantIncludeTransactions: Bool {

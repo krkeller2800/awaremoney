@@ -129,7 +129,6 @@ struct AssistantImportSummary: Codable, Sendable {
     let importCount: Int
     let latestImportDate: Date?
     let latestImportLabel: String?
-    let latestSourceFileName: String?
     let latestParserName: String?
     let importedAccountCount: Int
     let importedBalanceCount: Int
