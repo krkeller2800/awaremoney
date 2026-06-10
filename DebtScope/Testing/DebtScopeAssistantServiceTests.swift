@@ -87,6 +87,60 @@ struct DebtScopeAssistantServiceTests {
         #expect(summary.missingDataNotes.isEmpty)
     }
 
+    @Test("Payoff plan summary reuses current DebtScope plan settings")
+    func payoffPlanSummaryReusesCurrentDebtScopePlanSettings() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "avalanche"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+
+        let highAPRCard = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        highAPRCard.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 50, paymentDayOfMonth: nil)
+        let lowAPRLoan = Account(name: "Low APR Loan", type: .loan, currencyCode: "USD")
+        lowAPRLoan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 75, paymentDayOfMonth: nil)
+        context.insert(highAPRCard)
+        context.insert(lowAPRLoan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: highAPRCard))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -3_000, account: lowAPRLoan))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try #require(try service.payoffPlanSummary(startDate: date(2026, 2, 14)))
+
+        #expect(summary.currencyCode == "USD")
+        #expect(summary.strategy == .avalanche)
+        #expect(Calendar.current.component(.day, from: summary.startDate) == 1)
+        #expect(summary.debtCount == 2)
+        #expect(summary.totalStartingDebt == 4_000)
+        #expect(summary.totalMinimumPayment == 125)
+        #expect(summary.monthlyBudget == 300)
+        #expect(summary.totalInterest > 0)
+        #expect(summary.projectedDebtFreeDate != nil)
+        #expect(summary.payoffOrder.count == 2)
+        #expect(summary.payoffOrder.map(\.orderIndex) == [1, 2])
+        #expect(summary.payoffOrder.first?.name == "High APR Card")
+        #expect(summary.payoffOrder.first?.apr == Decimal(string: "0.24"))
+        #expect(summary.payoffOrder.first?.minimumPayment == 50)
+        #expect(summary.sourceNote.contains("PayoffPlanProvider"))
+    }
+
+    @Test("Payoff plan summary is nil without active debt")
+    func payoffPlanSummaryIsNilWithoutActiveDebt() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        let savings = Account(name: "Savings", type: .savings)
+        context.insert(savings)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: 1_000, account: savings))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.payoffPlanSummary(startDate: date(2026, 2, 1))
+
+        #expect(summary == nil)
+    }
+
     private func makeInMemoryContext() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(

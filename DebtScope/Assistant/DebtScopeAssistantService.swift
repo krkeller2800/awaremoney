@@ -12,37 +12,7 @@ final class DebtScopeAssistantService {
     }
 
     func debtSummary() throws -> AssistantDebtSummary {
-        let accounts = try liabilityAccounts()
-        let latestBalances = accounts.reduce(into: [UUID: LatestBalance]()) { result, account in
-            result[account.id] = latestBalance(for: account)
-        }
-
-        let liabilities = accounts.compactMap { account -> DebtAccountInput? in
-            guard let latest = latestBalances[account.id] else { return nil }
-            let balance = absDecimal(latest.balance)
-            guard balance > 0 else { return nil }
-
-            let configuredPayment = account.loanTerms?.paymentAmount
-            let missingMinimumPayment = configuredPayment == nil || configuredPayment ?? 0 <= 0
-            let minimumPayment = monthlyPayment(for: account, balance: balance)
-            let apr = latest.apr ?? account.loanTerms?.apr
-
-            return DebtAccountInput(
-                account: account,
-                latestBalance: balance,
-                latestBalanceDate: latest.date,
-                apr: apr,
-                minimumPayment: minimumPayment,
-                missingMinimumPayment: missingMinimumPayment
-            )
-        }
-        .sorted { lhs, rhs in
-            if lhs.latestBalance != rhs.latestBalance {
-                return lhs.latestBalance > rhs.latestBalance
-            }
-            return lhs.account.name.localizedCaseInsensitiveCompare(rhs.account.name) == .orderedAscending
-        }
-
+        let liabilities = try debtAccountInputs()
         let payoffDates = payoffDatesByAccountID()
         let accountSummaries = liabilities.map { input in
             AssistantDebtAccountSummary(
@@ -78,6 +48,78 @@ final class DebtScopeAssistantService {
             accounts: accountSummaries,
             missingDataNotes: missingDataNotes(for: liabilities, payoffDates: payoffDates)
         )
+    }
+
+    func payoffPlanSummary(startDate: Date) throws -> AssistantPayoffPlanSummary? {
+        let provider = PayoffPlanProvider(context: context, settings: settings)
+        guard let plan = try provider.computePlan(startDate: startDate) else { return nil }
+
+        let liabilities = try debtAccountInputs()
+        let liabilitiesByID = Dictionary(uniqueKeysWithValues: liabilities.map { ($0.account.id, $0) })
+        let orderedIDs = payoffOrderIDs(from: plan, liabilities: liabilities)
+        let payoffOrder = orderedIDs.enumerated().compactMap { offset, accountID -> AssistantPayoffDebtSummary? in
+            guard let input = liabilitiesByID[accountID] else { return nil }
+            return AssistantPayoffDebtSummary(
+                name: input.account.name,
+                accountType: assistantAccountType(for: input.account.type),
+                startingBalance: input.latestBalance,
+                apr: input.apr,
+                minimumPayment: input.minimumPayment,
+                payoffDate: plan.payoffDates[accountID],
+                orderIndex: offset + 1
+            )
+        }
+        let projectedDebtFreeDate = liabilities.allSatisfy { plan.payoffDates[$0.account.id] != nil }
+            ? plan.payoffDates.values.max()
+            : nil
+
+        return AssistantPayoffPlanSummary(
+            generatedAt: Date(),
+            currencyCode: settings.currencyCode,
+            strategy: assistantPayoffStrategy(),
+            startDate: normalizeToMonth(startDate),
+            debtCount: liabilities.count,
+            totalStartingDebt: liabilities.reduce(0) { $0 + $1.latestBalance },
+            totalMinimumPayment: liabilities.reduce(0) { $0 + $1.minimumPayment },
+            monthlyBudget: planMonthlyBudget(startDate: startDate, totalMinimumPayment: liabilities.reduce(0) { $0 + $1.minimumPayment }),
+            totalInterest: plan.totalInterest,
+            projectedDebtFreeDate: projectedDebtFreeDate,
+            payoffOrder: payoffOrder,
+            sourceNote: "Based on DebtScope's current payoff settings and PayoffPlanProvider results."
+        )
+    }
+
+    private func debtAccountInputs() throws -> [DebtAccountInput] {
+        let accounts = try liabilityAccounts()
+        let latestBalances = accounts.reduce(into: [UUID: LatestBalance]()) { result, account in
+            result[account.id] = latestBalance(for: account)
+        }
+
+        return accounts.compactMap { account -> DebtAccountInput? in
+            guard let latest = latestBalances[account.id] else { return nil }
+            let balance = absDecimal(latest.balance)
+            guard balance > 0 else { return nil }
+
+            let configuredPayment = account.loanTerms?.paymentAmount
+            let missingMinimumPayment = configuredPayment == nil || configuredPayment ?? 0 <= 0
+            let minimumPayment = monthlyPayment(for: account, balance: balance)
+            let apr = latest.apr ?? account.loanTerms?.apr
+
+            return DebtAccountInput(
+                account: account,
+                latestBalance: balance,
+                latestBalanceDate: latest.date,
+                apr: apr,
+                minimumPayment: minimumPayment,
+                missingMinimumPayment: missingMinimumPayment
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.latestBalance != rhs.latestBalance {
+                return lhs.latestBalance > rhs.latestBalance
+            }
+            return lhs.account.name.localizedCaseInsensitiveCompare(rhs.account.name) == .orderedAscending
+        }
     }
 
     private func liabilityAccounts() throws -> [Account] {
@@ -142,6 +184,17 @@ final class DebtScopeAssistantService {
         }
     }
 
+    private func assistantPayoffStrategy() -> AssistantPayoffStrategy {
+        switch settings.defaultPayoffStrategyRaw.lowercased() {
+        case "snowball":
+            return .snowball
+        case "avalanche":
+            return .avalanche
+        default:
+            return .minimumsOnly
+        }
+    }
+
     private func assistantPaymentFrequency(for frequency: PaymentFrequency) -> AssistantPaymentFrequency {
         switch frequency {
         case .weekly:
@@ -163,6 +216,65 @@ final class DebtScopeAssistantService {
         case .socialSecurity:
             return .socialSecurity
         }
+    }
+
+    private func payoffOrderIDs(from plan: DebtPlanResult, liabilities: [DebtAccountInput]) -> [UUID] {
+        var seen = Set<UUID>()
+        var ordered = plan.payoffOrder.filter { seen.insert($0).inserted }
+        let remaining = liabilities
+            .filter { !seen.contains($0.account.id) }
+            .sorted { lhs, rhs in
+                let lhsDate = plan.payoffDates[lhs.account.id]
+                let rhsDate = plan.payoffDates[rhs.account.id]
+                switch (lhsDate, rhsDate) {
+                case let (lhsDate?, rhsDate?):
+                    if lhsDate != rhsDate { return lhsDate < rhsDate }
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                case (nil, nil):
+                    break
+                }
+                if lhs.latestBalance != rhs.latestBalance {
+                    return lhs.latestBalance > rhs.latestBalance
+                }
+                return lhs.account.name.localizedCaseInsensitiveCompare(rhs.account.name) == .orderedAscending
+            }
+            .map(\.account.id)
+        ordered.append(contentsOf: remaining)
+        return ordered
+    }
+
+    private func planMonthlyBudget(startDate: Date, totalMinimumPayment: Decimal) -> Decimal? {
+        let startMonth = normalizeToMonth(startDate)
+        let baselineRaw = UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") ?? "recurringNet"
+        let useFixedDebtBudget = UserDefaults.standard.bool(forKey: "useFixedDebtBudget")
+        let debtBudgetOverrideAmount = UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount")
+        let includeSpreads = UserDefaults.standard.bool(forKey: "includeNonMonthlyIncomeSpreads")
+        let defaultSpread = UserDefaults.standard.integer(forKey: "oneTimeIncomeDefaultSpreadMonths")
+        let discretionaryReserveAmount = UserDefaults.standard.double(forKey: "debtDiscretionaryReserveAmount")
+
+        if let budget = PlanBudgetDisplay.availableBudget(
+            for: startMonth,
+            modelContext: context,
+            baselineBudgetSourceRaw: baselineRaw,
+            useFixedDebtBudget: useFixedDebtBudget,
+            debtBudgetOverrideAmount: debtBudgetOverrideAmount,
+            includeNonMonthlyIncomeSpreads: includeSpreads,
+            oneTimeIncomeDefaultSpreadMonths: defaultSpread,
+            discretionaryReserveAmount: discretionaryReserveAmount
+        ) {
+            return budget
+        }
+
+        return assistantPayoffStrategy() == .minimumsOnly ? totalMinimumPayment : nil
+    }
+
+    private func normalizeToMonth(_ date: Date) -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? date
     }
 
     private func missingDataNotes(for debts: [DebtAccountInput], payoffDates: [UUID: Date]) -> [String] {
