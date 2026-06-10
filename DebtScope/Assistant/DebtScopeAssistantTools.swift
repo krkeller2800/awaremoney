@@ -36,6 +36,70 @@ struct GetDebtSummaryTool: Tool {
 }
 
 @available(iOS 26.0, *)
+struct GetCashFlowSummaryTool: Tool {
+    let name = "get_cash_flow_summary"
+    let description = "Get income, bills, recurring net, non-monthly income spread, reserve-adjusted budget, and near-term bill context."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Number of months to summarize. Use 12 unless the user asks for a shorter or longer period. Clamped to 1 through 24.")
+        let months: Int?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            let months = DebtScopeAssistantToolEncoding.clamp(arguments.months ?? 12, to: 1...24)
+            return try await MainActor.run {
+                let summary = try serviceBox.service.cashFlowSummary(months: months)
+                return try DebtScopeAssistantToolEncoding.encode(summary)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+struct GetUpcomingBillsTool: Tool {
+    let name = "get_upcoming_bills"
+    let description = "Get compact summaries of bills due soon, including amount, due date, frequency, account, reserve balance, and funding source when available."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Number of days ahead to search for bills. Use 30 unless the user asks for a different range. Clamped to 1 through 90.")
+        let days: Int?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            let days = DebtScopeAssistantToolEncoding.clamp(arguments.days ?? 30, to: 1...90)
+            return try await MainActor.run {
+                let summaries = try serviceBox.service.upcomingBills(days: days)
+                return try DebtScopeAssistantToolEncoding.encode(summaries)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct GetPayoffPlanTool: Tool {
     let name = "get_payoff_plan"
     let description = "Get DebtScope's current payoff plan, payoff order, projected dates, interest, and budget source."
@@ -78,6 +142,8 @@ struct DebtScopeAssistantToolFactory {
     static func debtAndPayoffTools(service: DebtScopeAssistantService) -> [any Tool] {
         [
             GetDebtSummaryTool(service: service),
+            GetCashFlowSummaryTool(service: service),
+            GetUpcomingBillsTool(service: service),
             GetPayoffPlanTool(service: service)
         ]
     }
@@ -110,6 +176,10 @@ private enum DebtScopeAssistantToolEncoding {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
         return formatter.date(from: value)
+    }
+
+    nonisolated static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 
     @MainActor

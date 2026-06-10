@@ -89,6 +89,83 @@ final class DebtScopeAssistantService {
         )
     }
 
+    func cashFlowSummary(months requestedMonths: Int) throws -> AssistantCashFlowSummary {
+        let months = clamp(requestedMonths, to: 1...24)
+        let items = try cashFlowItems()
+        let incomeItems = items.filter { $0.kind == .income }
+        let billItems = items.filter { $0.kind == .bill }
+        let allocations = try incomeFundingAllocationTotals()
+        let startMonth = normalizeToMonth(Date())
+        let defaultSpread = sanitizedDefaultSpread(UserDefaults.standard.integer(forKey: "oneTimeIncomeDefaultSpreadMonths"))
+        let incomeSpreads = IncomeScheduler.spreadsByMonth(
+            incomes: items,
+            start: startMonth,
+            months: months,
+            oneTimeDefaultSpreadMonths: defaultSpread,
+            incomeFundingAllocations: allocations
+        )
+        let nonMonthlyIncomeMonthlyAverage = incomeSpreads.values.reduce(0, +) / Decimal(months)
+        let reserveAdjustedAvailableForDebt = PlanBudgetDisplay.availableBudget(
+            for: startMonth,
+            modelContext: context,
+            baselineBudgetSourceRaw: UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") ?? "recurringNet",
+            useFixedDebtBudget: UserDefaults.standard.bool(forKey: "useFixedDebtBudget"),
+            debtBudgetOverrideAmount: UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount"),
+            includeNonMonthlyIncomeSpreads: UserDefaults.standard.bool(forKey: "includeNonMonthlyIncomeSpreads"),
+            oneTimeIncomeDefaultSpreadMonths: defaultSpread,
+            discretionaryReserveAmount: UserDefaults.standard.double(forKey: "debtDiscretionaryReserveAmount")
+        )
+
+        return AssistantCashFlowSummary(
+            generatedAt: Date(),
+            currencyCode: settings.currencyCode,
+            monthsCovered: months,
+            incomeItemCount: incomeItems.count,
+            billItemCount: billItems.count,
+            monthlyIncome: recurringMonthlyIncome(from: incomeItems),
+            monthlyBills: recurringMonthlyBills(from: billItems),
+            recurringNet: recurringMonthlyIncome(from: incomeItems) - recurringMonthlyBills(from: billItems),
+            nonMonthlyIncomeMonthlyAverage: nonMonthlyIncomeMonthlyAverage.rounded(2),
+            reserveAdjustedAvailableForDebt: reserveAdjustedAvailableForDebt,
+            upcomingBills: try upcomingBills(days: min(90, max(30, months * 31))).prefix(12).map { $0 },
+            missingDataNotes: cashFlowMissingDataNotes(items: items, reserveAdjustedAvailableForDebt: reserveAdjustedAvailableForDebt)
+        )
+    }
+
+    func upcomingBills(days requestedDays: Int) throws -> [AssistantUpcomingBillSummary] {
+        let days = clamp(requestedDays, to: 1...90)
+        let now = Date()
+        let calendar = Calendar.current
+        let endDate = calendar.date(byAdding: .day, value: days, to: now) ?? now
+        let items = try cashFlowItems()
+        let incomeNamesByID = Dictionary(uniqueKeysWithValues: items.filter { $0.kind == .income }.map { ($0.id, $0.name) })
+        let allocationSourceNames = try allocationSourceNames(incomeNamesByID: incomeNamesByID)
+
+        return items
+            .filter { $0.kind == .bill }
+            .compactMap { item -> (summary: AssistantUpcomingBillSummary, dueDate: Date)? in
+                guard let due = nextDueDate(for: item, after: now), due <= endDate else { return nil }
+                return (
+                    AssistantUpcomingBillSummary(
+                        name: item.name,
+                        amount: item.amount,
+                        dueDate: due,
+                        frequency: assistantPaymentFrequency(for: item.frequency),
+                        accountName: item.account?.name,
+                        reserveBalance: item.frequency.isReserveEligible ? item.reserveBalance : nil,
+                        fundingSourceName: fundingSourceName(for: item, incomeNamesByID: incomeNamesByID, allocationSourceNames: allocationSourceNames)
+                    ),
+                    due
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.dueDate != rhs.dueDate { return lhs.dueDate < rhs.dueDate }
+                return lhs.summary.name.localizedCaseInsensitiveCompare(rhs.summary.name) == .orderedAscending
+            }
+            .prefix(30)
+            .map(\.summary)
+    }
+
     private func debtAccountInputs() throws -> [DebtAccountInput] {
         let accounts = try liabilityAccounts()
         let latestBalances = accounts.reduce(into: [UUID: LatestBalance]()) { result, account in
@@ -269,6 +346,168 @@ final class DebtScopeAssistantService {
         }
 
         return assistantPayoffStrategy() == .minimumsOnly ? totalMinimumPayment : nil
+    }
+
+    private func cashFlowItems() throws -> [CashFlowItem] {
+        var descriptor = FetchDescriptor<CashFlowItem>()
+        descriptor.sortBy = [SortDescriptor(\CashFlowItem.name)]
+        return try context.fetch(descriptor)
+    }
+
+    private func nextDueDate(for item: CashFlowItem, after date: Date) -> Date? {
+        let calendar = Calendar.current
+        let anchor = item.firstPaymentDate ?? item.createdAt
+
+        switch item.frequency.normalized {
+        case .weekly:
+            return nextDate(from: anchor, after: date, adding: .day, value: 7)
+        case .biweekly:
+            return nextDate(from: anchor, after: date, adding: .day, value: 14)
+        case .semimonthly:
+            return nextSemimonthlyDate(for: item, after: date)
+        case .socialSecurity:
+            let birthdayDay = item.ssaWednesday ?? item.dayOfMonth ?? 1
+            return SocialSecuritySchedule.nextPaymentDate(after: date, birthdayDay: birthdayDay)
+        case .monthly:
+            return nextMonthlyDate(for: item, after: date)
+        case .quarterly, .semiAnnual, .yearly:
+            return BillReservePlanner.nextDue(for: item, asOf: date).nextDueDate
+        case .oneTime:
+            guard anchor > date else { return nil }
+            return calendar.startOfDay(for: anchor)
+        case .biWeekly, .twiceMonthly, .annual:
+            return nextDueDate(for: item, after: date)
+        }
+    }
+
+    private func nextDate(from anchor: Date, after date: Date, adding component: Calendar.Component, value: Int) -> Date? {
+        let calendar = Calendar.current
+        var next = calendar.startOfDay(for: anchor)
+        let threshold = calendar.startOfDay(for: date)
+        while next <= threshold {
+            guard let advanced = calendar.date(byAdding: component, value: value, to: next) else { return nil }
+            next = calendar.startOfDay(for: advanced)
+        }
+        return next
+    }
+
+    private func nextMonthlyDate(for item: CashFlowItem, after date: Date) -> Date? {
+        let calendar = Calendar.current
+        let day = item.dayOfMonth ?? calendar.component(.day, from: item.firstPaymentDate ?? item.createdAt)
+        var components = calendar.dateComponents([.year, .month], from: date)
+
+        for offset in 0...24 {
+            guard let month = calendar.date(byAdding: .month, value: offset, to: normalizeToMonth(date)) else { continue }
+            components = calendar.dateComponents([.year, .month], from: month)
+            components.day = clampedDay(day, inMonthContaining: month)
+            if let candidate = calendar.date(from: components), candidate > date {
+                return calendar.startOfDay(for: candidate)
+            }
+        }
+        return nil
+    }
+
+    private func nextSemimonthlyDate(for item: CashFlowItem, after date: Date) -> Date? {
+        let calendar = Calendar.current
+        let firstDay = item.dayOfMonth ?? calendar.component(.day, from: item.firstPaymentDate ?? item.createdAt)
+        let secondDay = min(firstDay + 15, 31)
+        let monthStart = normalizeToMonth(date)
+
+        for offset in 0...24 {
+            guard let month = calendar.date(byAdding: .month, value: offset, to: monthStart) else { continue }
+            for day in [firstDay, secondDay] {
+                var components = calendar.dateComponents([.year, .month], from: month)
+                components.day = clampedDay(day, inMonthContaining: month)
+                if let candidate = calendar.date(from: components), candidate > date {
+                    return calendar.startOfDay(for: candidate)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func clampedDay(_ day: Int, inMonthContaining date: Date) -> Int {
+        let range = Calendar.current.range(of: .day, in: .month, for: date) ?? 1..<29
+        return min(max(day, range.lowerBound), range.upperBound - 1)
+    }
+
+    private func recurringMonthlyIncome(from items: [CashFlowItem]) -> Decimal {
+        items
+            .filter { item in
+                switch item.frequency {
+                case .monthly, .semimonthly, .twiceMonthly, .biweekly, .biWeekly, .weekly, .socialSecurity:
+                    return true
+                default:
+                    return false
+                }
+            }
+            .reduce(0) { $0 + ($1.amount * $1.frequency.monthlyEquivalentFactor) }
+            .rounded(2)
+    }
+
+    private func recurringMonthlyBills(from items: [CashFlowItem]) -> Decimal {
+        items
+            .filter { $0.frequency == .monthly }
+            .reduce(0) { $0 + ($1.amount * $1.frequency.monthlyEquivalentFactor) }
+            .rounded(2)
+    }
+
+    private func incomeFundingAllocationTotals() throws -> [UUID: Decimal] {
+        let allocations = try context.fetch(FetchDescriptor<BillFundingAllocation>())
+        return IncomeScheduler.incomeFundingAllocationTotals(from: allocations)
+    }
+
+    private func allocationSourceNames(incomeNamesByID: [UUID: String]) throws -> [UUID: String] {
+        let allocations = try context.fetch(FetchDescriptor<BillFundingAllocation>())
+        let sortedAllocations = allocations.sorted { lhs, rhs in
+            if lhs.amount != rhs.amount { return lhs.amount > rhs.amount }
+            return lhs.createdAt < rhs.createdAt
+        }
+
+        return sortedAllocations.reduce(into: [UUID: String]()) { result, allocation in
+            guard result[allocation.billID] == nil, let incomeName = incomeNamesByID[allocation.incomeID] else { return }
+            result[allocation.billID] = incomeName
+        }
+    }
+
+    private func fundingSourceName(
+        for item: CashFlowItem,
+        incomeNamesByID: [UUID: String],
+        allocationSourceNames: [UUID: String]
+    ) -> String? {
+        if let incomeID = item.fundingIncomeID, let incomeName = incomeNamesByID[incomeID] {
+            return incomeName
+        }
+        return allocationSourceNames[item.id]
+    }
+
+    private func cashFlowMissingDataNotes(items: [CashFlowItem], reserveAdjustedAvailableForDebt: Decimal?) -> [String] {
+        var notes: [String] = []
+        let incomeCount = items.filter { $0.kind == .income }.count
+        let billCount = items.filter { $0.kind == .bill }.count
+        let missingScheduleCount = items.filter { $0.firstPaymentDate == nil && $0.dayOfMonth == nil }.count
+
+        if incomeCount == 0 {
+            notes.append("No income items are configured yet.")
+        }
+        if billCount == 0 {
+            notes.append("No bill items are configured yet.")
+        }
+        if missingScheduleCount > 0 {
+            notes.append("Schedule details are missing for \(missingScheduleCount) cash-flow item(s); DebtScope used the item creation date or current month fallback.")
+        }
+        if reserveAdjustedAvailableForDebt == nil {
+            notes.append("Reserve-adjusted debt budget is unavailable with the current payoff budget settings.")
+        }
+        return notes
+    }
+
+    private func sanitizedDefaultSpread(_ value: Int) -> Int {
+        [3, 6, 12].contains(value) ? value : 12
+    }
+
+    private func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 
     private func normalizeToMonth(_ date: Date) -> Date {
