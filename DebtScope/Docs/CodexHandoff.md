@@ -1,33 +1,28 @@
 # Codex Handoff
 
 ## Current Focus
-- Internal DebtScope Assistant implementation has started from `DebtScope/Docs/addAIAssistant.md`.
+- Internal DebtScope Assistant implementation is following `DebtScope/DebtScope/Docs/addAIAssistant.md`.
 - Step 1 is complete: assistant settings and Data & Privacy toggles are in place.
+- Step 2 is complete: assistant-safe data contracts are defined.
 
 ## Completed This Checkpoint
-- `DebtScope/DebtScope/Models/SettingsStore.swift`
-  - Added `assistantEnabled`.
-  - Added `assistantIncludeTransactions`.
-  - Added `assistantRetainConversationHistory`.
-  - All three settings are `UserDefaults`-backed and default to `false`.
-- `DebtScope/DebtScope/Utils/SettingsView.swift`
-  - Added Data & Privacy toggles for DebtScope Assistant, transaction details, and assistant history.
-  - Transaction/detail history toggles are disabled until the assistant is enabled.
-  - Reset App Data now resets assistant settings back to `false`.
-- `DebtScope/DebtScope/Docs/addAIAssistant.md`
-  - Existing implementation plan remains the active roadmap.
+- `DebtScope/DebtScope/Assistant/DebtScopeAssistantModels.swift`
+  - Added compact `Codable, Sendable` assistant contracts for debt, cash flow, upcoming bills, payoff plans, net worth, imports, and transaction patterns.
+  - Added safe string-backed enums for assistant account type, payment frequency, and payoff strategy.
+  - Kept contracts value-only and display-safe: no SwiftData models, persistent IDs, transaction hashes, import hash keys, backup DTOs, or memo text.
 
 ## Validation
-- Xcode live diagnostics found no issues in `SettingsStore.swift`.
-- Xcode live diagnostics found no issues in `SettingsView.swift`.
-- Full Xcode project build succeeded.
-- User manually tested Step 1 settings behavior successfully with no issues.
+- User added `DebtScopeAssistantModels.swift` to the `DebtScope` app target membership after Xcode initially excluded it.
+- Full Xcode project build succeeded after the file was moved into the app source tree.
+- JSON encode/decode smoke check passed for `AssistantDebtSummary` with nested `AssistantDebtAccountSummary`.
+- User confirmed Step 2 testing completed without issue.
 
 ## Known Constraints / Risks
 - Apple Intelligence/Foundation Models cannot be fully validated in the iOS Simulator; simulator should be used for fallback/UI/service testing only.
 - Real model behavior must be validated on Apple Intelligence-capable physical hardware with Apple Intelligence enabled.
-- Current implementation only adds settings. No assistant UI, SwiftData summary service, Foundation Models availability layer, or tool calls exist yet.
+- Current assistant implementation has settings and data contracts only. No SwiftData summary service, Foundation Models availability layer, tools, view model, or UI exists yet.
 
 ## Recommended Next Step
-- Commit Step 1.
-- Begin Step 2/3 together: add `DebtScope/DebtScope/Assistant/` with assistant summary models and a read-only `DebtScopeAssistantService` that can produce a debt summary without using Foundation Models yet.
+- Commit Step 2.
+- Begin Step 3: create `DebtScope/DebtScope/Assistant/DebtScopeAssistantService.swift` as a read-only `@MainActor` SwiftData query service that returns the Step 2 summary contracts.
+- Start with `debtSummary() throws -> AssistantDebtSummary`, reusing existing latest-balance and payment logic patterns from `PayoffPlanProvider` before adding broader cash-flow, bill, payoff-plan, net-worth, import, and transaction-pattern methods.
