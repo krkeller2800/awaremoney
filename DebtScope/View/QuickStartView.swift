@@ -11,6 +11,7 @@ private enum QuickStartTopic: String, CaseIterable, Identifiable {
     case incomeBills = "Income & Bills"
     case assets = "Assets"
     case statementReview = "Needs Review"
+    case assistant = "Assistant"
 
     var id: String { rawValue }
     var title: String { rawValue }
@@ -317,12 +318,18 @@ struct QuickStartView: View {
     }
 
     private var topicGroups: [(title: String, topics: [QuickStartTopic])] {
-        [
+        var groups: [(title: String, topics: [QuickStartTopic])] = [
             ("Debt", [.debtPayoff, .compareStrategies]),
             ("Money Flow", [.cashFlow, .incomeBills]),
             ("Worth", [.netWorth, .assets]),
             ("Review", [.statementReview])
         ]
+
+        if settings.assistantEnabled {
+            groups.append(("Data", [.assistant]))
+        }
+
+        return groups
     }
 
     private func topicFor(statementType: StatementType?) -> QuickStartTopic? {
@@ -666,6 +673,8 @@ struct QuickStartView: View {
             QuickStartIncomeBillsDetailView(planSheetMode: $planSheetMode)
         case .assets:
             QuickStartAssetsDetailView()
+        case .assistant:
+            DebtScopeAssistantAvailabilityView()
         }
     }
     private var shouldShowImportStartHint: Bool {
@@ -884,6 +893,13 @@ struct QuickStartView: View {
         }
         .onChange(of: selectedReviewItemID) { _, _ in
             persistReviewState()
+        }
+        .onChange(of: settings.assistantEnabled) { _, isEnabled in
+            guard !isEnabled else { return }
+            if selection == .assistant {
+                selection = .debtPayoff
+            }
+            compactPath.removeAll { $0 == .assistant }
         }
     }
 
