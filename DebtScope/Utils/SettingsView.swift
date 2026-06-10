@@ -62,6 +62,15 @@ struct SettingsView: View {
                 }
 
                 Section("Data & Privacy") {
+                    Toggle("DebtScope Assistant", isOn: $settings.assistantEnabled)
+                    Toggle("Allow transaction details", isOn: $settings.assistantIncludeTransactions)
+                        .disabled(!settings.assistantEnabled)
+                    Toggle("Keep assistant history", isOn: $settings.assistantRetainConversationHistory)
+                        .disabled(!settings.assistantEnabled)
+                    Text("When available, the assistant uses on-device Apple Intelligence and receives only scoped DebtScope summaries instead of direct database access.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     Button(role: .destructive) {
                         showResetAlert = true
                     } label: {
@@ -226,6 +235,9 @@ struct SettingsView: View {
         settings.showHintBars = true
         settings.hapticsEnabled = true
         settings.useReserveProcessingForBills = true
+        settings.assistantEnabled = false
+        settings.assistantIncludeTransactions = false
+        settings.assistantRetainConversationHistory = false
         settings.didInitializeReserveAnchors = false
     }
 

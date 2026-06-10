@@ -40,6 +40,19 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(useReserveProcessingForBills, forKey: "use_reserve_processing_for_bills") }
     }
 
+    // Assistant
+    @Published var assistantEnabled: Bool {
+        didSet { UserDefaults.standard.set(assistantEnabled, forKey: "assistant_enabled") }
+    }
+
+    @Published var assistantIncludeTransactions: Bool {
+        didSet { UserDefaults.standard.set(assistantIncludeTransactions, forKey: "assistant_include_transactions") }
+    }
+
+    @Published var assistantRetainConversationHistory: Bool {
+        didSet { UserDefaults.standard.set(assistantRetainConversationHistory, forKey: "assistant_retain_conversation_history") }
+    }
+
     // Developer
     @Published var showDebugTools: Bool {
         didSet { UserDefaults.standard.set(showDebugTools, forKey: "show_debug_tools") }
@@ -75,6 +88,10 @@ final class SettingsStore: ObservableObject {
         self.showHintBars = UserDefaults.standard.object(forKey: "show_hint_bars") as? Bool ?? true
         self.hapticsEnabled = UserDefaults.standard.object(forKey: "haptics_enabled") as? Bool ?? true
         self.useReserveProcessingForBills = UserDefaults.standard.object(forKey: "use_reserve_processing_for_bills") as? Bool ?? true
+        // Assistant
+        self.assistantEnabled = UserDefaults.standard.object(forKey: "assistant_enabled") as? Bool ?? false
+        self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false
+        self.assistantRetainConversationHistory = UserDefaults.standard.object(forKey: "assistant_retain_conversation_history") as? Bool ?? false
         
         #if DEBUG
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true
