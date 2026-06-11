@@ -114,10 +114,12 @@ struct AssistantPayoffStrategyComparisonSummary: Codable, Sendable {
     let totalStartingDebt: Decimal
     let totalMinimumPayment: Decimal
     let monthlyBudget: Decimal?
+    let minimumPayments: AssistantPayoffStrategyResultSummary
     let avalanche: AssistantPayoffStrategyResultSummary
     let snowball: AssistantPayoffStrategyResultSummary
     let interestSavingsUsingAvalanche: Decimal
     let avalancheDebtFreeDateAdvantageMonths: Int?
+    let missingDataNotes: [String]
     let sourceNote: String
 }
 
@@ -125,6 +127,7 @@ struct AssistantPayoffStrategyResultSummary: Codable, Sendable {
     let strategy: AssistantPayoffStrategy
     let totalInterest: Decimal
     let projectedDebtFreeDate: Date?
+    let paymentFeasible: Bool
     let payoffOrder: [AssistantPayoffDebtSummary]
 }
 

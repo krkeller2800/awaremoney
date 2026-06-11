@@ -269,8 +269,12 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         var lines = [
             "Using avalanche instead of snowball saves \(formatCurrency(summary.interestSavingsUsingAvalanche, currencyCode: summary.currencyCode)) in projected interest.",
             "Avalanche interest: \(formatCurrency(summary.avalanche.totalInterest, currencyCode: summary.currencyCode)).",
-            "Snowball interest: \(formatCurrency(summary.snowball.totalInterest, currencyCode: summary.currencyCode))."
+            "Snowball interest: \(formatCurrency(summary.snowball.totalInterest, currencyCode: summary.currencyCode)).",
+            "Minimum-payment interest: \(formatCurrency(summary.minimumPayments.totalInterest, currencyCode: summary.currencyCode))."
         ]
+        if !summary.avalanche.paymentFeasible || !summary.snowball.paymentFeasible || !summary.minimumPayments.paymentFeasible {
+            lines.append("At least one strategy is not feasible with the current setup.")
+        }
         if let months = summary.avalancheDebtFreeDateAdvantageMonths {
             if months > 0 {
                 lines.append("Avalanche is projected to finish \(months) \(months == 1 ? "month" : "months") sooner.")
@@ -281,6 +285,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         if let first = summary.avalanche.payoffOrder.first {
             lines.append("Avalanche starts with \(first.name).")
         }
+        lines.append(contentsOf: summary.missingDataNotes.prefix(4))
         return lines.joined(separator: "\n")
     }
 

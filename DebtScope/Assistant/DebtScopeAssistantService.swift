@@ -91,24 +91,36 @@ final class DebtScopeAssistantService {
 
     func payoffStrategyComparison(startDate: Date) throws -> AssistantPayoffStrategyComparisonSummary? {
         let provider = PayoffPlanProvider(context: context, settings: settings)
-        guard
-            let avalanchePlan = try provider.computePlan(startDate: startDate, strategyOverride: .avalanche),
-            let snowballPlan = try provider.computePlan(startDate: startDate, strategyOverride: .snowball)
-        else {
-            return nil
-        }
-
         let liabilities = try debtAccountInputs()
         let totalMinimumPayment = liabilities.reduce(0) { $0 + $1.minimumPayment }
-        let avalanche = payoffStrategyResult(
-            strategy: .avalanche,
-            plan: avalanchePlan,
+        let monthlyBudget = planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment)
+        let minimumsOnly = payoffStrategyComparisonResult(
+            strategy: .minimumsOnly,
+            startDate: startDate,
+            provider: provider,
             liabilities: liabilities
         )
-        let snowball = payoffStrategyResult(
-            strategy: .snowball,
-            plan: snowballPlan,
+        let avalanche = payoffStrategyComparisonResult(
+            strategy: .avalanche,
+            startDate: startDate,
+            provider: provider,
             liabilities: liabilities
+        )
+        let snowball = payoffStrategyComparisonResult(
+            strategy: .snowball,
+            startDate: startDate,
+            provider: provider,
+            liabilities: liabilities
+        )
+        let missingDataNotes = strategyComparisonMissingDataNotes(
+            liabilities: liabilities,
+            monthlyBudget: monthlyBudget,
+            totalMinimumPayment: totalMinimumPayment,
+            strategyErrors: [
+                minimumsOnly.error,
+                avalanche.error,
+                snowball.error
+            ]
         )
 
         return AssistantPayoffStrategyComparisonSummary(
@@ -118,15 +130,19 @@ final class DebtScopeAssistantService {
             debtCount: liabilities.count,
             totalStartingDebt: liabilities.reduce(0) { $0 + $1.latestBalance },
             totalMinimumPayment: totalMinimumPayment,
-            monthlyBudget: planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment),
-            avalanche: avalanche,
-            snowball: snowball,
-            interestSavingsUsingAvalanche: (snowball.totalInterest - avalanche.totalInterest).rounded(2),
+            monthlyBudget: monthlyBudget,
+            minimumPayments: minimumsOnly.summary,
+            avalanche: avalanche.summary,
+            snowball: snowball.summary,
+            interestSavingsUsingAvalanche: avalanche.summary.paymentFeasible && snowball.summary.paymentFeasible
+                ? (snowball.summary.totalInterest - avalanche.summary.totalInterest).rounded(2)
+                : 0,
             avalancheDebtFreeDateAdvantageMonths: monthAdvantage(
-                earlierDate: avalanche.projectedDebtFreeDate,
-                laterDate: snowball.projectedDebtFreeDate
+                earlierDate: avalanche.summary.projectedDebtFreeDate,
+                laterDate: snowball.summary.projectedDebtFreeDate
             ),
-            sourceNote: "Based on DebtScope's PayoffPlanProvider results for avalanche and snowball using the current budget settings."
+            missingDataNotes: missingDataNotes,
+            sourceNote: "Based on DebtScope's PayoffPlanProvider results for minimum-payment, avalanche, and snowball strategies using the current budget settings."
         )
     }
 
@@ -434,7 +450,46 @@ final class DebtScopeAssistantService {
             strategy: strategy,
             totalInterest: plan.totalInterest,
             projectedDebtFreeDate: projectedDebtFreeDate,
+            paymentFeasible: true,
             payoffOrder: payoffOrder
+        )
+    }
+
+    private func payoffStrategyComparisonResult(
+        strategy: AssistantPayoffStrategy,
+        startDate: Date,
+        provider: PayoffPlanProvider,
+        liabilities: [DebtAccountInput]
+    ) -> (summary: AssistantPayoffStrategyResultSummary, error: Error?) {
+        let strategyOverride: PayoffStrategy = {
+            switch strategy {
+            case .minimumsOnly:
+                return .minimumsOnly
+            case .snowball:
+                return .snowball
+            case .avalanche:
+                return .avalanche
+            }
+        }()
+
+        do {
+            guard let plan = try provider.computePlan(startDate: startDate, strategyOverride: strategyOverride) else {
+                return (emptyPayoffStrategyResult(strategy: strategy), nil)
+            }
+
+            return (payoffStrategyResult(strategy: strategy, plan: plan, liabilities: liabilities), nil)
+        } catch {
+            return (emptyPayoffStrategyResult(strategy: strategy), error)
+        }
+    }
+
+    private func emptyPayoffStrategyResult(strategy: AssistantPayoffStrategy) -> AssistantPayoffStrategyResultSummary {
+        AssistantPayoffStrategyResultSummary(
+            strategy: strategy,
+            totalInterest: 0,
+            projectedDebtFreeDate: nil,
+            paymentFeasible: false,
+            payoffOrder: []
         )
     }
 
@@ -663,6 +718,50 @@ final class DebtScopeAssistantService {
             notes.append("Payoff date is unavailable for \(missingPayoffDateCount) debt account(s) with the current payoff settings.")
         }
         return notes
+    }
+
+    private func strategyComparisonMissingDataNotes(
+        liabilities: [DebtAccountInput],
+        monthlyBudget: Decimal?,
+        totalMinimumPayment: Decimal,
+        strategyErrors: [Error?]
+    ) -> [String] {
+        var notes: [String] = []
+
+        if liabilities.isEmpty {
+            notes.append("No active credit-card or loan debts with current balances are available to compare.")
+        }
+
+        let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+        if missingAPRCount > 0 {
+            notes.append("APR is missing for \(missingAPRCount) debt account(s), so avalanche ordering may not reflect true interest cost.")
+        }
+
+        let missingMinimumPaymentCount = liabilities.filter(\.missingMinimumPayment).count
+        if missingMinimumPaymentCount > 0 {
+            notes.append("Minimum payment is missing for \(missingMinimumPaymentCount) debt account(s); DebtScope is using its fallback payment estimate.")
+        }
+
+        if let infeasibleMinimum = strategyErrors.compactMap({ error -> Decimal? in
+            guard let debtPlanError = error as? DebtPlanError,
+                  case let .infeasibleBudget(requiredMinimum) = debtPlanError else {
+                return nil
+            }
+            return requiredMinimum
+        }).max() {
+            if let monthlyBudget {
+                notes.append("Current monthly payoff budget is \(formatCurrency(monthlyBudget)), but minimum payments require at least \(formatCurrency(infeasibleMinimum)).")
+            } else {
+                notes.append("DebtScope needs at least \(formatCurrency(infeasibleMinimum)) per month for minimum payments before it can compare payoff strategies.")
+            }
+        } else if let monthlyBudget, monthlyBudget < totalMinimumPayment {
+            notes.append("Current monthly payoff budget is \(formatCurrency(monthlyBudget)), below total minimum payments of \(formatCurrency(totalMinimumPayment)).")
+        } else if monthlyBudget == nil, !liabilities.isEmpty {
+            notes.append("DebtScope could not determine a monthly payoff budget from the current budget settings.")
+        }
+
+        var seen = Set<String>()
+        return notes.filter { seen.insert($0).inserted }
     }
 
     private func absDecimal(_ value: Decimal) -> Decimal {

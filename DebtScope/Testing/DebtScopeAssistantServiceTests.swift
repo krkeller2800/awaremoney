@@ -185,14 +185,64 @@ struct DebtScopeAssistantServiceTests {
         #expect(comparison.totalStartingDebt == 6_000)
         #expect(comparison.totalMinimumPayment == 150)
         #expect(comparison.monthlyBudget == 300)
+        #expect(comparison.minimumPayments.strategy == .minimumsOnly)
+        #expect(comparison.minimumPayments.paymentFeasible == true)
         #expect(comparison.avalanche.strategy == .avalanche)
+        #expect(comparison.avalanche.paymentFeasible == true)
         #expect(comparison.snowball.strategy == .snowball)
+        #expect(comparison.snowball.paymentFeasible == true)
         #expect(comparison.avalanche.payoffOrder.count == 2)
         #expect(comparison.snowball.payoffOrder.count == 2)
         #expect(comparison.avalanche.totalInterest < comparison.snowball.totalInterest)
         #expect(comparison.interestSavingsUsingAvalanche == rounded(comparison.snowball.totalInterest - comparison.avalanche.totalInterest, scale: 2))
         #expect(comparison.interestSavingsUsingAvalanche > 0)
-        #expect(comparison.sourceNote.contains("avalanche and snowball"))
+        #expect(comparison.missingDataNotes.isEmpty)
+        #expect(comparison.sourceNote.contains("minimum-payment, avalanche, and snowball"))
+    }
+
+    @Test("Payoff strategy comparison returns missing-data summary without active debt")
+    func payoffStrategyComparisonReturnsMissingDataSummaryWithoutActiveDebt() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+
+        let savings = Account(name: "Savings", type: .savings)
+        context.insert(savings)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: 1_000, account: savings))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let comparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 2, 14)))
+
+        #expect(comparison.debtCount == 0)
+        #expect(comparison.totalStartingDebt == 0)
+        #expect(comparison.minimumPayments.paymentFeasible == false)
+        #expect(comparison.avalanche.paymentFeasible == false)
+        #expect(comparison.snowball.paymentFeasible == false)
+        #expect(comparison.missingDataNotes.contains("No active credit-card or loan debts with current balances are available to compare."))
+    }
+
+    @Test("Payoff strategy comparison discloses missing APR and minimum payment inputs")
+    func payoffStrategyComparisonDisclosesMissingInputs() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+
+        let card = Account(name: "Card Missing Terms", type: .creditCard, currencyCode: "USD")
+        context.insert(card)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: card))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let comparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 2, 14)))
+
+        #expect(comparison.debtCount == 1)
+        #expect(comparison.minimumPayments.paymentFeasible == true)
+        #expect(comparison.avalanche.paymentFeasible == true)
+        #expect(comparison.snowball.paymentFeasible == true)
+        #expect(comparison.missingDataNotes.contains { $0.contains("APR is missing for 1 debt account") })
+        #expect(comparison.missingDataNotes.contains { $0.contains("Minimum payment is missing for 1 debt account") })
     }
 
     @Test("Assistant read-only defaults snapshot restores payoff budget settings")
@@ -238,14 +288,13 @@ struct DebtScopeAssistantServiceTests {
 
         let service = DebtScopeAssistantService(context: context, settings: settings)
 
-        do {
-            _ = try service.payoffStrategyComparison(startDate: date(2026, 2, 14))
-            Issue.record("Expected payoff strategy comparison to fail with an infeasible budget")
-        } catch {
-            let details = service.payoffStrategyComparisonUnavailableDetails(startDate: date(2026, 2, 14), error: error)
-            #expect(details.contains { $0.contains("Current monthly payoff budget is $100.00") })
-            #expect(details.contains { $0.contains("minimum payments require at least $175.00") })
-        }
+        let comparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 2, 14)))
+
+        #expect(comparison.minimumPayments.paymentFeasible == false)
+        #expect(comparison.avalanche.paymentFeasible == false)
+        #expect(comparison.snowball.paymentFeasible == false)
+        #expect(comparison.missingDataNotes.contains { $0.contains("Current monthly payoff budget is $100.00") })
+        #expect(comparison.missingDataNotes.contains { $0.contains("minimum payments require at least $175.00") })
     }
 
     @Test("Cash flow summary handles empty data and clamps requested months")

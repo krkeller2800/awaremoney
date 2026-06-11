@@ -139,7 +139,7 @@ struct GetPayoffPlanTool: Tool {
 @available(iOS 26.0, *)
 struct ComparePayoffStrategiesTool: Tool {
     let name = "compare_payoff_strategies"
-    let description = "Compare DebtScope's avalanche and snowball payoff strategies, including total interest, payoff order, projected debt-free dates, and avalanche interest savings."
+    let description = "Compare DebtScope's minimum-payment, avalanche, and snowball payoff strategies, including total interest, feasibility, payoff order, projected debt-free dates, avalanche interest savings, and missing input notes."
 
     private let serviceBox: DebtScopeAssistantToolServiceBox
 
