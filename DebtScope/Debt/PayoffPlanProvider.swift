@@ -11,7 +11,11 @@ final class PayoffPlanProvider {
         self.settings = settings
     }
 
-    func computePlan(startDate: Date, strategyOverride: PayoffStrategy? = nil) throws -> DebtPlanResult? {
+    func computePlan(
+        startDate: Date,
+        strategyOverride: PayoffStrategy? = nil,
+        monthlyBudgetOverride: Decimal? = nil
+    ) throws -> DebtPlanResult? {
         let accounts = try context.fetch(FetchDescriptor<Account>()).filter { $0.type == .loan || $0.type == .creditCard }
         let liabilities = accounts.filter { absDecimal(latestBalance($0)) > 0 }
         guard !liabilities.isEmpty else { return nil }
@@ -47,6 +51,16 @@ final class PayoffPlanProvider {
 
         let startMonth = normalizeToMonth(startDate)
 
+        if let monthlyBudgetOverride, monthlyBudgetOverride > 0 {
+            return try DebtPayoffEngine.plan(
+                debts: debts,
+                monthlyBudget: monthlyBudgetOverride.rounded(2),
+                strategy: strategy,
+                reinvestmentRate: Decimal(debtPaymentReinvestmentRate),
+                startDate: startMonth
+            )
+        }
+
         if includeSpreads || baselineRaw == "recurringNet" {
             let availableCashSchedule = IncomeScheduler.budgetByMonth(
                 items: allCashFlowItems(),
@@ -76,11 +90,7 @@ final class PayoffPlanProvider {
             if useFixedDebtBudget && debtBudgetOverrideAmount > 0 {
                 budget = Decimal(debtBudgetOverrideAmount)
             } else {
-                if strategy == .minimumsOnly {
-                    budget = debts.reduce(0) { $0 + $1.minPayment }
-                } else {
-                    budget = 0
-                }
+                budget = debts.reduce(0) { $0 + $1.minPayment }
             }
             return try DebtPayoffEngine.plan(
                 debts: debts,

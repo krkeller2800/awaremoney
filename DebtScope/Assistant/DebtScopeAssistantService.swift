@@ -89,26 +89,31 @@ final class DebtScopeAssistantService {
         )
     }
 
-    func payoffStrategyComparison(startDate: Date) throws -> AssistantPayoffStrategyComparisonSummary? {
+    func payoffStrategyComparison(startDate: Date, monthlyBudgetOverride: Decimal? = nil) throws -> AssistantPayoffStrategyComparisonSummary? {
         let provider = PayoffPlanProvider(context: context, settings: settings)
         let liabilities = try debtAccountInputs()
         let totalMinimumPayment = liabilities.reduce(0) { $0 + $1.minimumPayment }
-        let monthlyBudget = planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment)
+        let sanitizedMonthlyBudgetOverride = monthlyBudgetOverride.map { max(0, $0.rounded(2)) }
+        let monthlyBudget = sanitizedMonthlyBudgetOverride.flatMap { $0 > 0 ? $0 : nil }
+            ?? planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment)
         let minimumsOnly = payoffStrategyComparisonResult(
             strategy: .minimumsOnly,
             startDate: startDate,
+            monthlyBudgetOverride: sanitizedMonthlyBudgetOverride,
             provider: provider,
             liabilities: liabilities
         )
         let avalanche = payoffStrategyComparisonResult(
             strategy: .avalanche,
             startDate: startDate,
+            monthlyBudgetOverride: sanitizedMonthlyBudgetOverride,
             provider: provider,
             liabilities: liabilities
         )
         let snowball = payoffStrategyComparisonResult(
             strategy: .snowball,
             startDate: startDate,
+            monthlyBudgetOverride: sanitizedMonthlyBudgetOverride,
             provider: provider,
             liabilities: liabilities
         )
@@ -142,7 +147,9 @@ final class DebtScopeAssistantService {
                 laterDate: snowball.summary.projectedDebtFreeDate
             ),
             missingDataNotes: missingDataNotes,
-            sourceNote: "Based on DebtScope's PayoffPlanProvider results for minimum-payment, avalanche, and snowball strategies using the current budget settings."
+            sourceNote: monthlyBudgetOverride == nil
+                ? "Based on DebtScope's PayoffPlanProvider results for minimum-payment, avalanche, and snowball strategies using the current budget settings."
+                : "Based on DebtScope's PayoffPlanProvider results for minimum-payment, avalanche, and snowball strategies using a temporary monthly budget override."
         )
     }
 
@@ -458,6 +465,7 @@ final class DebtScopeAssistantService {
     private func payoffStrategyComparisonResult(
         strategy: AssistantPayoffStrategy,
         startDate: Date,
+        monthlyBudgetOverride: Decimal?,
         provider: PayoffPlanProvider,
         liabilities: [DebtAccountInput]
     ) -> (summary: AssistantPayoffStrategyResultSummary, error: Error?) {
@@ -473,7 +481,11 @@ final class DebtScopeAssistantService {
         }()
 
         do {
-            guard let plan = try provider.computePlan(startDate: startDate, strategyOverride: strategyOverride) else {
+            guard let plan = try provider.computePlan(
+                startDate: startDate,
+                strategyOverride: strategyOverride,
+                monthlyBudgetOverride: monthlyBudgetOverride
+            ) else {
                 return (emptyPayoffStrategyResult(strategy: strategy), nil)
             }
 

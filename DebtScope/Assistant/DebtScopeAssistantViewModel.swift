@@ -188,9 +188,13 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             return try formatPayoffFocus(service.payoffPlanSummary(startDate: Date()))
         case .strategySavings:
             let startDate = Date()
+            let monthlyBudgetOverride = requestedStrategyComparisonMonthlyBudget(in: prompt)
             do {
                 return try formatStrategySavings(
-                    service.payoffStrategyComparison(startDate: startDate),
+                    service.payoffStrategyComparison(
+                        startDate: startDate,
+                        monthlyBudgetOverride: monthlyBudgetOverride
+                    ),
                     startDate: startDate,
                     error: nil
                 )
@@ -266,14 +270,24 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             return (["DebtScope could not compare avalanche and snowball with the current payoff setup."] + details.prefix(4)).joined(separator: "\n")
         }
 
+        guard summary.avalanche.paymentFeasible, summary.snowball.paymentFeasible else {
+            var lines = ["DebtScope could not compare avalanche and snowball with the current payoff setup."]
+            if summary.minimumPayments.paymentFeasible {
+                lines.append("Minimum-payment interest: \(formatCurrency(summary.minimumPayments.totalInterest, currencyCode: summary.currencyCode)).")
+            }
+            lines.append(contentsOf: summary.missingDataNotes.prefix(4))
+            return lines.joined(separator: "\n")
+        }
+
         var lines = [
+            comparisonBasisLine(summary),
             "Using avalanche instead of snowball saves \(formatCurrency(summary.interestSavingsUsingAvalanche, currencyCode: summary.currencyCode)) in projected interest.",
             "Avalanche interest: \(formatCurrency(summary.avalanche.totalInterest, currencyCode: summary.currencyCode)).",
             "Snowball interest: \(formatCurrency(summary.snowball.totalInterest, currencyCode: summary.currencyCode)).",
             "Minimum-payment interest: \(formatCurrency(summary.minimumPayments.totalInterest, currencyCode: summary.currencyCode))."
         ]
-        if !summary.avalanche.paymentFeasible || !summary.snowball.paymentFeasible || !summary.minimumPayments.paymentFeasible {
-            lines.append("At least one strategy is not feasible with the current setup.")
+        if !summary.minimumPayments.paymentFeasible {
+            lines.append("The minimum-payment strategy is not feasible with the current setup.")
         }
         if let months = summary.avalancheDebtFreeDateAdvantageMonths {
             if months > 0 {
@@ -287,6 +301,14 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
         lines.append(contentsOf: summary.missingDataNotes.prefix(4))
         return lines.joined(separator: "\n")
+    }
+
+    private func comparisonBasisLine(_ summary: AssistantPayoffStrategyComparisonSummary) -> String {
+        if let monthlyBudget = summary.monthlyBudget {
+            return "Comparison basis: \(formatCurrency(monthlyBudget, currencyCode: summary.currencyCode)) monthly debt budget starting \(formatMonthYear(summary.startDate))."
+        }
+
+        return "Comparison basis: payoff settings starting \(formatMonthYear(summary.startDate))."
     }
 
     private func formatUpcomingBills(_ bills: [AssistantUpcomingBillSummary], currencyCode: String) -> String {
@@ -337,6 +359,24 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         return Decimal(string: value)
     }
 
+    private func requestedStrategyComparisonMonthlyBudget(in prompt: String) -> Decimal? {
+        let normalized = prompt.lowercased()
+        guard normalized.contains("budget") else { return nil }
+
+        if let match = prompt.range(of: #"\$\s*\d+(?:,\d{3})*(?:\.\d+)?"#, options: .regularExpression) {
+            let value = prompt[match]
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            return Decimal(string: value)
+        }
+
+        guard normalized.contains("monthly") else { return nil }
+        guard let match = prompt.range(of: #"\d+(?:,\d{3})*(?:\.\d+)?"#, options: .regularExpression) else { return nil }
+        let value = prompt[match].replacingOccurrences(of: ",", with: "")
+        return Decimal(string: value)
+    }
+
     private func formatCurrency(_ value: Decimal, currencyCode: String) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
@@ -355,6 +395,12 @@ final class DebtScopeAssistantViewModel: ObservableObject {
 
     private func formatDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private func formatMonthYear(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter.string(from: date)
     }
 
     private func formatStrategy(_ strategy: AssistantPayoffStrategy) -> String {

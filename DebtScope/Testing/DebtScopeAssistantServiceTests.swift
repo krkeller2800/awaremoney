@@ -25,6 +25,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Debt summary returns display-safe liability totals")
     func debtSummaryReturnsDisplaySafeLiabilityTotals() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
 
@@ -80,6 +83,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Debt summary ignores zero-balance and asset accounts")
     func debtSummaryIgnoresZeroBalanceAndAssetAccounts() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
 
@@ -105,6 +111,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff plan summary reuses current DebtScope plan settings")
     func payoffPlanSummaryReusesCurrentDebtScopePlanSettings() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         settings.defaultPayoffStrategyRaw = "avalanche"
@@ -144,6 +153,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff plan summary is nil without active debt")
     func payoffPlanSummaryIsNilWithoutActiveDebt() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         let savings = Account(name: "Savings", type: .savings)
@@ -159,6 +171,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff strategy comparison reports avalanche savings over snowball")
     func payoffStrategyComparisonReportsAvalancheSavingsOverSnowball() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         settings.defaultPayoffStrategyRaw = "snowball"
@@ -202,6 +217,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff strategy comparison returns missing-data summary without active debt")
     func payoffStrategyComparisonReturnsMissingDataSummaryWithoutActiveDebt() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
 
@@ -223,6 +241,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff strategy comparison discloses missing APR and minimum payment inputs")
     func payoffStrategyComparisonDisclosesMissingInputs() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
@@ -243,6 +264,81 @@ struct DebtScopeAssistantServiceTests {
         #expect(comparison.snowball.paymentFeasible == true)
         #expect(comparison.missingDataNotes.contains { $0.contains("APR is missing for 1 debt account") })
         #expect(comparison.missingDataNotes.contains { $0.contains("Minimum payment is missing for 1 debt account") })
+    }
+
+    @Test("Payoff strategy comparison treats minimum-payment fallback budget as feasible for all strategies")
+    func payoffStrategyComparisonTreatsMinimumFallbackBudgetAsFeasibleForAllStrategies() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "minimumsOnly"
+        UserDefaults.standard.set(false, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(0.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        let highAPRCard = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        highAPRCard.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 100, paymentDayOfMonth: nil)
+        let lowAPRLoan = Account(name: "Low APR Loan", type: .loan, currencyCode: "USD")
+        lowAPRLoan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 75, paymentDayOfMonth: nil)
+        context.insert(highAPRCard)
+        context.insert(lowAPRLoan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -5_000, account: highAPRCard))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: lowAPRLoan))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let comparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 2, 14)))
+
+        #expect(comparison.monthlyBudget == 175)
+        #expect(comparison.minimumPayments.paymentFeasible == true)
+        #expect(comparison.avalanche.paymentFeasible == true)
+        #expect(comparison.snowball.paymentFeasible == true)
+        #expect(comparison.minimumPayments.totalInterest > 0)
+        #expect(comparison.avalanche.totalInterest > 0)
+        #expect(comparison.snowball.totalInterest > 0)
+        #expect(comparison.missingDataNotes.isEmpty)
+    }
+
+    @Test("Payoff strategy comparison can use temporary monthly budget override without saving settings")
+    func payoffStrategyComparisonCanUseTemporaryMonthlyBudgetOverrideWithoutSavingSettings() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "avalanche"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        let highAPRCard = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        highAPRCard.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 100, paymentDayOfMonth: nil)
+        let lowAPRLoan = Account(name: "Low APR Loan", type: .loan, currencyCode: "USD")
+        lowAPRLoan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 75, paymentDayOfMonth: nil)
+        context.insert(highAPRCard)
+        context.insert(lowAPRLoan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -50_000, account: highAPRCard))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -10_000, account: lowAPRLoan))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let currentBudgetComparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 6, 11)))
+        let overrideComparison = try #require(try service.payoffStrategyComparison(
+            startDate: date(2026, 6, 11),
+            monthlyBudgetOverride: 3_500
+        ))
+
+        #expect(currentBudgetComparison.monthlyBudget == 4_000)
+        #expect(overrideComparison.monthlyBudget == 3_500)
+        #expect(overrideComparison.avalanche.paymentFeasible == true)
+        #expect(overrideComparison.snowball.paymentFeasible == true)
+        #expect(overrideComparison.avalanche.totalInterest != currentBudgetComparison.avalanche.totalInterest)
+        #expect(overrideComparison.snowball.totalInterest != currentBudgetComparison.snowball.totalInterest)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
     }
 
     @Test("Assistant read-only defaults snapshot restores payoff budget settings")
@@ -269,6 +365,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Payoff strategy comparison unavailable details explain infeasible budget")
     func payoffStrategyComparisonUnavailableDetailsExplainInfeasibleBudget() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
@@ -299,6 +398,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Cash flow summary handles empty data and clamps requested months")
     func cashFlowSummaryHandlesEmptyDataAndClampsRequestedMonths() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
 
@@ -320,6 +422,9 @@ struct DebtScopeAssistantServiceTests {
 
     @Test("Upcoming bills clamps day window and returns display-safe summaries")
     func upcomingBillsClampsDayWindowAndReturnsDisplaySafeSummaries() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
         let context = try makeInMemoryContext()
         let settings = makeSettings()
         let calendar = Calendar.current
@@ -474,6 +579,49 @@ struct DebtScopeAssistantServiceTests {
             "assistant_include_transactions",
             "assistant_retain_conversation_history"
         ]
+    }
+
+    private struct PayoffDefaultsSnapshot {
+        private static let keys = [
+            "debtPlanStartModeRaw",
+            "debtPlanStartDate",
+            "useFixedDebtBudget",
+            "debtBudgetOverrideAmount",
+            "lastFixedDebtBudgetAmount",
+            "debtPaymentReinvestmentRate",
+            "debtDiscretionaryReserveAmount",
+            "baselineBudgetSourceRaw",
+            "includeNonMonthlyIncomeSpreads",
+            "oneTimeIncomeDefaultSpreadMonths"
+        ]
+
+        private let values: [String: Any]
+        private let missingKeys: Set<String>
+
+        static func capture(defaults: UserDefaults = .standard) -> PayoffDefaultsSnapshot {
+            var values: [String: Any] = [:]
+            var missingKeys = Set<String>()
+
+            for key in keys {
+                if let value = defaults.object(forKey: key) {
+                    values[key] = value
+                } else {
+                    missingKeys.insert(key)
+                }
+            }
+
+            return PayoffDefaultsSnapshot(values: values, missingKeys: missingKeys)
+        }
+
+        func restore(defaults: UserDefaults = .standard) {
+            for key in Self.keys {
+                if missingKeys.contains(key) {
+                    defaults.removeObject(forKey: key)
+                } else if let value = values[key] {
+                    defaults.set(value, forKey: key)
+                }
+            }
+        }
     }
 }
 #endif
