@@ -7,6 +7,21 @@ import Testing
 @Suite("DebtScope Assistant Service Tests")
 @MainActor
 struct DebtScopeAssistantServiceTests {
+    @Test("Assistant prompt intents cover rollout smoke prompts")
+    func assistantPromptIntentsCoverRolloutSmokePrompts() {
+        #expect(AssistantPromptIntent(prompt: "What is my current debt picture?") == .debtPicture)
+        #expect(AssistantPromptIntent(prompt: "Which debt should I focus on first and why?") == .payoffFocus)
+        #expect(AssistantPromptIntent(prompt: "How much would I save by using avalanche over snowball?") == .strategySavings)
+        #expect(AssistantPromptIntent(prompt: "What bills are coming up soon?") == .upcomingBills)
+        #expect(AssistantPromptIntent(prompt: "Can I afford to add $100 to monthly debt payments?") == .debtAffordability)
+        #expect(AssistantPromptIntent(prompt: "Show me my raw transactions and memos.") == .transactionDetails)
+    }
+
+    @Test("Assistant prompt intent recognizes original avalanche wording")
+    func assistantPromptIntentRecognizesOriginalAvalancheWording() {
+        #expect(AssistantPromptIntent(prompt: "How much interest do I save by using avalanche versus snowball?") == .strategySavings)
+    }
+
     @Test("Debt summary returns display-safe liability totals")
     func debtSummaryReturnsDisplaySafeLiabilityTotals() throws {
         let context = try makeInMemoryContext()

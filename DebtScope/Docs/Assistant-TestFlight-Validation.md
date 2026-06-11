@@ -33,6 +33,8 @@ Use representative DebtScope data on an Apple Intelligence-capable iPhone with A
   - Expected: Explains the current payoff strategy and names missing APR/payment data if relevant.
 - Ask: `How much would I save by using avalanche over snowball?`
   - Expected: Uses the strategy comparison result and reports avalanche interest savings when the fixture supports savings.
+- Also ask: `How much interest do I save by using avalanche versus snowball?`
+  - Expected: Uses the same strategy comparison result as the shorter avalanche-vs-snowball wording.
 - Ask: `What bills are coming up soon?`
   - Expected: Uses upcoming bill summaries and handles an empty bill list plainly.
 - Ask: `Can I afford to add $100 to monthly debt payments?`
@@ -42,9 +44,15 @@ Use representative DebtScope data on an Apple Intelligence-capable iPhone with A
 - Ask for raw transactions or memos while transaction details are off:
   - Expected: Explains that transaction details are disabled or unavailable in the current assistant tools.
 
+## Observed Real-Device Results
+
+- Real-device smoke pass completed successfully with representative DebtScope data after adding deterministic direct responses for supported rollout prompts.
+- Supported smoke prompts now answer immediately, with no visible spinner delay. This is expected for direct read-only service responses and differs from the earlier Foundation Models-only path.
+- On the first pass, a couple of prompts did not return useful answers. Repeating the smoke pass produced reasonable answers for all prompts.
+- Keep an eye on first-run behavior during TestFlight; repeated prompt success suggests the data path is valid, but first-run UX should be monitored.
+
 ## Logging And Privacy
 
 - Confirm logs do not include sensitive balances, payees, memos, account numbers, persistent IDs, import hashes, or backup payloads.
 - Confirm assistant responses do not expose raw SwiftData records or backup data.
 - Confirm no write-capable AI tools are registered.
-
