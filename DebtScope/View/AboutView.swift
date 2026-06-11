@@ -16,20 +16,22 @@ struct AboutView: View {
     }
 
     private var compileDate: String {
-        #if DEBUG
-        let compileDateString = "2026-01-31T12:00:00Z" // Replace with actual compile date or keep fixed for preview
-        #else
-        let compileDateString = "\(Date())"
-        #endif
-        let formatterInput = ISO8601DateFormatter()
-        let formatterOutput = DateFormatter()
-        formatterOutput.dateStyle = .medium
-        formatterOutput.timeStyle = .none
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
 
-        if let date = formatterInput.date(from: compileDateString) {
-            return "Compiled on \(formatterOutput.string(from: date))"
+        if let date = Self.bundleBuildDate {
+            return "Compiled on \(formatter.string(from: date))"
         }
         return "Compiled on unknown date"
+    }
+
+    private static var bundleBuildDate: Date? {
+        guard let executableURL = Bundle.main.executableURL,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: executableURL.path) else {
+            return nil
+        }
+        return attributes[.modificationDate] as? Date
     }
 
     private let supportURL = URL(string: "mailto:support@komakode.com?subject=Debt%20Scope%20support")!

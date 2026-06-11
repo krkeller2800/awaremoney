@@ -355,6 +355,8 @@ Recommended rollout sequence:
 
 ## Future Enhancements
 
+Detailed implementation sequencing is tracked in `Assistant-Future-Enhancements-Implementation-Plan.md`.
+
 After the read-only assistant is stable:
 
 - Strategy comparison: avalanche vs snowball vs minimums.

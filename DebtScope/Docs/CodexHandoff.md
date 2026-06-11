@@ -6,7 +6,7 @@
 - Recent work focused on correcting the Assistant UI entry point, stabilizing deterministic answers, and hardening read-only behavior after a suspected debt-budget mutation.
 
 ## Completed This Checkpoint
-- Made **Data > Assistant** open the real `DebtScopeAssistantView` instead of the availability-only screen.
+- Made **Local AI > Assistant** open the real `DebtScopeAssistantView` instead of the availability-only screen.
 - Removed the duplicate **Utility > Assistant** shortcut.
 - Fixed the nested-navigation crash by allowing `DebtScopeAssistantView(embeddedInNavigation: true)` inside QuickStart navigation.
 - Added keyboard dismissal after Assistant responses complete.

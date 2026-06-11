@@ -245,11 +245,13 @@ private struct DebtScopeAssistantChatView: View {
     }
 
     private func sendSuggestedPrompt(_ prompt: String) {
+        isInputFocused = false
         viewModel.sendPrompt(prompt)
     }
 
     private func sendCurrentPrompt() {
         guard viewModel.canSendPrompt else { return }
+        isInputFocused = false
         viewModel.sendCurrentPrompt()
     }
 }

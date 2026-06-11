@@ -326,7 +326,7 @@ struct QuickStartView: View {
         ]
 
         if settings.assistantEnabled {
-            groups.append(("Data", [.assistant]))
+            groups.append(("Local AI", [.assistant]))
         }
 
         return groups
