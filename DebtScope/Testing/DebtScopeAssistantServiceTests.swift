@@ -254,6 +254,42 @@ struct DebtScopeAssistantServiceTests {
         #expect(clampedBills.map(\.name) == ["Rent"])
     }
 
+    @Test("Assistant settings default to hidden and privacy-first")
+    func assistantSettingsDefaultToHiddenAndPrivacyFirst() {
+        withPreservedAssistantDefaults {
+            removeAssistantDefaults()
+
+            let settings = SettingsStore()
+
+            #expect(settings.assistantEnabled == false)
+            #expect(settings.assistantIncludeTransactions == false)
+            #expect(settings.assistantRetainConversationHistory == false)
+        }
+    }
+
+    @Test("Disabling assistant clears dependent privacy settings")
+    func disablingAssistantClearsDependentPrivacySettings() {
+        withPreservedAssistantDefaults {
+            UserDefaults.standard.set(true, forKey: "assistant_enabled")
+            UserDefaults.standard.set(true, forKey: "assistant_include_transactions")
+            UserDefaults.standard.set(true, forKey: "assistant_retain_conversation_history")
+
+            let settings = SettingsStore()
+            #expect(settings.assistantEnabled == true)
+            #expect(settings.assistantIncludeTransactions == true)
+            #expect(settings.assistantRetainConversationHistory == true)
+
+            settings.assistantEnabled = false
+
+            #expect(settings.assistantEnabled == false)
+            #expect(settings.assistantIncludeTransactions == false)
+            #expect(settings.assistantRetainConversationHistory == false)
+            #expect(UserDefaults.standard.bool(forKey: "assistant_enabled") == false)
+            #expect(UserDefaults.standard.bool(forKey: "assistant_include_transactions") == false)
+            #expect(UserDefaults.standard.bool(forKey: "assistant_retain_conversation_history") == false)
+        }
+    }
+
     private func makeInMemoryContext() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
@@ -289,6 +325,37 @@ struct DebtScopeAssistantServiceTests {
         var result = Decimal()
         NSDecimalRound(&result, &value, scale, .bankers)
         return result
+    }
+
+    private func withPreservedAssistantDefaults(_ operation: () -> Void) {
+        let savedValues = assistantDefaultKeys.reduce(into: [String: Any]()) { result, key in
+            if let value = UserDefaults.standard.object(forKey: key) {
+                result[key] = value
+            }
+        }
+
+        defer {
+            removeAssistantDefaults()
+            for (key, value) in savedValues {
+                UserDefaults.standard.set(value, forKey: key)
+            }
+        }
+
+        operation()
+    }
+
+    private func removeAssistantDefaults() {
+        for key in assistantDefaultKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    private var assistantDefaultKeys: [String] {
+        [
+            "assistant_enabled",
+            "assistant_include_transactions",
+            "assistant_retain_conversation_history"
+        ]
     }
 }
 #endif
