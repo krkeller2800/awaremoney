@@ -137,6 +137,43 @@ struct GetPayoffPlanTool: Tool {
 }
 
 @available(iOS 26.0, *)
+struct ComparePayoffStrategiesTool: Tool {
+    let name = "compare_payoff_strategies"
+    let description = "Compare DebtScope's avalanche and snowball payoff strategies, including total interest, payoff order, projected debt-free dates, and avalanche interest savings."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Optional comparison start date as YYYY-MM-DD. Leave empty unless the user asks for another start date.")
+        let startDate: String?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            let startDate = DebtScopeAssistantToolEncoding.date(from: arguments.startDate) ?? Date()
+            return try await MainActor.run {
+                let summary = try serviceBox.service.payoffStrategyComparison(startDate: startDate)
+
+                guard let summary else {
+                    return "{\"strategyComparisonAvailable\":false,\"reason\":\"DebtScope could not compare avalanche and snowball with the current debt and payoff settings.\"}"
+                }
+
+                return try DebtScopeAssistantToolEncoding.encode(summary)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct DebtScopeAssistantToolFactory {
     @MainActor
     static func debtAndPayoffTools(service: DebtScopeAssistantService) -> [any Tool] {
@@ -144,7 +181,8 @@ struct DebtScopeAssistantToolFactory {
             GetDebtSummaryTool(service: service),
             GetCashFlowSummaryTool(service: service),
             GetUpcomingBillsTool(service: service),
-            GetPayoffPlanTool(service: service)
+            GetPayoffPlanTool(service: service),
+            ComparePayoffStrategiesTool(service: service)
         ]
     }
 }

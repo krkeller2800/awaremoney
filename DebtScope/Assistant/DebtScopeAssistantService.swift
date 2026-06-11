@@ -89,6 +89,47 @@ final class DebtScopeAssistantService {
         )
     }
 
+    func payoffStrategyComparison(startDate: Date) throws -> AssistantPayoffStrategyComparisonSummary? {
+        let provider = PayoffPlanProvider(context: context, settings: settings)
+        guard
+            let avalanchePlan = try provider.computePlan(startDate: startDate, strategyOverride: .avalanche),
+            let snowballPlan = try provider.computePlan(startDate: startDate, strategyOverride: .snowball)
+        else {
+            return nil
+        }
+
+        let liabilities = try debtAccountInputs()
+        let totalMinimumPayment = liabilities.reduce(0) { $0 + $1.minimumPayment }
+        let avalanche = payoffStrategyResult(
+            strategy: .avalanche,
+            plan: avalanchePlan,
+            liabilities: liabilities
+        )
+        let snowball = payoffStrategyResult(
+            strategy: .snowball,
+            plan: snowballPlan,
+            liabilities: liabilities
+        )
+
+        return AssistantPayoffStrategyComparisonSummary(
+            generatedAt: Date(),
+            currencyCode: settings.currencyCode,
+            startDate: normalizeToMonth(startDate),
+            debtCount: liabilities.count,
+            totalStartingDebt: liabilities.reduce(0) { $0 + $1.latestBalance },
+            totalMinimumPayment: totalMinimumPayment,
+            monthlyBudget: planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment),
+            avalanche: avalanche,
+            snowball: snowball,
+            interestSavingsUsingAvalanche: (snowball.totalInterest - avalanche.totalInterest).rounded(2),
+            avalancheDebtFreeDateAdvantageMonths: monthAdvantage(
+                earlierDate: avalanche.projectedDebtFreeDate,
+                laterDate: snowball.projectedDebtFreeDate
+            ),
+            sourceNote: "Based on DebtScope's PayoffPlanProvider results for avalanche and snowball using the current budget settings."
+        )
+    }
+
     func cashFlowSummary(months requestedMonths: Int) throws -> AssistantCashFlowSummary {
         let months = clamp(requestedMonths, to: 1...24)
         let items = try cashFlowItems()
@@ -321,6 +362,45 @@ final class DebtScopeAssistantService {
             .map(\.account.id)
         ordered.append(contentsOf: remaining)
         return ordered
+    }
+
+    private func payoffStrategyResult(
+        strategy: AssistantPayoffStrategy,
+        plan: DebtPlanResult,
+        liabilities: [DebtAccountInput]
+    ) -> AssistantPayoffStrategyResultSummary {
+        let liabilitiesByID = Dictionary(uniqueKeysWithValues: liabilities.map { ($0.account.id, $0) })
+        let orderedIDs = payoffOrderIDs(from: plan, liabilities: liabilities)
+        let payoffOrder = orderedIDs.enumerated().compactMap { offset, accountID -> AssistantPayoffDebtSummary? in
+            guard let input = liabilitiesByID[accountID] else { return nil }
+            return AssistantPayoffDebtSummary(
+                name: input.account.name,
+                accountType: assistantAccountType(for: input.account.type),
+                startingBalance: input.latestBalance,
+                apr: input.apr,
+                minimumPayment: input.minimumPayment,
+                payoffDate: plan.payoffDates[accountID],
+                orderIndex: offset + 1
+            )
+        }
+        let projectedDebtFreeDate = liabilities.allSatisfy { plan.payoffDates[$0.account.id] != nil }
+            ? plan.payoffDates.values.max()
+            : nil
+
+        return AssistantPayoffStrategyResultSummary(
+            strategy: strategy,
+            totalInterest: plan.totalInterest,
+            projectedDebtFreeDate: projectedDebtFreeDate,
+            payoffOrder: payoffOrder
+        )
+    }
+
+    private func monthAdvantage(earlierDate: Date?, laterDate: Date?) -> Int? {
+        guard let earlierDate, let laterDate else { return nil }
+        let calendar = Calendar.current
+        let earlierMonth = normalizeToMonth(earlierDate)
+        let laterMonth = normalizeToMonth(laterDate)
+        return calendar.dateComponents([.month], from: earlierMonth, to: laterMonth).month
     }
 
     private func planMonthlyBudget(startDate: Date, totalMinimumPayment: Decimal) -> Decimal? {

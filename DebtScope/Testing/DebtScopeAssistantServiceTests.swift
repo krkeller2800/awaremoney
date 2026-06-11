@@ -141,6 +141,44 @@ struct DebtScopeAssistantServiceTests {
         #expect(summary == nil)
     }
 
+    @Test("Payoff strategy comparison reports avalanche savings over snowball")
+    func payoffStrategyComparisonReportsAvalancheSavingsOverSnowball() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "snowball"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+
+        let highAPRCard = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        highAPRCard.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 100, paymentDayOfMonth: nil)
+        let lowAPRLoan = Account(name: "Small Low APR Loan", type: .loan, currencyCode: "USD")
+        lowAPRLoan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 50, paymentDayOfMonth: nil)
+        context.insert(highAPRCard)
+        context.insert(lowAPRLoan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -5_000, account: highAPRCard))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: lowAPRLoan))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let comparison = try #require(try service.payoffStrategyComparison(startDate: date(2026, 2, 14)))
+
+        #expect(comparison.currencyCode == "USD")
+        #expect(Calendar.current.component(.day, from: comparison.startDate) == 1)
+        #expect(comparison.debtCount == 2)
+        #expect(comparison.totalStartingDebt == 6_000)
+        #expect(comparison.totalMinimumPayment == 150)
+        #expect(comparison.monthlyBudget == 300)
+        #expect(comparison.avalanche.strategy == .avalanche)
+        #expect(comparison.snowball.strategy == .snowball)
+        #expect(comparison.avalanche.payoffOrder.count == 2)
+        #expect(comparison.snowball.payoffOrder.count == 2)
+        #expect(comparison.avalanche.totalInterest < comparison.snowball.totalInterest)
+        #expect(comparison.interestSavingsUsingAvalanche == rounded(comparison.snowball.totalInterest - comparison.avalanche.totalInterest, scale: 2))
+        #expect(comparison.interestSavingsUsingAvalanche > 0)
+        #expect(comparison.sourceNote.contains("avalanche and snowball"))
+    }
+
     @Test("Cash flow summary handles empty data and clamps requested months")
     func cashFlowSummaryHandlesEmptyDataAndClampsRequestedMonths() throws {
         let context = try makeInMemoryContext()
@@ -244,6 +282,13 @@ struct DebtScopeAssistantServiceTests {
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         let components = DateComponents(year: year, month: month, day: day)
         return Calendar(identifier: .gregorian).date(from: components) ?? Date()
+    }
+
+    private func rounded(_ value: Decimal, scale: Int) -> Decimal {
+        var value = value
+        var result = Decimal()
+        NSDecimalRound(&result, &value, scale, .bankers)
+        return result
     }
 }
 #endif

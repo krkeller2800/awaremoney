@@ -11,12 +11,12 @@ final class PayoffPlanProvider {
         self.settings = settings
     }
 
-    func computePlan(startDate: Date) throws -> DebtPlanResult? {
+    func computePlan(startDate: Date, strategyOverride: PayoffStrategy? = nil) throws -> DebtPlanResult? {
         let accounts = try context.fetch(FetchDescriptor<Account>()).filter { $0.type == .loan || $0.type == .creditCard }
         let liabilities = accounts.filter { absDecimal(latestBalance($0)) > 0 }
         guard !liabilities.isEmpty else { return nil }
 
-        let strategy: PayoffStrategy = {
+        let strategy: PayoffStrategy = strategyOverride ?? {
             switch settings.defaultPayoffStrategyRaw.lowercased() {
             case "snowball": return .snowball
             case "avalanche": return .avalanche
