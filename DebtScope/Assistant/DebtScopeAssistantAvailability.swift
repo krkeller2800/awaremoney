@@ -31,7 +31,7 @@ enum DebtScopeAssistantAvailability: Equatable {
     var message: String {
         switch self {
         case .available:
-            return "DebtScope can use the on-device system language model. Tool access and chat are added in the next assistant milestone."
+            return "DebtScope can use the on-device system language model. Supported questions use scoped read-only summaries from your app data."
         case .disabledInSettings:
             return "Turn on DebtScope Assistant in Data & Privacy settings to check Apple Intelligence availability."
         case .deviceNotEligible:

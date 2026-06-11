@@ -5,8 +5,18 @@ struct DebtScopeAssistantView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
 
+    let embeddedInNavigation: Bool
+
+    init(embeddedInNavigation: Bool = false) {
+        self.embeddedInNavigation = embeddedInNavigation
+    }
+
     var body: some View {
-        DebtScopeAssistantChatView(context: modelContext, settings: settings)
+        DebtScopeAssistantChatView(
+            context: modelContext,
+            settings: settings,
+            embeddedInNavigation: embeddedInNavigation
+        )
     }
 }
 
@@ -14,6 +24,9 @@ private struct DebtScopeAssistantChatView: View {
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var viewModel: DebtScopeAssistantViewModel
     @AppStorage("assistant_privacy_notice_dismissed") private var privacyNoticeDismissed = false
+    @FocusState private var isInputFocused: Bool
+
+    let embeddedInNavigation: Bool
 
     private let suggestedPrompts = [
         "Summarize my debts",
@@ -22,44 +35,57 @@ private struct DebtScopeAssistantChatView: View {
         "Explain my payoff plan"
     ]
 
-    init(context: ModelContext, settings: SettingsStore) {
+    init(context: ModelContext, settings: SettingsStore, embeddedInNavigation: Bool = false) {
+        self.embeddedInNavigation = embeddedInNavigation
         _viewModel = StateObject(wrappedValue: DebtScopeAssistantViewModel(context: context, settings: settings))
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                messagesContent
-                inputBar
+        if embeddedInNavigation {
+            assistantContent
+        } else {
+            NavigationStack {
+                assistantContent
             }
-            .navigationTitle("Assistant")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if viewModel.isLoading {
-                        Button {
-                            viewModel.cancelResponse()
-                        } label: {
-                            Image(systemName: "stop.circle")
-                        }
-                        .accessibilityLabel("Stop response")
-                    }
+        }
+    }
 
+    private var assistantContent: some View {
+        VStack(spacing: 0) {
+            messagesContent
+            inputBar
+        }
+        .navigationTitle("Assistant")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if viewModel.isLoading {
                     Button {
-                        viewModel.resetSession()
+                        viewModel.cancelResponse()
                     } label: {
-                        Image(systemName: "arrow.counterclockwise")
+                        Image(systemName: "stop.circle")
                     }
-                    .accessibilityLabel("Reset assistant")
-                    .disabled(viewModel.messages.isEmpty && !viewModel.isLoading)
+                    .accessibilityLabel("Stop response")
                 }
+
+                Button {
+                    viewModel.resetSession()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .accessibilityLabel("Reset assistant")
+                .disabled(viewModel.messages.isEmpty && !viewModel.isLoading)
             }
-            .onAppear {
-                viewModel.refreshAvailability()
-            }
-            .onChange(of: settings.assistantEnabled) { _, _ in
-                viewModel.refreshAvailability()
-            }
+        }
+        .onAppear {
+            viewModel.refreshAvailability()
+        }
+        .onChange(of: settings.assistantEnabled) { _, _ in
+            viewModel.refreshAvailability()
+        }
+        .onChange(of: viewModel.isLoading) { _, isLoading in
+            guard !isLoading else { return }
+            isInputFocused = false
         }
     }
 
@@ -200,6 +226,7 @@ private struct DebtScopeAssistantChatView: View {
                 TextField("Ask DebtScope", text: $viewModel.currentInput, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
+                    .focused($isInputFocused)
                     .disabled(!viewModel.availability.isAvailable || viewModel.isLoading)
                     .submitLabel(.send)
                     .onSubmit(sendCurrentPrompt)

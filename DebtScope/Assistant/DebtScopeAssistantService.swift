@@ -130,6 +130,49 @@ final class DebtScopeAssistantService {
         )
     }
 
+    func payoffStrategyComparisonUnavailableDetails(startDate: Date, error: Error?) -> [String] {
+        do {
+            let liabilities = try debtAccountInputs()
+            guard !liabilities.isEmpty else {
+                return ["No active credit-card or loan debts with balances are available to compare."]
+            }
+
+            let totalMinimumPayment = liabilities.reduce(0) { $0 + $1.minimumPayment }
+            let monthlyBudget = planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment)
+            var details: [String] = []
+
+            if let debtPlanError = error as? DebtPlanError,
+               case let .infeasibleBudget(requiredMinimum) = debtPlanError {
+                if let monthlyBudget {
+                    details.append("Current monthly payoff budget is \(formatCurrency(monthlyBudget)), but minimum payments require at least \(formatCurrency(requiredMinimum)).")
+                } else {
+                    details.append("DebtScope needs at least \(formatCurrency(requiredMinimum)) per month for minimum payments before it can compare payoff strategies.")
+                }
+            } else if let monthlyBudget, monthlyBudget < totalMinimumPayment {
+                details.append("Current monthly payoff budget is \(formatCurrency(monthlyBudget)), below total minimum payments of \(formatCurrency(totalMinimumPayment)).")
+            } else if monthlyBudget == nil {
+                details.append("DebtScope could not determine a monthly payoff budget from the current budget settings.")
+            }
+
+            let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+            if missingAPRCount > 0 {
+                details.append("APR is missing for \(missingAPRCount) debt account(s), so avalanche ordering may not reflect true interest cost.")
+            }
+
+            let missingMinimumPaymentCount = liabilities.filter { $0.missingMinimumPayment }.count
+            if missingMinimumPaymentCount > 0 {
+                details.append("Minimum payment is missing for \(missingMinimumPaymentCount) debt account(s); DebtScope is using its fallback payment estimate.")
+            }
+
+            if details.isEmpty {
+                details.append("DebtScope's payoff engine could not produce both avalanche and snowball plans with the current debt and budget settings.")
+            }
+            return details
+        } catch {
+            return ["DebtScope could not read the debt setup needed to compare payoff strategies."]
+        }
+    }
+
     func cashFlowSummary(months requestedMonths: Int) throws -> AssistantCashFlowSummary {
         let months = clamp(requestedMonths, to: 1...24)
         let items = try cashFlowItems()
@@ -559,6 +602,14 @@ final class DebtScopeAssistantService {
             return incomeName
         }
         return allocationSourceNames[item.id]
+    }
+
+    private func formatCurrency(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = settings.currencyCode
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "\(value) \(settings.currencyCode)"
     }
 
     private func cashFlowMissingDataNotes(items: [CashFlowItem], reserveAdjustedAvailableForDebt: Decimal?) -> [String] {

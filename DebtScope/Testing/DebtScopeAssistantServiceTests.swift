@@ -20,6 +20,7 @@ struct DebtScopeAssistantServiceTests {
     @Test("Assistant prompt intent recognizes original avalanche wording")
     func assistantPromptIntentRecognizesOriginalAvalancheWording() {
         #expect(AssistantPromptIntent(prompt: "How much interest do I save by using avalanche versus snowball?") == .strategySavings)
+        #expect(AssistantPromptIntent(prompt: "How much interest will I save by using avalanche over snowball") == .strategySavings)
     }
 
     @Test("Debt summary returns display-safe liability totals")
@@ -192,6 +193,59 @@ struct DebtScopeAssistantServiceTests {
         #expect(comparison.interestSavingsUsingAvalanche == rounded(comparison.snowball.totalInterest - comparison.avalanche.totalInterest, scale: 2))
         #expect(comparison.interestSavingsUsingAvalanche > 0)
         #expect(comparison.sourceNote.contains("avalanche and snowball"))
+    }
+
+    @Test("Assistant read-only defaults snapshot restores payoff budget settings")
+    func assistantReadOnlyDefaultsSnapshotRestoresPayoffBudgetSettings() {
+        let suiteName = "DebtScopeAssistantReadOnlyDefaultsSnapshotTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: "useFixedDebtBudget")
+        defaults.set("fixed", forKey: "baselineBudgetSourceRaw")
+        defaults.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+
+        let snapshot = DebtScopeAssistantReadOnlyDefaultsSnapshot.capture(defaults: defaults)
+        defaults.set(100.0, forKey: "debtBudgetOverrideAmount")
+        defaults.set(false, forKey: "useFixedDebtBudget")
+        defaults.set("recurringNet", forKey: "baselineBudgetSourceRaw")
+
+        snapshot.restore(defaults: defaults)
+
+        #expect(defaults.bool(forKey: "useFixedDebtBudget") == true)
+        #expect(defaults.string(forKey: "baselineBudgetSourceRaw") == "fixed")
+        #expect(defaults.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+    }
+
+    @Test("Payoff strategy comparison unavailable details explain infeasible budget")
+    func payoffStrategyComparisonUnavailableDetailsExplainInfeasibleBudget() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(100.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        let card = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        card.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 100, paymentDayOfMonth: nil)
+        let loan = Account(name: "Small Loan", type: .loan, currencyCode: "USD")
+        loan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 75, paymentDayOfMonth: nil)
+        context.insert(card)
+        context.insert(loan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -5_000, account: card))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: loan))
+        try context.save()
+
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+
+        do {
+            _ = try service.payoffStrategyComparison(startDate: date(2026, 2, 14))
+            Issue.record("Expected payoff strategy comparison to fail with an infeasible budget")
+        } catch {
+            let details = service.payoffStrategyComparisonUnavailableDetails(startDate: date(2026, 2, 14), error: error)
+            #expect(details.contains { $0.contains("Current monthly payoff budget is $100.00") })
+            #expect(details.contains { $0.contains("minimum payments require at least $175.00") })
+        }
     }
 
     @Test("Cash flow summary handles empty data and clamps requested months")

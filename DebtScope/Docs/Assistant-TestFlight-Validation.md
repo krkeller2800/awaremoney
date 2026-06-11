@@ -14,12 +14,11 @@
   - Assistant is absent from the main topic groups.
   - Assistant is absent from the utility menu.
 - Turn `DebtScope Assistant` on:
-  - Assistant appears in the Data topic group.
-  - Assistant appears in the utility menu.
+  - Assistant appears in the Data topic group and opens the interactive assistant view.
+  - Assistant remains absent from the utility menu.
   - `Allow transaction details` and `Keep assistant history` become editable, but remain off unless the user enables them.
 - Turn `DebtScope Assistant` off:
-  - Assistant closes if it is open.
-  - Current Assistant selection routes back to Debt Payoff.
+  - If Assistant is selected, the current selection routes back to Debt Payoff.
   - Assistant is removed from compact navigation paths.
   - `Allow transaction details` and `Keep assistant history` reset to off.
 

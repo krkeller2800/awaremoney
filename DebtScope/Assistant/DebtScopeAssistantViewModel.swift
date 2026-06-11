@@ -88,8 +88,10 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         responseTask?.cancel()
+        let readOnlyDefaultsSnapshot = DebtScopeAssistantReadOnlyDefaultsSnapshot.capture()
         responseTask = Task { [weak self] in
             guard let self else { return }
+            defer { readOnlyDefaultsSnapshot.restore() }
 
             do {
                 let response = try await self.generateResponse(to: trimmedPrompt)
@@ -185,7 +187,20 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         case .payoffFocus:
             return try formatPayoffFocus(service.payoffPlanSummary(startDate: Date()))
         case .strategySavings:
-            return try formatStrategySavings(service.payoffStrategyComparison(startDate: Date()))
+            let startDate = Date()
+            do {
+                return try formatStrategySavings(
+                    service.payoffStrategyComparison(startDate: startDate),
+                    startDate: startDate,
+                    error: nil
+                )
+            } catch {
+                AMLogging.error(
+                    "Assistant strategy comparison failed errorType=\(String(describing: type(of: error)))",
+                    component: "DebtScopeAssistantViewModel"
+                )
+                return formatStrategySavings(nil, startDate: startDate, error: error)
+            }
         case .upcomingBills:
             return try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode)
         case .debtAffordability:
@@ -241,9 +256,14 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
-    private func formatStrategySavings(_ summary: AssistantPayoffStrategyComparisonSummary?) -> String {
+    private func formatStrategySavings(
+        _ summary: AssistantPayoffStrategyComparisonSummary?,
+        startDate: Date,
+        error: Error?
+    ) -> String {
         guard let summary else {
-            return "DebtScope could not compare avalanche and snowball with the current debt and payoff settings. Check that active debts have balances, APRs, minimum payments, and enough budget to compute both plans."
+            let details = service.payoffStrategyComparisonUnavailableDetails(startDate: startDate, error: error)
+            return (["DebtScope could not compare avalanche and snowball with the current payoff setup."] + details.prefix(4)).joined(separator: "\n")
         }
 
         var lines = [
@@ -356,4 +376,47 @@ final class DebtScopeAssistantViewModel: ObservableObject {
 
 private enum DebtScopeAssistantViewModelError: Error {
     case foundationModelsUnavailable
+}
+
+struct DebtScopeAssistantReadOnlyDefaultsSnapshot {
+    private static let protectedKeys = [
+        "debtPlanStartModeRaw",
+        "debtPlanStartDate",
+        "useFixedDebtBudget",
+        "debtBudgetOverrideAmount",
+        "lastFixedDebtBudgetAmount",
+        "debtPaymentReinvestmentRate",
+        "debtDiscretionaryReserveAmount",
+        "baselineBudgetSourceRaw",
+        "includeNonMonthlyIncomeSpreads",
+        "oneTimeIncomeDefaultSpreadMonths"
+    ]
+
+    private let values: [String: Any]
+    private let missingKeys: Set<String>
+
+    static func capture(defaults: UserDefaults = .standard) -> DebtScopeAssistantReadOnlyDefaultsSnapshot {
+        var values: [String: Any] = [:]
+        var missingKeys = Set<String>()
+
+        for key in protectedKeys {
+            if let value = defaults.object(forKey: key) {
+                values[key] = value
+            } else {
+                missingKeys.insert(key)
+            }
+        }
+
+        return DebtScopeAssistantReadOnlyDefaultsSnapshot(values: values, missingKeys: missingKeys)
+    }
+
+    func restore(defaults: UserDefaults = .standard) {
+        for key in Self.protectedKeys {
+            if missingKeys.contains(key) {
+                defaults.removeObject(forKey: key)
+            } else if let value = values[key] {
+                defaults.set(value, forKey: key)
+            }
+        }
+    }
 }

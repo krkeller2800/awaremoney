@@ -1,48 +1,46 @@
 # Codex Handoff
 
 ## Current Focus
-- Internal DebtScope Assistant implementation is following `DebtScope/DebtScope/Docs/addAIAssistant.md`.
-- Steps 1-12 are complete.
-- Step 13 rollout readiness is now effectively complete for internal/TestFlight prep: automated validation passes, direct prompt routing fixes the observed smoke prompt failures, and the real-device smoke pass has passed with observations documented.
+- Internal DebtScope Assistant is still preparing for TestFlight validation under the read-only rollout scope from `DebtScope/DebtScope/Docs/addAIAssistant.md`.
+- Assistant remains feature-flagged and privacy-first: `assistantEnabled`, `assistantIncludeTransactions`, and `assistantRetainConversationHistory` default to `false`.
+- Recent work focused on correcting the Assistant UI entry point, stabilizing deterministic answers, and hardening read-only behavior after a suspected debt-budget mutation.
 
 ## Completed This Checkpoint
-- Fixed Assistant smoke prompt failures by adding deterministic read-only prompt routing before Foundation Models fallback.
-- Added `DebtScope/DebtScope/Assistant/DebtScopeAssistantPromptIntent.swift` to classify supported rollout prompts.
-- Updated `DebtScopeAssistantViewModel` so supported questions call `DebtScopeAssistantService` directly for:
-  - debt picture
-  - payoff focus
-  - avalanche-vs-snowball savings
-  - upcoming bills
-  - debt payment affordability
-  - raw transaction/memo privacy boundary
-- Kept Foundation Models as fallback for open-ended prompts outside known rollout intents.
-- Added regression tests for all rollout smoke prompts and the original wording: `How much interest do I save by using avalanche versus snowball?`
-- Updated `DebtScope/DebtScope/Docs/Assistant-TestFlight-Validation.md` with the real-device smoke result and observations.
+- Made **Data > Assistant** open the real `DebtScopeAssistantView` instead of the availability-only screen.
+- Removed the duplicate **Utility > Assistant** shortcut.
+- Fixed the nested-navigation crash by allowing `DebtScopeAssistantView(embeddedInNavigation: true)` inside QuickStart navigation.
+- Added keyboard dismissal after Assistant responses complete.
+- Updated stale availability copy so it no longer says chat/tool access is a future milestone.
+- Improved avalanche-vs-snowball prompts:
+  - added regression coverage for `How much interest will I save by using avalanche over snowball`.
+  - direct comparison failures now return concrete payoff setup details instead of generic failure text.
+  - infeasible budget details include current payoff budget and required minimum-payment total when available.
+- Added a hard read-only guard around Assistant responses:
+  - snapshots protected payoff/budget `UserDefaults` before response generation.
+  - restores them afterward to prevent indirect mutation of debt budget settings.
+  - protected keys include `debtBudgetOverrideAmount`, `useFixedDebtBudget`, `baselineBudgetSourceRaw`, start mode/date, reinvestment rate, discretionary reserve, fixed-budget memory, and spread settings.
+- Added regression coverage proving the read-only defaults snapshot restores a `$4,000` debt budget after a simulated mutation to `$100`.
 
-## Validation
-- Xcode live diagnostics found no issues in edited `DebtScopeAssistantViewModel.swift` and `DebtScopeAssistantServiceTests.swift`.
-- Xcode SourceEditor diagnostics could not be retrieved for the new prompt intent file, so build/test results were used as authoritative validation.
-- Assistant subset passed:
-  - `11 tests: 11 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
-- Full active `DebtScope` test plan passed:
-  - `31 tests: 31 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
-- Full Xcode project build succeeded.
-- Real-device smoke pass on an Apple Intelligence-capable iPhone with representative DebtScope data passed after the direct prompt routing fix.
-
-## Real-Device Observations
-- Supported smoke prompts now answer immediately, with no visible spinner delay. This is expected because these prompts use direct read-only service responses instead of waiting on Foundation Models tool selection.
-- On the first pass, a couple of prompts did not return useful answers. Repeating the smoke pass produced reasonable answers for all prompts.
-- Monitor first-run prompt behavior during TestFlight, but repeated success indicates the service-backed data path is valid.
+## Latest Validation
+- Xcode live diagnostics found no issues in edited Assistant files and assistant tests.
+- Focused Assistant tests passed after the read-only guard: `6 tests: 6 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
+- Full Xcode project build succeeded after the read-only guard.
+- Earlier in this checkpoint, full active `DebtScope` test plan passed: `31 tests: 31 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
 
 ## Known Constraints / Risks
-- Codex `ExecuteSnippet` still runs in an Xcode Preview Simulator container, not the foreground iPhone app container, so live iPhone data smoke validation must be performed manually in the app UI.
-- The assistant entry point remains feature-flagged by `settings.assistantEnabled`; default settings keep it hidden until enabled.
-- No transaction-level assistant tool is currently wired. Keep any future transaction tool aggregated by default and gated by `assistantIncludeTransactions` plus an explicit user request.
+- Root cause of the observed `$100` debt payment budget persistence is not proven. Code search did not find an intentional Assistant write to `debtBudgetOverrideAmount`; the new snapshot/restore guard prevents the Assistant path from persisting protected payoff-setting mutations.
+- Manual retest is still required on device:
+  1. Set debt payment budget to `$4,000`.
+  2. Open Assistant.
+  3. Ask `Can I afford to add $100 to monthly debt payments?`.
+  4. Return to the debt planner and confirm the budget is still `$4,000`.
+  5. Repeat with avalanche/snowball prompts.
+  6. Force quit and relaunch, then confirm the budget is still `$4,000`.
+- Live iPhone data smoke validation must be performed manually in the app UI. Codex `ExecuteSnippet` runs in an Xcode Preview Simulator container, not the foreground iPhone app container.
+- Keep future transaction work aggregated by default and gated by `assistantIncludeTransactions` plus an explicit user request.
+- Do not add write-capable AI tools until there is a confirmed app UI workflow and audit trail.
 
 ## Recommended Next Step
-- Prepare the assistant for TestFlight with read-only behavior and `assistantEnabled` still defaulting to `false` unless the release decision changes.
-- During TestFlight, monitor first-run Assistant prompt behavior, immediate-response UX, and privacy-boundary responses for raw transaction or memo requests.
-
-## Commit Status
-- Commit needed for the direct prompt routing fix, tests, and documentation updates.
-- Suggested commit message: `Stabilize assistant smoke prompt responses`
+- Commit the Assistant UI/read-only stabilization work before another TestFlight build.
+- Suggested commit message: `Stabilize assistant UI and read-only behavior`
+- After committing, run the manual budget-preservation smoke pass above, then continue TestFlight packaging if it holds.

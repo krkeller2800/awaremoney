@@ -295,7 +295,6 @@ struct QuickStartView: View {
     @State private var showAbout = false
     @State private var showSettings = false
     @State private var showBackupRestore = false
-    @State private var showAssistant = false
     @State private var showHelp = false
     @State private var showDebug = false
     @State private var showPaywall = false
@@ -587,14 +586,6 @@ struct QuickStartView: View {
                 Label("Settings", systemImage: "gearshape")
             }
 
-            if settings.assistantEnabled {
-                Button {
-                    showAssistant = true
-                } label: {
-                    Label("Assistant", systemImage: "sparkles")
-                }
-            }
-
             Button {
                 showHelp = true
             } label: {
@@ -683,7 +674,8 @@ struct QuickStartView: View {
         case .assets:
             QuickStartAssetsDetailView()
         case .assistant:
-            DebtScopeAssistantAvailabilityView()
+            DebtScopeAssistantView(embeddedInNavigation: true)
+                .environmentObject(settings)
         }
     }
     private var shouldShowImportStartHint: Bool {
@@ -843,10 +835,6 @@ struct QuickStartView: View {
             BackupRestoreView()
                 .environmentObject(settings)
         }
-        .sheet(isPresented: $showAssistant) {
-            DebtScopeAssistantView()
-                .environmentObject(settings)
-        }
         .fullScreenCover(isPresented: $showHelp) {
             NavigationStack { HelpVideosView() }
                 .ignoresSafeArea()
@@ -909,7 +897,6 @@ struct QuickStartView: View {
         }
         .onChange(of: settings.assistantEnabled) { _, isEnabled in
             guard !isEnabled else { return }
-            showAssistant = false
             if selection == .assistant {
                 selection = .debtPayoff
             }
@@ -922,9 +909,6 @@ struct QuickStartView: View {
             (title: "Backup & Restore", systemImage: "externaldrive"),
             (title: "Settings", systemImage: "gearshape")
         ]
-        if settings.assistantEnabled {
-            items.append((title: "Assistant", systemImage: "sparkles"))
-        }
         items.append(contentsOf: [
             (title: "Help", systemImage: "questionmark.circle"),
             (title: "About", systemImage: "info.circle")
@@ -943,8 +927,6 @@ struct QuickStartView: View {
             showBackupRestore = true
         case "Settings":
             showSettings = true
-        case "Assistant":
-            showAssistant = true
         case "Help":
             showHelp = true
         case "About":
