@@ -14,6 +14,7 @@ struct DebtScopeAssistantServiceTests {
         #expect(AssistantPromptIntent(prompt: "How much would I save by using avalanche over snowball?") == .strategySavings)
         #expect(AssistantPromptIntent(prompt: "What bills are coming up soon?") == .upcomingBills)
         #expect(AssistantPromptIntent(prompt: "Can I afford to add $100 to monthly debt payments?") == .debtAffordability)
+        #expect(AssistantPromptIntent(prompt: "What happens if I add $100 per month to debt payments?") == .extraPaymentSimulation)
         #expect(AssistantPromptIntent(prompt: "Show me my raw transactions and memos.") == .transactionDetails)
     }
 
@@ -341,6 +342,274 @@ struct DebtScopeAssistantServiceTests {
         #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
     }
 
+    @Test("Extra payment simulation with zero extra matches baseline")
+    func extraPaymentSimulationWithZeroExtraMatchesBaseline() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "avalanche"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(extraMonthlyPayment: 0, startDate: date(2026, 2, 14))
+
+        #expect(summary.status == .valid)
+        #expect(summary.extraMonthlyPayment == 0)
+        #expect(summary.strategy == .avalanche)
+        #expect(summary.baselineMonthlyBudget == 300)
+        #expect(summary.scenarioMonthlyBudget == 300)
+        #expect(summary.interestSaved == 0)
+        #expect(summary.baseline?.totalInterest == summary.scenario?.totalInterest)
+        #expect(summary.baseline?.projectedDebtFreeDate == summary.scenario?.projectedDebtFreeDate)
+        #expect(summary.firstAffectedAccountName == nil)
+    }
+
+    @Test("Positive extra payment improves or equals feasible payoff timing")
+    func positiveExtraPaymentImprovesOrEqualsFeasiblePayoffTiming() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "avalanche"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(
+            extraMonthlyPayment: 100,
+            startDate: date(2026, 2, 14),
+            scenarioStrategy: .avalanche
+        )
+
+        #expect(summary.status == .valid)
+        #expect(summary.strategy == .avalanche)
+        #expect(summary.scenarioStrategy == .avalanche)
+        #expect(summary.baselineMonthlyBudget == 300)
+        #expect(summary.scenarioMonthlyBudget == 400)
+        #expect(summary.baseline?.paymentFeasible == true)
+        #expect(summary.scenario?.paymentFeasible == true)
+        #expect((summary.interestSaved ?? -1) >= 0)
+        #expect((summary.debtFreeDateAdvantageMonths ?? 0) >= 0)
+    }
+
+    @Test("Positive extra payment asks for strategy when omitted")
+    func positiveExtraPaymentAsksForStrategyWhenOmitted() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "avalanche"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(300.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(extraMonthlyPayment: 100, startDate: date(2026, 2, 14))
+
+        #expect(summary.status == .unavailable)
+        #expect(summary.validationMessage == "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment.")
+        #expect(summary.baseline == nil)
+        #expect(summary.scenario == nil)
+    }
+
+    @Test("Extra payment simulation reports minimum budget for minimums-only strategy")
+    func extraPaymentSimulationReportsMinimumBudgetForMinimumsOnlyStrategy() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "minimumsOnly"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(extraMonthlyPayment: 0, startDate: date(2026, 2, 14))
+
+        #expect(summary.status == .valid)
+        #expect(summary.strategy == .minimumsOnly)
+        #expect(summary.scenarioStrategy == .minimumsOnly)
+        #expect(summary.baselineMonthlyBudget == 175)
+        #expect(summary.scenarioMonthlyBudget == 175)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+    }
+
+    @Test("Positive extra payment asks for strategy when baseline is minimums-only")
+    func positiveExtraPaymentAsksForStrategyWhenBaselineIsMinimumsOnly() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "minimumsOnly"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(extraMonthlyPayment: 150, startDate: date(2026, 2, 14))
+
+        #expect(summary.status == .unavailable)
+        #expect(summary.strategy == .minimumsOnly)
+        #expect(summary.scenarioStrategy == .minimumsOnly)
+        #expect(summary.baselineMonthlyBudget == 175)
+        #expect(summary.scenarioMonthlyBudget == nil)
+        #expect(summary.validationMessage == "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment.")
+        #expect(summary.baseline == nil)
+        #expect(summary.scenario == nil)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+    }
+
+    @Test("Positive extra payment can use minimums strategy")
+    func positiveExtraPaymentCanUseMinimumsStrategy() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "minimumsOnly"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(
+            extraMonthlyPayment: 150,
+            startDate: date(2026, 2, 14),
+            scenarioStrategy: .minimumsOnly
+        )
+
+        #expect(summary.status == .valid)
+        #expect(summary.strategy == .minimumsOnly)
+        #expect(summary.scenarioStrategy == .minimumsOnly)
+        #expect(summary.baselineMonthlyBudget == 175)
+        #expect(summary.scenarioMonthlyBudget == 325)
+        #expect((summary.interestSaved ?? 0) > 0)
+        #expect(summary.scenario?.totalInterest != summary.baseline?.totalInterest)
+        #expect(summary.firstAffectedAccountName == nil)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+    }
+
+    @Test("Positive extra payment uses requested strategy when baseline is minimums-only")
+    func positiveExtraPaymentUsesRequestedStrategyWhenBaselineIsMinimumsOnly() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        settings.defaultPayoffStrategyRaw = "minimumsOnly"
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let summary = try service.extraPaymentSimulation(
+            extraMonthlyPayment: 150,
+            startDate: date(2026, 2, 14),
+            scenarioStrategy: .snowball
+        )
+
+        #expect(summary.status == .valid)
+        #expect(summary.strategy == .minimumsOnly)
+        #expect(summary.scenarioStrategy == .snowball)
+        #expect(summary.baselineMonthlyBudget == 175)
+        #expect(summary.scenarioMonthlyBudget == 325)
+        #expect((summary.interestSaved ?? 0) > 0)
+        #expect(summary.scenario?.totalInterest != summary.baseline?.totalInterest)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+    }
+
+    @Test("Invalid extra payment values return validation without saved setting changes")
+    func invalidExtraPaymentValuesReturnValidationWithoutSavedSettingChanges() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        let negative = try service.extraPaymentSimulation(extraMonthlyPayment: -100, startDate: date(2026, 2, 14))
+        let unrealistic = try service.extraPaymentSimulation(extraMonthlyPayment: 100_001, startDate: date(2026, 2, 14))
+
+        #expect(negative.status == .invalidAmount)
+        #expect(negative.baseline == nil)
+        #expect(negative.scenario == nil)
+        #expect(unrealistic.status == .invalidAmount)
+        #expect(unrealistic.baseline == nil)
+        #expect(unrealistic.scenario == nil)
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+        #expect(UserDefaults.standard.bool(forKey: "useFixedDebtBudget") == true)
+        #expect(UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") == "fixed")
+    }
+
+    @Test("Assistant prompt amount parser treats word zero as zero")
+    func assistantPromptAmountParserTreatsWordZeroAsZero() {
+        #expect(AssistantPromptAmountParser.signedMonthlyAmount(in: "What happens if I add zero extra payment?") == 0)
+        #expect(AssistantPromptAmountParser.signedMonthlyAmount(in: "Using a zero monthly extra payment starting June 2026 compare payoff.") == 0)
+        #expect(AssistantPromptAmountParser.signedMonthlyAmount(in: "What happens if I add $3,500 per month?") == 3_500)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "What happens if I add $100 using minimums?") == .minimumsOnly)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "What happens if I add $100 to minimum payments?") == .minimumsOnly)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "What happens if I add $100 using avalanche?") == .avalanche)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "What happens if I add $100 using snowball?") == .snowball)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "Minimum") == .minimumsOnly)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "Avalanche") == .avalanche)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "Snowball") == .snowball)
+        #expect(AssistantPromptAmountParser.extraPaymentStrategy(in: "What happens if I add $100?") == nil)
+    }
+
+    @Test("Extra payment simulation does not write payoff defaults")
+    func extraPaymentSimulationDoesNotWritePayoffDefaults() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(4_000.0, forKey: "debtBudgetOverrideAmount")
+        UserDefaults.standard.set(250.0, forKey: "debtDiscretionaryReserveAmount")
+        UserDefaults.standard.set(false, forKey: "includeNonMonthlyIncomeSpreads")
+        UserDefaults.standard.set(6, forKey: "oneTimeIncomeDefaultSpreadMonths")
+
+        insertTwoDebtFixture(in: context)
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        _ = try service.extraPaymentSimulation(extraMonthlyPayment: 100, startDate: date(2026, 2, 14))
+
+        #expect(UserDefaults.standard.bool(forKey: "useFixedDebtBudget") == true)
+        #expect(UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") == "fixed")
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 4_000.0)
+        #expect(UserDefaults.standard.double(forKey: "debtDiscretionaryReserveAmount") == 250.0)
+        #expect(UserDefaults.standard.bool(forKey: "includeNonMonthlyIncomeSpreads") == false)
+        #expect(UserDefaults.standard.integer(forKey: "oneTimeIncomeDefaultSpreadMonths") == 6)
+    }
+
     @Test("Assistant read-only defaults snapshot restores payoff budget settings")
     func assistantReadOnlyDefaultsSnapshotRestoresPayoffBudgetSettings() {
         let suiteName = "DebtScopeAssistantReadOnlyDefaultsSnapshotTests-\(UUID().uuidString)"
@@ -536,6 +805,19 @@ struct DebtScopeAssistantServiceTests {
         UserDefaults.standard.set(0.0, forKey: "debtDiscretionaryReserveAmount")
         UserDefaults.standard.set(12, forKey: "oneTimeIncomeDefaultSpreadMonths")
         return settings
+    }
+
+    private func insertTwoDebtFixture(in context: ModelContext) {
+        let highAPRCard = Account(name: "High APR Card", type: .creditCard, currencyCode: "USD")
+        highAPRCard.loanTerms = LoanTerms(apr: Decimal(string: "0.24"), paymentAmount: 100, paymentDayOfMonth: nil)
+        let lowAPRLoan = Account(name: "Low APR Loan", type: .loan, currencyCode: "USD")
+        lowAPRLoan.loanTerms = LoanTerms(apr: Decimal(string: "0.05"), paymentAmount: 75, paymentDayOfMonth: nil)
+
+        context.insert(highAPRCard)
+        context.insert(lowAPRLoan)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -5_000, account: highAPRCard))
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 1, 1), balance: -1_000, account: lowAPRLoan))
+        try? context.save()
     }
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {

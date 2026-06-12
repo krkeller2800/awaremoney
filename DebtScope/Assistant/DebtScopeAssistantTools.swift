@@ -174,6 +174,63 @@ struct ComparePayoffStrategiesTool: Tool {
 }
 
 @available(iOS 26.0, *)
+struct SimulateExtraDebtPaymentTool: Tool {
+    let name = "simulate_extra_debt_payment"
+    let description = "Simulate adding an extra monthly debt payment without saving payoff settings, returning baseline versus scenario interest, payoff timing, and first affected debt."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Extra monthly debt payment amount. Must be zero or greater and realistic.")
+        let extraMonthlyPayment: Double?
+
+        @Guide(description: "Strategy to use when applying extra payments. Use minimums, avalanche, or snowball. Do not leave empty when the user asks for an extra-payment simulation.")
+        let extraPaymentStrategy: String?
+
+        @Guide(description: "Optional simulation start date as YYYY-MM-DD. Leave empty unless the user asks for another start date.")
+        let startDate: String?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            let startDate = DebtScopeAssistantToolEncoding.date(from: arguments.startDate) ?? Date()
+            let extraMonthlyPayment = NSDecimalNumber(value: arguments.extraMonthlyPayment ?? -1).decimalValue
+            return try await MainActor.run {
+                let summary = try serviceBox.service.extraPaymentSimulation(
+                    extraMonthlyPayment: extraMonthlyPayment,
+                    startDate: startDate,
+                    scenarioStrategy: extraPaymentStrategy(from: arguments.extraPaymentStrategy)
+                )
+                return try DebtScopeAssistantToolEncoding.encode(summary)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+
+    private func extraPaymentStrategy(from value: String?) -> AssistantPayoffStrategy? {
+        guard let value else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "minimum", "minimums", "minimumsonly", "minimums_only", "minimum payments", "minimum payment":
+            return .minimumsOnly
+        case "avalanche":
+            return .avalanche
+        case "snowball":
+            return .snowball
+        default:
+            return nil
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct DebtScopeAssistantToolFactory {
     @MainActor
     static func debtAndPayoffTools(service: DebtScopeAssistantService) -> [any Tool] {
@@ -182,7 +239,8 @@ struct DebtScopeAssistantToolFactory {
             GetCashFlowSummaryTool(service: service),
             GetUpcomingBillsTool(service: service),
             GetPayoffPlanTool(service: service),
-            ComparePayoffStrategiesTool(service: service)
+            ComparePayoffStrategiesTool(service: service),
+            SimulateExtraDebtPaymentTool(service: service)
         ]
     }
 }

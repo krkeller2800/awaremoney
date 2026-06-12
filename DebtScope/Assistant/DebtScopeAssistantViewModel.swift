@@ -25,6 +25,11 @@ struct AssistantMessage: Identifiable, Hashable {
     }
 }
 
+private struct PendingExtraPaymentStrategyChoice {
+    let extraMonthlyPayment: Decimal
+    let startDate: Date
+}
+
 @MainActor
 final class DebtScopeAssistantViewModel: ObservableObject {
     @Published var currentInput = ""
@@ -36,6 +41,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
     private let settings: SettingsStore
     private let service: DebtScopeAssistantService
     private var responseTask: Task<Void, Never>?
+    private var pendingExtraPaymentStrategyChoice: PendingExtraPaymentStrategyChoice?
 
     private var sessionStorage: Any?
 
@@ -140,6 +146,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         sessionStorage = nil
 
         if clearMessages {
+            pendingExtraPaymentStrategyChoice = nil
             messages = []
         }
     }
@@ -181,7 +188,16 @@ final class DebtScopeAssistantViewModel: ObservableObject {
     }
 
     private func directResponse(for prompt: String) throws -> String? {
-        switch AssistantPromptIntent(prompt: prompt) {
+        let intent = AssistantPromptIntent(prompt: prompt)
+        if let pendingResponse = try pendingExtraPaymentStrategyResponse(for: prompt, intent: intent) {
+            return pendingResponse
+        }
+
+        if intent != .none {
+            pendingExtraPaymentStrategyChoice = nil
+        }
+
+        switch intent {
         case .debtPicture:
             return try formatDebtPicture(service.debtSummary())
         case .payoffFocus:
@@ -205,6 +221,31 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                 )
                 return formatStrategySavings(nil, startDate: startDate, error: error)
             }
+        case .extraPaymentSimulation:
+            let scenarioStrategy = AssistantPromptAmountParser.extraPaymentStrategy(in: prompt)
+            let extraMonthlyPayment = AssistantPromptAmountParser.signedMonthlyAmount(in: prompt)
+
+            guard let scenarioStrategy else {
+                if let extraMonthlyPayment {
+                    pendingExtraPaymentStrategyChoice = PendingExtraPaymentStrategyChoice(
+                        extraMonthlyPayment: extraMonthlyPayment,
+                        startDate: Date()
+                    )
+                }
+                return "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment."
+            }
+
+            guard let extraMonthlyPayment else {
+                return "Tell me the extra monthly payment amount to simulate, such as $100 per month."
+            }
+            pendingExtraPaymentStrategyChoice = nil
+            return try formatExtraPaymentSimulation(
+                service.extraPaymentSimulation(
+                    extraMonthlyPayment: extraMonthlyPayment,
+                    startDate: Date(),
+                    scenarioStrategy: scenarioStrategy
+                )
+            )
         case .upcomingBills:
             return try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode)
         case .debtAffordability:
@@ -214,6 +255,25 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         case .none:
             return nil
         }
+    }
+
+    private func pendingExtraPaymentStrategyResponse(for prompt: String, intent: AssistantPromptIntent) throws -> String? {
+        guard
+            intent == .none,
+            let pendingExtraPaymentStrategyChoice,
+            let scenarioStrategy = AssistantPromptAmountParser.extraPaymentStrategy(in: prompt)
+        else {
+            return nil
+        }
+
+        self.pendingExtraPaymentStrategyChoice = nil
+        return try formatExtraPaymentSimulation(
+            service.extraPaymentSimulation(
+                extraMonthlyPayment: pendingExtraPaymentStrategyChoice.extraMonthlyPayment,
+                startDate: pendingExtraPaymentStrategyChoice.startDate,
+                scenarioStrategy: scenarioStrategy
+            )
+        )
     }
 
     private func formatDebtPicture(_ summary: AssistantDebtSummary) -> String {
@@ -311,6 +371,57 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         return "Comparison basis: payoff settings starting \(formatMonthYear(summary.startDate))."
     }
 
+    private func formatExtraPaymentSimulation(_ summary: AssistantExtraPaymentSimulationSummary) -> String {
+        switch summary.status {
+        case .invalidAmount:
+            return summary.validationMessage ?? "DebtScope could not simulate that extra payment amount."
+        case .unavailable:
+            var lines = [summary.validationMessage ?? "DebtScope could not compute that extra-payment simulation."]
+            lines.append(extraPaymentStrategyLine(summary))
+            lines.append(contentsOf: summary.missingDataNotes.prefix(4))
+            return lines.joined(separator: "\n")
+        case .valid:
+            guard let baseline = summary.baseline, let scenario = summary.scenario else {
+                return "DebtScope could not compute both the baseline and extra-payment payoff plans."
+            }
+
+            var lines = [
+                extraPaymentStrategyLine(summary),
+                "Extra payment simulated: \(formatCurrency(summary.extraMonthlyPayment, currencyCode: summary.currencyCode)) per month starting \(formatMonthYear(summary.startDate)).",
+                "Baseline monthly debt budget: \(formatCurrency(summary.baselineMonthlyBudget ?? 0, currencyCode: summary.currencyCode)).",
+                "Temporary scenario monthly debt budget: \(formatCurrency(summary.scenarioMonthlyBudget ?? 0, currencyCode: summary.currencyCode)).",
+                "Baseline result: \(formatCurrency(baseline.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(baseline.projectedDebtFreeDate)).",
+                "Scenario result: \(formatCurrency(scenario.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(scenario.projectedDebtFreeDate)).",
+                "Projected interest saved: \(formatCurrency(summary.interestSaved ?? 0, currencyCode: summary.currencyCode))."
+            ]
+
+            if summary.extraMonthlyPayment == 0 {
+                lines.append("Because the extra payment is $0.00, the scenario matches the baseline.")
+            }
+
+            if let months = summary.debtFreeDateAdvantageMonths {
+                if months > 0 {
+                    lines.append("The extra payment is projected to finish payoff \(months) \(months == 1 ? "month" : "months") sooner.")
+                } else if months == 0 {
+                    lines.append("Baseline and scenario are projected to finish in the same month.")
+                }
+            }
+            if let firstAffectedAccountName = summary.firstAffectedAccountName {
+                lines.append("First affected debt: \(firstAffectedAccountName).")
+            }
+            lines.append(contentsOf: summary.missingDataNotes.prefix(3))
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    private func extraPaymentStrategyLine(_ summary: AssistantExtraPaymentSimulationSummary) -> String {
+        if summary.strategy == summary.scenarioStrategy {
+            return "Strategy used for both baseline and scenario: \(formatStrategy(summary.strategy))."
+        }
+
+        return "Baseline strategy: \(formatStrategy(summary.strategy)); extra-payment scenario strategy: \(formatStrategy(summary.scenarioStrategy))."
+    }
+
     private func formatUpcomingBills(_ bills: [AssistantUpcomingBillSummary], currencyCode: String) -> String {
         guard !bills.isEmpty else {
             return "DebtScope does not show bills due in the next 30 days."
@@ -403,6 +514,10 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         return formatter.string(from: date)
     }
 
+    private func formatOptionalMonthYear(_ date: Date?) -> String {
+        date.map { formatMonthYear($0) } ?? "unavailable"
+    }
+
     private func formatStrategy(_ strategy: AssistantPayoffStrategy) -> String {
         switch strategy {
         case .minimumsOnly:
@@ -427,6 +542,50 @@ final class DebtScopeAssistantViewModel: ObservableObject {
 
 private enum DebtScopeAssistantViewModelError: Error {
     case foundationModelsUnavailable
+}
+
+enum AssistantPromptAmountParser {
+    static func extraPaymentStrategy(in prompt: String) -> AssistantPayoffStrategy? {
+        let tokens = prompt
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+
+        if tokens.contains("minimum")
+            || tokens.contains("minimums")
+            || (tokens.contains("minimum") && tokens.contains("payments")) {
+            return .minimumsOnly
+        }
+
+        if tokens.contains("avalanche") {
+            return .avalanche
+        }
+
+        if tokens.contains("snowball") {
+            return .snowball
+        }
+
+        return nil
+    }
+
+    static func signedMonthlyAmount(in prompt: String) -> Decimal? {
+        let tokens = prompt
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+
+        if tokens.contains("zero") {
+            return 0
+        }
+
+        guard let match = prompt.range(of: #"-?\$?\s*\d+(?:,\d{3})*(?:\.\d+)?"#, options: .regularExpression) else {
+            return nil
+        }
+
+        let value = prompt[match]
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        return Decimal(string: value)
+    }
 }
 
 struct DebtScopeAssistantReadOnlyDefaultsSnapshot {

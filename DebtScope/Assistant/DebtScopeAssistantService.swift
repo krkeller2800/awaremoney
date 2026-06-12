@@ -196,6 +196,180 @@ final class DebtScopeAssistantService {
         }
     }
 
+    func extraPaymentSimulation(
+        extraMonthlyPayment: Decimal,
+        startDate: Date,
+        scenarioStrategy requestedScenarioStrategy: AssistantPayoffStrategy? = nil
+    ) throws -> AssistantExtraPaymentSimulationSummary {
+        let normalizedExtra = extraMonthlyPayment.rounded(2)
+        let liabilities = try debtAccountInputs()
+        let totalMinimumPayment = liabilities.reduce(0) { $0 + $1.minimumPayment }
+        let startMonth = normalizeToMonth(startDate)
+        let strategy = assistantPayoffStrategy()
+        let scenarioStrategy = extraPaymentScenarioStrategy(
+            baselineStrategy: strategy,
+            extraMonthlyPayment: normalizedExtra,
+            requestedScenarioStrategy: requestedScenarioStrategy
+        )
+        let configuredBaselineMonthlyBudget = planMonthlyBudget(startDate: startDate, totalMinimumPayment: totalMinimumPayment)
+        let baselineMonthlyBudget = extraPaymentBaselineMonthlyBudget(
+            for: strategy,
+            configuredMonthlyBudget: configuredBaselineMonthlyBudget,
+            totalMinimumPayment: totalMinimumPayment
+        )
+
+        if normalizedExtra < 0 {
+            return invalidExtraPaymentSimulationSummary(
+                extraMonthlyPayment: normalizedExtra,
+                startDate: startMonth,
+                debtCount: liabilities.count,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                message: "Extra monthly payment must be zero or greater."
+            )
+        }
+
+        let maximumExtraPayment = Decimal(100_000)
+        if normalizedExtra > maximumExtraPayment {
+            return invalidExtraPaymentSimulationSummary(
+                extraMonthlyPayment: normalizedExtra,
+                startDate: startMonth,
+                debtCount: liabilities.count,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                message: "Extra monthly payment is too large for this assistant simulation."
+            )
+        }
+
+        guard !liabilities.isEmpty else {
+            return AssistantExtraPaymentSimulationSummary(
+                generatedAt: Date(),
+                currencyCode: settings.currencyCode,
+                startDate: startMonth,
+                status: .unavailable,
+                validationMessage: "No active credit-card or loan debts with current balances are available to simulate.",
+                debtCount: 0,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                extraMonthlyPayment: normalizedExtra,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                scenarioMonthlyBudget: nil,
+                baseline: nil,
+                scenario: nil,
+                interestSaved: nil,
+                debtFreeDateAdvantageMonths: nil,
+                firstAffectedAccountName: nil,
+                missingDataNotes: ["No active credit-card or loan debts with current balances are available to simulate."],
+                sourceNote: "No payoff calculations were run because DebtScope has no active debt inputs for this simulation."
+            )
+        }
+
+        if needsExtraPaymentStrategyChoice(
+            baselineStrategy: strategy,
+            extraMonthlyPayment: normalizedExtra,
+            requestedScenarioStrategy: requestedScenarioStrategy
+        ) {
+            return unavailableExtraPaymentSimulationSummary(
+                extraMonthlyPayment: normalizedExtra,
+                startDate: startMonth,
+                debtCount: liabilities.count,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                scenarioMonthlyBudget: nil,
+                validationMessage: "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment.",
+                notes: []
+            )
+        }
+
+        let provider = PayoffPlanProvider(context: context, settings: settings)
+        let scenarioMonthlyBudget = baselineMonthlyBudget.map { ($0 + normalizedExtra).rounded(2) }
+
+        do {
+            guard
+                let baselineBudget = baselineMonthlyBudget,
+                let baselinePlan = try provider.computePlan(
+                    startDate: startDate,
+                    strategyOverride: payoffStrategy(for: strategy),
+                    monthlyBudgetOverride: baselineBudget
+                ),
+                let scenarioBudget = scenarioMonthlyBudget,
+                let scenarioPlan = try extraPaymentScenarioPlan(
+                    strategy: scenarioStrategy,
+                    liabilities: liabilities,
+                    provider: provider,
+                    startDate: startDate,
+                    monthlyBudget: scenarioBudget,
+                    extraMonthlyPayment: normalizedExtra,
+                    totalMinimumPayment: totalMinimumPayment
+                )
+            else {
+                return unavailableExtraPaymentSimulationSummary(
+                    extraMonthlyPayment: normalizedExtra,
+                    startDate: startMonth,
+                    debtCount: liabilities.count,
+                    strategy: strategy,
+                    scenarioStrategy: scenarioStrategy,
+                    baselineMonthlyBudget: baselineMonthlyBudget,
+                    scenarioMonthlyBudget: scenarioMonthlyBudget,
+                    notes: ["DebtScope could not compute both baseline and extra-payment payoff plans with the current debt and budget settings."]
+                )
+            }
+
+            let baselineSummary = payoffSimulationPlanSummary(plan: baselinePlan, liabilities: liabilities)
+            let scenarioSummary = payoffSimulationPlanSummary(plan: scenarioPlan, liabilities: liabilities)
+            let interestSaved = (baselinePlan.totalInterest - scenarioPlan.totalInterest).rounded(2)
+
+            return AssistantExtraPaymentSimulationSummary(
+                generatedAt: Date(),
+                currencyCode: settings.currencyCode,
+                startDate: startMonth,
+                status: .valid,
+                validationMessage: nil,
+                debtCount: liabilities.count,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                extraMonthlyPayment: normalizedExtra,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                scenarioMonthlyBudget: scenarioMonthlyBudget,
+                baseline: baselineSummary,
+                scenario: scenarioSummary,
+                interestSaved: interestSaved,
+                debtFreeDateAdvantageMonths: monthAdvantage(
+                    earlierDate: scenarioSummary.projectedDebtFreeDate,
+                    laterDate: baselineSummary.projectedDebtFreeDate
+                ),
+                firstAffectedAccountName: scenarioStrategy == .minimumsOnly
+                    ? nil
+                    : firstAffectedAccountName(
+                        baselinePlan: baselinePlan,
+                        scenarioPlan: scenarioPlan,
+                        liabilities: liabilities
+                    ),
+                missingDataNotes: strategyComparisonMissingDataNotes(
+                    liabilities: liabilities,
+                    monthlyBudget: baselineMonthlyBudget,
+                    totalMinimumPayment: totalMinimumPayment,
+                    strategyErrors: []
+                ),
+                sourceNote: "Based on DebtScope's PayoffPlanProvider results using a temporary extra-payment scenario. No payoff settings are saved."
+            )
+        } catch {
+            return unavailableExtraPaymentSimulationSummary(
+                extraMonthlyPayment: normalizedExtra,
+                startDate: startMonth,
+                debtCount: liabilities.count,
+                strategy: strategy,
+                scenarioStrategy: scenarioStrategy,
+                baselineMonthlyBudget: baselineMonthlyBudget,
+                scenarioMonthlyBudget: scenarioMonthlyBudget,
+                notes: payoffStrategyComparisonUnavailableDetails(startDate: startDate, error: error)
+            )
+        }
+    }
+
     func cashFlowSummary(months requestedMonths: Int) throws -> AssistantCashFlowSummary {
         let months = clamp(requestedMonths, to: 1...24)
         let items = try cashFlowItems()
@@ -505,6 +679,222 @@ final class DebtScopeAssistantService {
         )
     }
 
+    private func invalidExtraPaymentSimulationSummary(
+        extraMonthlyPayment: Decimal,
+        startDate: Date,
+        debtCount: Int,
+        strategy: AssistantPayoffStrategy,
+        scenarioStrategy: AssistantPayoffStrategy,
+        baselineMonthlyBudget: Decimal?,
+        message: String
+    ) -> AssistantExtraPaymentSimulationSummary {
+        AssistantExtraPaymentSimulationSummary(
+            generatedAt: Date(),
+            currencyCode: settings.currencyCode,
+            startDate: startDate,
+            status: .invalidAmount,
+            validationMessage: message,
+            debtCount: debtCount,
+            strategy: strategy,
+            scenarioStrategy: scenarioStrategy,
+            extraMonthlyPayment: extraMonthlyPayment,
+            baselineMonthlyBudget: baselineMonthlyBudget,
+            scenarioMonthlyBudget: nil,
+            baseline: nil,
+            scenario: nil,
+            interestSaved: nil,
+            debtFreeDateAdvantageMonths: nil,
+            firstAffectedAccountName: nil,
+            missingDataNotes: [],
+            sourceNote: "No payoff calculations were run because the requested extra payment was invalid."
+        )
+    }
+
+    private func unavailableExtraPaymentSimulationSummary(
+        extraMonthlyPayment: Decimal,
+        startDate: Date,
+        debtCount: Int,
+        strategy: AssistantPayoffStrategy,
+        scenarioStrategy: AssistantPayoffStrategy,
+        baselineMonthlyBudget: Decimal?,
+        scenarioMonthlyBudget: Decimal?,
+        validationMessage: String = "DebtScope could not compute this extra-payment simulation with the current setup.",
+        notes: [String]
+    ) -> AssistantExtraPaymentSimulationSummary {
+        AssistantExtraPaymentSimulationSummary(
+            generatedAt: Date(),
+            currencyCode: settings.currencyCode,
+            startDate: startDate,
+            status: .unavailable,
+            validationMessage: validationMessage,
+            debtCount: debtCount,
+            strategy: strategy,
+            scenarioStrategy: scenarioStrategy,
+            extraMonthlyPayment: extraMonthlyPayment,
+            baselineMonthlyBudget: baselineMonthlyBudget,
+            scenarioMonthlyBudget: scenarioMonthlyBudget,
+            baseline: nil,
+            scenario: nil,
+            interestSaved: nil,
+            debtFreeDateAdvantageMonths: nil,
+            firstAffectedAccountName: nil,
+            missingDataNotes: notes,
+            sourceNote: "DebtScope could not compute both baseline and scenario payoff plans."
+        )
+    }
+
+    private func extraPaymentBaselineMonthlyBudget(
+        for strategy: AssistantPayoffStrategy,
+        configuredMonthlyBudget: Decimal?,
+        totalMinimumPayment: Decimal
+    ) -> Decimal? {
+        if strategy == .minimumsOnly {
+            return totalMinimumPayment.rounded(2)
+        }
+
+        return configuredMonthlyBudget
+    }
+
+    private func extraPaymentScenarioStrategy(
+        baselineStrategy: AssistantPayoffStrategy,
+        extraMonthlyPayment: Decimal,
+        requestedScenarioStrategy: AssistantPayoffStrategy?
+    ) -> AssistantPayoffStrategy {
+        if let requestedScenarioStrategy {
+            return requestedScenarioStrategy
+        }
+
+        return baselineStrategy
+    }
+
+    private func needsExtraPaymentStrategyChoice(
+        baselineStrategy: AssistantPayoffStrategy,
+        extraMonthlyPayment: Decimal,
+        requestedScenarioStrategy: AssistantPayoffStrategy?
+    ) -> Bool {
+        extraMonthlyPayment > 0
+            && requestedScenarioStrategy == nil
+    }
+
+    private func payoffStrategy(for strategy: AssistantPayoffStrategy) -> PayoffStrategy {
+        switch strategy {
+        case .minimumsOnly:
+            return .minimumsOnly
+        case .snowball:
+            return .snowball
+        case .avalanche:
+            return .avalanche
+        }
+    }
+
+    private func extraPaymentScenarioPlan(
+        strategy: AssistantPayoffStrategy,
+        liabilities: [DebtAccountInput],
+        provider: PayoffPlanProvider,
+        startDate: Date,
+        monthlyBudget: Decimal,
+        extraMonthlyPayment: Decimal,
+        totalMinimumPayment: Decimal
+    ) throws -> DebtPlanResult? {
+        guard strategy == .minimumsOnly, extraMonthlyPayment > 0 else {
+            return try provider.computePlan(
+                startDate: startDate,
+                strategyOverride: payoffStrategy(for: strategy),
+                monthlyBudgetOverride: monthlyBudget
+            )
+        }
+
+        let debts = minimumsPlusExtraDebtInputs(
+            liabilities: liabilities,
+            extraMonthlyPayment: extraMonthlyPayment,
+            totalMinimumPayment: totalMinimumPayment
+        )
+
+        return try DebtPayoffEngine.plan(
+            debts: debts,
+            monthlyBudget: monthlyBudget,
+            strategy: .minimumsOnly,
+            reinvestmentRate: assistantDebtPaymentReinvestmentRate(),
+            startDate: normalizeToMonth(startDate)
+        )
+    }
+
+    private func minimumsPlusExtraDebtInputs(
+        liabilities: [DebtAccountInput],
+        extraMonthlyPayment: Decimal,
+        totalMinimumPayment: Decimal
+    ) -> [DebtInput] {
+        let sortedLiabilities = liabilities.sorted {
+            $0.account.name.localizedCaseInsensitiveCompare($1.account.name) == .orderedAscending
+        }
+        var allocatedExtra: Decimal = 0
+
+        return sortedLiabilities.enumerated().map { offset, input in
+            let extraShare: Decimal
+            if offset == sortedLiabilities.count - 1 {
+                extraShare = (extraMonthlyPayment - allocatedExtra).rounded(2)
+            } else if totalMinimumPayment > 0 {
+                extraShare = ((input.minimumPayment / totalMinimumPayment) * extraMonthlyPayment).rounded(2)
+                allocatedExtra += extraShare
+            } else {
+                extraShare = 0
+            }
+
+            return DebtInput(
+                id: input.account.id,
+                name: input.account.name,
+                apr: input.apr,
+                balance: input.latestBalance,
+                minPayment: (input.minimumPayment + extraShare).rounded(2)
+            )
+        }
+    }
+
+    private func assistantDebtPaymentReinvestmentRate() -> Decimal {
+        Decimal(UserDefaults.standard.object(forKey: "debtPaymentReinvestmentRate") as? Double ?? 1)
+    }
+
+    private func payoffSimulationPlanSummary(
+        plan: DebtPlanResult,
+        liabilities: [DebtAccountInput]
+    ) -> AssistantPayoffSimulationPlanSummary {
+        let projectedDebtFreeDate = liabilities.allSatisfy { plan.payoffDates[$0.account.id] != nil }
+            ? plan.payoffDates.values.max()
+            : nil
+
+        return AssistantPayoffSimulationPlanSummary(
+            totalInterest: plan.totalInterest,
+            projectedDebtFreeDate: projectedDebtFreeDate,
+            paymentFeasible: true
+        )
+    }
+
+    private func firstAffectedAccountName(
+        baselinePlan: DebtPlanResult,
+        scenarioPlan: DebtPlanResult,
+        liabilities: [DebtAccountInput]
+    ) -> String? {
+        if let improved = liabilities.compactMap({ input -> (name: String, date: Date)? in
+            guard
+                let baselineDate = baselinePlan.payoffDates[input.account.id],
+                let scenarioDate = scenarioPlan.payoffDates[input.account.id],
+                scenarioDate < baselineDate
+            else {
+                return nil
+            }
+            return (input.account.name, scenarioDate)
+        })
+        .sorted(by: { lhs, rhs in
+            if lhs.date != rhs.date { return lhs.date < rhs.date }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        })
+        .first {
+            return improved.name
+        }
+
+        return nil
+    }
+
     private func monthAdvantage(earlierDate: Date?, laterDate: Date?) -> Int? {
         guard let earlierDate, let laterDate else { return nil }
         let calendar = Calendar.current
@@ -535,7 +925,7 @@ final class DebtScopeAssistantService {
             return budget
         }
 
-        return assistantPayoffStrategy() == .minimumsOnly ? totalMinimumPayment : nil
+        return totalMinimumPayment
     }
 
     private func cashFlowItems() throws -> [CashFlowItem] {

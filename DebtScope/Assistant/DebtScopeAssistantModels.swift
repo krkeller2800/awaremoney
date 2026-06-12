@@ -131,6 +131,39 @@ struct AssistantPayoffStrategyResultSummary: Codable, Sendable {
     let payoffOrder: [AssistantPayoffDebtSummary]
 }
 
+enum AssistantExtraPaymentSimulationStatus: String, Codable, Sendable {
+    case valid
+    case invalidAmount
+    case unavailable
+}
+
+struct AssistantExtraPaymentSimulationSummary: Codable, Sendable {
+    let generatedAt: Date
+    let currencyCode: String
+    let startDate: Date
+    let status: AssistantExtraPaymentSimulationStatus
+    let validationMessage: String?
+    let debtCount: Int
+    let strategy: AssistantPayoffStrategy
+    let scenarioStrategy: AssistantPayoffStrategy
+    let extraMonthlyPayment: Decimal
+    let baselineMonthlyBudget: Decimal?
+    let scenarioMonthlyBudget: Decimal?
+    let baseline: AssistantPayoffSimulationPlanSummary?
+    let scenario: AssistantPayoffSimulationPlanSummary?
+    let interestSaved: Decimal?
+    let debtFreeDateAdvantageMonths: Int?
+    let firstAffectedAccountName: String?
+    let missingDataNotes: [String]
+    let sourceNote: String
+}
+
+struct AssistantPayoffSimulationPlanSummary: Codable, Sendable {
+    let totalInterest: Decimal
+    let projectedDebtFreeDate: Date?
+    let paymentFeasible: Bool
+}
+
 struct AssistantNetWorthSummary: Codable, Sendable {
     let generatedAt: Date
     let currencyCode: String
