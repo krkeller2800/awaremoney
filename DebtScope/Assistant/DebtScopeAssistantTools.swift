@@ -263,6 +263,37 @@ struct GetImportReviewSummaryTool: Tool {
 }
 
 @available(iOS 26.0, *)
+struct GetCleanupRecommendationsTool: Tool {
+    let name = "get_cleanup_recommendations"
+    let description = "Get read-only cleanup recommendations with destination screens, expected benefit, affected counts, and required user confirmation. Does not delete, merge, edit, categorize, move, or save records."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "True when the user asks what to clean up, fix, review, or do next in DebtScope.")
+        let includeRecommendations: Bool
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            return try await MainActor.run {
+                let summary = try serviceBox.service.cleanupRecommendationSummary()
+                return try DebtScopeAssistantToolEncoding.encode(summary)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct DebtScopeAssistantToolFactory {
     @MainActor
     static func debtAndPayoffTools(service: DebtScopeAssistantService) -> [any Tool] {
@@ -273,7 +304,8 @@ struct DebtScopeAssistantToolFactory {
             GetPayoffPlanTool(service: service),
             ComparePayoffStrategiesTool(service: service),
             SimulateExtraDebtPaymentTool(service: service),
-            GetImportReviewSummaryTool(service: service)
+            GetImportReviewSummaryTool(service: service),
+            GetCleanupRecommendationsTool(service: service)
         ]
     }
 }

@@ -227,6 +227,33 @@ struct AssistantImportBatchReviewSummary: Codable, Sendable {
     let unresolvedAccountMappingCount: Int
 }
 
+enum AssistantCleanupRecommendationKind: String, Codable, Sendable {
+    case duplicateImports
+    case missingAccountMappings
+    case missingAPR
+    case missingMinimumPayments
+    case incompleteCashFlowSetup
+}
+
+struct AssistantCleanupRecommendationSummary: Codable, Sendable {
+    let generatedAt: Date
+    let recommendationCount: Int
+    let recommendations: [AssistantCleanupRecommendation]
+    let transactionLevelDetailAvailable: Bool
+    let includesTransactionLevelDetail: Bool
+    let sourceNote: String
+}
+
+struct AssistantCleanupRecommendation: Codable, Sendable {
+    let kind: AssistantCleanupRecommendationKind
+    let title: String
+    let destination: String
+    let expectedBenefit: String
+    let requiredUserConfirmation: String
+    let affectedRecordCount: Int
+    let details: [String]
+}
+
 struct AssistantTransactionPatternSummary: Codable, Sendable {
     let generatedAt: Date
     let currencyCode: String

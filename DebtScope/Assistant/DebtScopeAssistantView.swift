@@ -224,8 +224,20 @@ private struct DebtScopeAssistantChatView: View {
 
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Ask DebtScope", text: $viewModel.currentInput, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
                     .lineLimit(1...4)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 44, alignment: .center)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color(.separator), lineWidth: 1)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .focused($isInputFocused)
                     .disabled(!viewModel.availability.isAvailable || viewModel.isLoading)
                     .submitLabel(.send)

@@ -17,6 +17,11 @@ struct DebtScopeAssistantServiceTests {
         #expect(AssistantPromptIntent(prompt: "What happens if I add $100 per month to debt payments?") == .extraPaymentSimulation)
         #expect(AssistantPromptIntent(prompt: "What changed after my latest import?") == .importReview)
         #expect(AssistantPromptIntent(prompt: "What needs review in account mapping?") == .importReview)
+        #expect(AssistantPromptIntent(prompt: "What should I clean up next?") == .cleanupRecommendations)
+        #expect(AssistantPromptIntent(prompt: "How do I fix my missing APRs?") == .cleanupRecommendations)
+        #expect(AssistantPromptIntent(prompt: "How do I fix my missing minimum payment?") == .cleanupRecommendations)
+        #expect(AssistantPromptIntent(prompt: "How do I resolve account mapping issues?") == .cleanupRecommendations)
+        #expect(AssistantPromptIntent(prompt: "How do I complete bill and income schedules?") == .cleanupRecommendations)
         #expect(AssistantPromptIntent(prompt: "Show me my raw transactions and memos.") == .transactionDetails)
     }
 
@@ -33,6 +38,15 @@ struct DebtScopeAssistantServiceTests {
         #expect(AssistantImportReviewQuestionFocus(prompt: "What import records are excluded or edited?") == .conflicts)
         #expect(AssistantImportReviewQuestionFocus(prompt: "What changed after my latest import?") == .latestImport)
         #expect(AssistantImportReviewQuestionFocus(prompt: "Summarize my recent imports") == .general)
+    }
+
+    @Test("Cleanup recommendation focus recognizes how-to cleanup prompts")
+    func cleanupRecommendationFocusRecognizesHowToPrompts() {
+        #expect(AssistantCleanupRecommendationFocus(prompt: "How do I fix my missing APRs?") == .missingAPR)
+        #expect(AssistantCleanupRecommendationFocus(prompt: "How do I fix my missing minimum payment?") == .missingMinimumPayments)
+        #expect(AssistantCleanupRecommendationFocus(prompt: "How do I resolve account mapping issues?") == .accountMapping)
+        #expect(AssistantCleanupRecommendationFocus(prompt: "How do I clean up duplicate imports?") == .duplicateImports)
+        #expect(AssistantCleanupRecommendationFocus(prompt: "How do I complete bill and income schedules?") == .cashFlowSchedules)
     }
 
     @Test("Debt summary returns display-safe liability totals")
@@ -873,6 +887,139 @@ struct DebtScopeAssistantServiceTests {
                 Issue.record(error)
             }
         }
+    }
+
+    @Test("Cleanup recommendations summarize current app state without transaction details")
+    func cleanupRecommendationsSummarizeCurrentAppStateWithoutTransactionDetails() throws {
+        withPreservedAssistantDefaults {
+            UserDefaults.standard.set(false, forKey: "assistant_include_transactions")
+
+            do {
+                let context = try makeInMemoryContext()
+                let settings = makeSettings()
+                let checking = Account(name: "Main Checking", type: .checking, institutionName: "Sample Bank")
+                let card = Account(name: "Rewards Card", type: .creditCard, currencyCode: "USD")
+                let loan = Account(name: "Auto Loan", type: .loan, currencyCode: "USD")
+                loan.loanTerms = LoanTerms(apr: Decimal(string: "0.08"), paymentAmount: 150, paymentDayOfMonth: nil)
+                let importBatch = ImportBatch(
+                    createdAt: date(2026, 5, 12),
+                    label: "sample-bank-may.csv",
+                    sourceFileName: "sample-bank-may.csv",
+                    parserId: "bank.csv"
+                )
+                let incompleteBill = CashFlowItem(
+                    kind: .bill,
+                    name: "Insurance",
+                    amount: 600,
+                    frequency: .semiAnnual
+                )
+
+                context.insert(checking)
+                context.insert(card)
+                context.insert(loan)
+                context.insert(importBatch)
+                context.insert(incompleteBill)
+                context.insert(BalanceSnapshot(asOfDate: date(2026, 5, 1), balance: -1_000, account: card))
+                context.insert(BalanceSnapshot(asOfDate: date(2026, 5, 1), balance: 5_000, account: loan))
+                context.insert(Transaction(
+                    datePosted: date(2026, 5, 1),
+                    amount: -25,
+                    payee: "Coffee",
+                    hashKey: "duplicate-key",
+                    account: checking,
+                    importBatch: importBatch,
+                    importHashKey: "duplicate-key"
+                ))
+                context.insert(Transaction(
+                    datePosted: date(2026, 5, 1),
+                    amount: -25,
+                    payee: "Coffee Duplicate",
+                    hashKey: "duplicate-key",
+                    account: checking,
+                    importBatch: importBatch,
+                    importHashKey: "duplicate-key"
+                ))
+                context.insert(BalanceSnapshot(
+                    asOfDate: date(2026, 5, 12),
+                    balance: 2_000,
+                    importBatch: importBatch
+                ))
+                try context.save()
+
+                let service = DebtScopeAssistantService(context: context, settings: settings)
+                let summary = try service.cleanupRecommendationSummary()
+
+                #expect(summary.recommendationCount == 5)
+                #expect(summary.transactionLevelDetailAvailable == false)
+                #expect(summary.includesTransactionLevelDetail == false)
+                #expect(summary.sourceNote.contains("read-only"))
+                #expect(summary.sourceNote.contains("confirmation"))
+                #expect(summary.recommendations.map(\.kind) == [
+                    .duplicateImports,
+                    .missingAccountMappings,
+                    .missingAPR,
+                    .missingMinimumPayments,
+                    .incompleteCashFlowSetup
+                ])
+                #expect(summary.recommendations.allSatisfy { !$0.destination.isEmpty })
+                #expect(summary.recommendations.allSatisfy { $0.requiredUserConfirmation.contains("confirm") || $0.requiredUserConfirmation.contains("confirmation") })
+
+                let duplicateRecommendation = try #require(summary.recommendations.first { $0.kind == .duplicateImports })
+                #expect(duplicateRecommendation.affectedRecordCount == 2)
+                #expect(duplicateRecommendation.destination == "Import review during statement import")
+                #expect(duplicateRecommendation.requiredUserConfirmation.contains("During statement import review"))
+                #expect(duplicateRecommendation.details.joined().contains("transaction lists") == true)
+
+                let mappingRecommendation = try #require(summary.recommendations.first { $0.kind == .missingAccountMappings })
+                #expect(mappingRecommendation.affectedRecordCount == 1)
+                #expect(mappingRecommendation.destination == "Account mapping during statement import")
+                #expect(mappingRecommendation.requiredUserConfirmation.contains("before accepting the import"))
+
+                let missingAPRRecommendation = try #require(summary.recommendations.first { $0.kind == .missingAPR })
+                #expect(missingAPRRecommendation.affectedRecordCount == 1)
+                #expect(missingAPRRecommendation.requiredUserConfirmation.contains("APR from your statement"))
+                #expect(missingAPRRecommendation.requiredUserConfirmation.contains("APR"))
+
+                let missingMinimumRecommendation = try #require(summary.recommendations.first { $0.kind == .missingMinimumPayments })
+                #expect(missingMinimumRecommendation.affectedRecordCount == 1)
+                #expect(missingMinimumRecommendation.requiredUserConfirmation.contains("minimum payment from your statement"))
+                #expect(missingMinimumRecommendation.requiredUserConfirmation.contains("Typical payment"))
+
+                let cashFlowRecommendation = try #require(summary.recommendations.first { $0.kind == .incompleteCashFlowSetup })
+                #expect(cashFlowRecommendation.destination == "Income & Bills")
+                #expect(cashFlowRecommendation.affectedRecordCount == 1)
+            } catch {
+                Issue.record(error)
+            }
+        }
+    }
+
+    @Test("Cleanup recommendations do not mutate user defaults or stored records")
+    func cleanupRecommendationsDoNotMutateUserDefaultsOrStoredRecords() throws {
+        let defaultsSnapshot = PayoffDefaultsSnapshot.capture()
+        defer { defaultsSnapshot.restore() }
+
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        UserDefaults.standard.set(true, forKey: "useFixedDebtBudget")
+        UserDefaults.standard.set("fixed", forKey: "baselineBudgetSourceRaw")
+        UserDefaults.standard.set(450.0, forKey: "debtBudgetOverrideAmount")
+
+        let card = Account(name: "Rewards Card", type: .creditCard, currencyCode: "USD")
+        context.insert(card)
+        context.insert(BalanceSnapshot(asOfDate: date(2026, 5, 1), balance: -1_000, account: card))
+        try context.save()
+
+        let transactionCountBefore = try context.fetch(FetchDescriptor<Transaction>()).count
+        let balanceCountBefore = try context.fetch(FetchDescriptor<BalanceSnapshot>()).count
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+        _ = try service.cleanupRecommendationSummary()
+
+        #expect(UserDefaults.standard.bool(forKey: "useFixedDebtBudget") == true)
+        #expect(UserDefaults.standard.string(forKey: "baselineBudgetSourceRaw") == "fixed")
+        #expect(UserDefaults.standard.double(forKey: "debtBudgetOverrideAmount") == 450.0)
+        #expect(try context.fetch(FetchDescriptor<Transaction>()).count == transactionCountBefore)
+        #expect(try context.fetch(FetchDescriptor<BalanceSnapshot>()).count == balanceCountBefore)
     }
 
     @Test("Assistant settings default to hidden and privacy-first")

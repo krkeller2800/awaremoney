@@ -507,6 +507,87 @@ final class DebtScopeAssistantService {
         )
     }
 
+    func cleanupRecommendationSummary() throws -> AssistantCleanupRecommendationSummary {
+        let liabilities = try debtAccountInputs()
+        let importReview = try importReviewSummary()
+        let cashFlowItems = try cashFlowItems()
+        var recommendations: [AssistantCleanupRecommendation] = []
+
+        if importReview.duplicateTransactionCandidateCount > 0 {
+            recommendations.append(AssistantCleanupRecommendation(
+                kind: .duplicateImports,
+                title: "Review duplicate import candidates",
+                destination: "Import review during statement import",
+                expectedBenefit: "Helps prevent imported activity from being counted twice in account and cash-flow summaries.",
+                requiredUserConfirmation: "During statement import review, confirm which duplicate candidates should be kept, excluded, or left unchanged before accepting the import.",
+                affectedRecordCount: importReview.duplicateTransactionCandidateCount,
+                details: ["Duplicate recommendation is based on count-level import keys only; transaction lists and full memos are not included."]
+            ))
+        }
+
+        if importReview.unresolvedAccountMappingCount > 0 {
+            recommendations.append(AssistantCleanupRecommendation(
+                kind: .missingAccountMappings,
+                title: "Map imported records to accounts",
+                destination: "Account mapping during statement import",
+                expectedBenefit: "Improves account balances, import review clarity, and future duplicate detection.",
+                requiredUserConfirmation: "During statement import review, choose and confirm the correct DebtScope account for unresolved imported records before accepting the import.",
+                affectedRecordCount: importReview.unresolvedAccountMappingCount,
+                details: ["Mapping recommendation is based on imported records that are not linked to an account."]
+            ))
+        }
+
+        let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+        if missingAPRCount > 0 {
+            recommendations.append(AssistantCleanupRecommendation(
+                kind: .missingAPR,
+                title: "Add missing APRs",
+                destination: "Debt Payoff",
+                expectedBenefit: "Makes avalanche ordering and projected interest totals more accurate.",
+                requiredUserConfirmation: "Open Debt Payoff, choose the liability account, enter the APR from your statement in the APR field, and confirm the value before leaving the field.",
+                affectedRecordCount: missingAPRCount,
+                details: ["APR is missing for \(missingAPRCount) active debt account(s)."]
+            ))
+        }
+
+        let missingMinimumPaymentCount = liabilities.filter(\.missingMinimumPayment).count
+        if missingMinimumPaymentCount > 0 {
+            recommendations.append(AssistantCleanupRecommendation(
+                kind: .missingMinimumPayments,
+                title: "Add missing minimum payments",
+                destination: "Debt Payoff",
+                expectedBenefit: "Reduces reliance on fallback minimum-payment estimates in payoff planning.",
+                requiredUserConfirmation: "Open Debt Payoff, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and confirm the value before leaving the field.",
+                affectedRecordCount: missingMinimumPaymentCount,
+                details: ["DebtScope is currently using fallback minimum-payment estimates for these debt account(s)."]
+            ))
+        }
+
+        let incompleteCashFlowCount = cashFlowItems.filter { item in
+            item.firstPaymentDate == nil && item.dayOfMonth == nil
+        }.count
+        if incompleteCashFlowCount > 0 {
+            recommendations.append(AssistantCleanupRecommendation(
+                kind: .incompleteCashFlowSetup,
+                title: "Complete bill and income schedules",
+                destination: "Income & Bills",
+                expectedBenefit: "Improves upcoming bill timing, monthly cash-flow summaries, and reserve planning.",
+                requiredUserConfirmation: "Open Income & Bills and confirm due dates or payment days for the incomplete items.",
+                affectedRecordCount: incompleteCashFlowCount,
+                details: ["Schedule details are missing for \(incompleteCashFlowCount) bill or income item(s)."]
+            ))
+        }
+
+        return AssistantCleanupRecommendationSummary(
+            generatedAt: Date(),
+            recommendationCount: recommendations.count,
+            recommendations: recommendations,
+            transactionLevelDetailAvailable: settings.assistantIncludeTransactions,
+            includesTransactionLevelDetail: false,
+            sourceNote: "Based on current DebtScope setup and count-level review signals. Recommendations are read-only and require normal app confirmation before any data changes."
+        )
+    }
+
     private func debtAccountInputs() throws -> [DebtAccountInput] {
         let accounts = try liabilityAccounts()
         let latestBalances = accounts.reduce(into: [UUID: LatestBalance]()) { result, account in

@@ -53,6 +53,32 @@ enum AssistantImportReviewQuestionFocus {
     }
 }
 
+enum AssistantCleanupRecommendationFocus {
+    case missingAPR
+    case missingMinimumPayments
+    case accountMapping
+    case duplicateImports
+    case cashFlowSchedules
+    case general
+
+    init(prompt: String) {
+        let normalized = prompt.lowercased()
+        if normalized.containsAnyCleanupTerms(["apr", "interest rate"]) {
+            self = .missingAPR
+        } else if normalized.containsAnyCleanupTerms(["minimum payment", "minimum payments", "minimums"]) {
+            self = .missingMinimumPayments
+        } else if normalized.containsAnyCleanupTerms(["account mapping", "mapping issue", "mapping issues", "unmapped", "unresolved mapping", "resolve account"]) {
+            self = .accountMapping
+        } else if normalized.containsAnyCleanupTerms(["duplicate import", "duplicate imports", "duplicate candidate", "duplicate candidates"]) {
+            self = .duplicateImports
+        } else if normalized.containsAnyCleanupTerms(["bill and income", "income and bill", "bill schedule", "income schedule", "schedules", "complete bill", "complete income"]) {
+            self = .cashFlowSchedules
+        } else {
+            self = .general
+        }
+    }
+}
+
 @MainActor
 final class DebtScopeAssistantViewModel: ObservableObject {
     @Published var currentInput = ""
@@ -271,6 +297,8 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             )
         case .importReview:
             return try formatImportReview(service.importReviewSummary(), prompt: prompt)
+        case .cleanupRecommendations:
+            return try formatCleanupRecommendations(service.cleanupRecommendationSummary(), prompt: prompt)
         case .upcomingBills:
             return try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode)
         case .debtAffordability:
@@ -524,6 +552,94 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
     }
 
+    private func formatCleanupRecommendations(_ summary: AssistantCleanupRecommendationSummary, prompt: String) -> String {
+        let focus = AssistantCleanupRecommendationFocus(prompt: prompt)
+        if focus != .general {
+            return formatFocusedCleanupGuidance(summary, focus: focus)
+        }
+
+        guard !summary.recommendations.isEmpty else {
+            return "DebtScope doesn't show any needed cleanup."
+        }
+
+        var lines = [
+            "DebtScope found \(summary.recommendationCount) cleanup recommendation(s).",
+            "These are suggestions only; each change requires normal app confirmation."
+        ]
+
+        lines.append(contentsOf: summary.recommendations.prefix(5).map { recommendation in
+            "- \(recommendation.title): review \(recommendation.affectedRecordCount) item(s) in \(recommendation.destination). \(recommendation.expectedBenefit)"
+        })
+
+        if !summary.transactionLevelDetailAvailable {
+            lines.append("Transaction-level detail is disabled, so import-related recommendations stay at count level.")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func formatFocusedCleanupGuidance(
+        _ summary: AssistantCleanupRecommendationSummary,
+        focus: AssistantCleanupRecommendationFocus
+    ) -> String {
+        let recommendationKind: AssistantCleanupRecommendationKind
+        let cleanStateLine: String
+        let guidanceLines: [String]
+
+        switch focus {
+        case .missingAPR:
+            recommendationKind = .missingAPR
+            cleanStateLine = "DebtScope doesn't show missing APR cleanup right now."
+            guidanceLines = [
+                "To fix APRs in the app, go to Debt Payoff, choose the liability account, enter the APR from your statement in the APR field, and tap the checkmark or Done to confirm.",
+                "Adding APRs improves avalanche ordering and projected interest totals."
+            ]
+        case .missingMinimumPayments:
+            recommendationKind = .missingMinimumPayments
+            cleanStateLine = "DebtScope doesn't show missing minimum-payment cleanup right now."
+            guidanceLines = [
+                "To fix minimum payments in the app, go to Debt Payoff, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and tap the checkmark or Done to confirm.",
+                "Adding minimum payments reduces fallback estimates and makes payoff projections more reliable."
+            ]
+        case .accountMapping:
+            recommendationKind = .missingAccountMappings
+            cleanStateLine = "DebtScope doesn't show account mapping cleanup right now."
+            guidanceLines = [
+                "Account mapping happens during statement import review. When DebtScope cannot confidently match imported records to an account, choose the correct DebtScope account before accepting the import.",
+                "Mapping imported records improves account balances, import review clarity, and future duplicate detection."
+            ]
+        case .duplicateImports:
+            recommendationKind = .duplicateImports
+            cleanStateLine = "DebtScope doesn't show duplicate import cleanup right now."
+            guidanceLines = [
+                "Duplicate review happens during statement import review. When you import a statement, DebtScope flags possible duplicates before you accept the import so you can choose what to keep or exclude.",
+                "Duplicate review helps prevent imported activity from being counted twice."
+            ]
+        case .cashFlowSchedules:
+            recommendationKind = .incompleteCashFlowSetup
+            cleanStateLine = "DebtScope doesn't show incomplete bill or income schedules right now."
+            guidanceLines = [
+                "To complete schedules in the app, open Income & Bills, choose the bill or income item, add the due date or payment day, and confirm the change.",
+                "Complete schedules improve upcoming bill timing, monthly cash-flow summaries, and reserve planning."
+            ]
+        case .general:
+            return formatCleanupRecommendations(summary, prompt: "")
+        }
+
+        var lines: [String]
+        if let recommendation = summary.recommendations.first(where: { $0.kind == recommendationKind }) {
+            lines = [
+                "DebtScope shows \(recommendation.affectedRecordCount) item(s) to review for \(recommendation.title.lowercased())."
+            ]
+        } else {
+            lines = [cleanStateLine]
+        }
+
+        lines.append(contentsOf: guidanceLines)
+        lines.append("I can't make the change directly; it needs the normal app confirmation flow.")
+        return lines.joined(separator: "\n")
+    }
+
     private func extraPaymentStrategyLine(_ summary: AssistantExtraPaymentSimulationSummary) -> String {
         if summary.strategy == summary.scenarioStrategy {
             return "Strategy used for both baseline and scenario: \(formatStrategy(summary.strategy))."
@@ -656,6 +772,10 @@ private enum DebtScopeAssistantViewModelError: Error {
 
 private extension String {
     func containsAnyImportReviewTerms(_ needles: [String]) -> Bool {
+        needles.contains { contains($0) }
+    }
+
+    func containsAnyCleanupTerms(_ needles: [String]) -> Bool {
         needles.contains { contains($0) }
     }
 }
