@@ -447,6 +447,66 @@ final class DebtScopeAssistantService {
             .map(\.summary)
     }
 
+    func importReviewSummary(recentLimit requestedLimit: Int = 5) throws -> AssistantImportReviewSummary {
+        let recentLimit = clamp(requestedLimit, to: 1...10)
+        var batchDescriptor = FetchDescriptor<ImportBatch>()
+        batchDescriptor.sortBy = [SortDescriptor(\ImportBatch.createdAt, order: .reverse)]
+        let batches = try context.fetch(batchDescriptor)
+
+        let transactions = try context.fetch(FetchDescriptor<Transaction>())
+            .filter { $0.importBatch != nil }
+        let balances = try context.fetch(FetchDescriptor<BalanceSnapshot>())
+            .filter { $0.importBatch != nil }
+        let holdings = try context.fetch(FetchDescriptor<HoldingSnapshot>())
+            .filter { $0.importBatch != nil }
+
+        let batchSummaries = batches.prefix(recentLimit).map { batch in
+            importBatchReviewSummary(
+                for: batch,
+                transactions: transactions,
+                balances: balances,
+                holdings: holdings
+            )
+        }
+        let duplicateCandidateCount = duplicateImportedTransactionCandidateCount(transactions)
+        let conflictCount = transactions.filter { $0.isUserEdited || $0.isUserModified || $0.isExcluded }.count
+            + balances.filter { $0.isUserModified || $0.isExcluded }.count
+            + holdings.filter { $0.isUserModified || $0.isExcluded }.count
+        let unresolvedMappingCount = unresolvedAccountMappingCount(
+            transactions: transactions,
+            balances: balances,
+            holdings: holdings
+        )
+        let mappedAccountIDs = Set(
+            transactions.compactMap(\.accountID)
+                + balances.compactMap(\.accountID)
+                + holdings.compactMap { $0.account?.id }
+        )
+
+        return AssistantImportReviewSummary(
+            generatedAt: Date(),
+            importCount: batches.count,
+            latestImport: batchSummaries.first,
+            recentImports: batchSummaries,
+            totalImportedBalanceCount: balances.count,
+            totalImportedTransactionCount: transactions.count,
+            totalImportedHoldingCount: holdings.count,
+            duplicateTransactionCandidateCount: duplicateCandidateCount,
+            conflictCount: conflictCount,
+            unresolvedAccountMappingCount: unresolvedMappingCount,
+            mappedAccountCount: mappedAccountIDs.count,
+            transactionLevelDetailAvailable: settings.assistantIncludeTransactions,
+            includesTransactionLevelDetail: false,
+            reviewNotes: importReviewNotes(
+                importCount: batches.count,
+                duplicateTransactionCandidateCount: duplicateCandidateCount,
+                conflictCount: conflictCount,
+                unresolvedAccountMappingCount: unresolvedMappingCount
+            ),
+            sourceNote: "Based on persisted DebtScope import batches and count-level review signals. Raw file contents, hashes, full memos, and persistent identifiers are excluded."
+        )
+    }
+
     private func debtAccountInputs() throws -> [DebtAccountInput] {
         let accounts = try liabilityAccounts()
         let latestBalances = accounts.reduce(into: [UUID: LatestBalance]()) { result, account in
@@ -1059,6 +1119,107 @@ final class DebtScopeAssistantService {
             return incomeName
         }
         return allocationSourceNames[item.id]
+    }
+
+    private func importBatchReviewSummary(
+        for batch: ImportBatch,
+        transactions: [Transaction],
+        balances: [BalanceSnapshot],
+        holdings: [HoldingSnapshot]
+    ) -> AssistantImportBatchReviewSummary {
+        let batchID = batch.id
+        let batchTransactions = transactions.filter { $0.importBatch?.id == batchID }
+        let batchBalances = balances.filter { $0.importBatch?.id == batchID }
+        let batchHoldings = holdings.filter { $0.importBatch?.id == batchID }
+        let institutionNames = (
+            batchTransactions.compactMap { $0.account?.institutionName }
+                + batchBalances.compactMap { $0.account?.institutionName }
+                + batchHoldings.compactMap { $0.account?.institutionName }
+        )
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        let detectedInstitutionName = Dictionary(grouping: institutionNames, by: { $0 })
+            .max { lhs, rhs in
+                if lhs.value.count == rhs.value.count {
+                    return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedDescending
+                }
+                return lhs.value.count < rhs.value.count
+            }?.key
+
+        return AssistantImportBatchReviewSummary(
+            importedAt: batch.createdAt,
+            label: sanitizedImportLabel(batch.label, sourceFileName: batch.sourceFileName),
+            parserName: batch.parserId,
+            detectedInstitutionName: detectedInstitutionName,
+            importedBalanceCount: batchBalances.count,
+            importedTransactionCount: batchTransactions.count,
+            importedHoldingCount: batchHoldings.count,
+            excludedRecordCount: batchTransactions.filter(\.isExcluded).count
+                + batchBalances.filter(\.isExcluded).count
+                + batchHoldings.filter(\.isExcluded).count,
+            editedRecordCount: batchTransactions.filter { $0.isUserEdited || $0.isUserModified }.count
+                + batchBalances.filter(\.isUserModified).count
+                + batchHoldings.filter(\.isUserModified).count,
+            unresolvedAccountMappingCount: unresolvedAccountMappingCount(
+                transactions: batchTransactions,
+                balances: batchBalances,
+                holdings: batchHoldings
+            )
+        )
+    }
+
+    private func duplicateImportedTransactionCandidateCount(_ transactions: [Transaction]) -> Int {
+        let keys = transactions.compactMap { transaction -> String? in
+            let key = (transaction.importHashKey ?? transaction.hashKey)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return key.isEmpty ? nil : key
+        }
+        let counts = Dictionary(grouping: keys, by: { $0 }).mapValues(\.count)
+        return keys.filter { (counts[$0] ?? 0) > 1 }.count
+    }
+
+    private func unresolvedAccountMappingCount(
+        transactions: [Transaction],
+        balances: [BalanceSnapshot],
+        holdings: [HoldingSnapshot]
+    ) -> Int {
+        transactions.filter { $0.account == nil && $0.accountID == nil }.count
+            + balances.filter { $0.account == nil && $0.accountID == nil }.count
+            + holdings.filter { $0.account == nil }.count
+    }
+
+    private func importReviewNotes(
+        importCount: Int,
+        duplicateTransactionCandidateCount: Int,
+        conflictCount: Int,
+        unresolvedAccountMappingCount: Int
+    ) -> [String] {
+        var notes: [String] = []
+        if importCount == 0 {
+            notes.append("No completed imports are available to review.")
+        }
+        if duplicateTransactionCandidateCount > 0 {
+            notes.append("\(duplicateTransactionCandidateCount) imported transaction record(s) share duplicate import keys and may need duplicate review.")
+        }
+        if conflictCount > 0 {
+            notes.append("\(conflictCount) imported record(s) are excluded or have user edits, so review screens may show conflicts or adjustments.")
+        }
+        if unresolvedAccountMappingCount > 0 {
+            notes.append("\(unresolvedAccountMappingCount) imported record(s) are not linked to an account and may need account mapping review.")
+        }
+        if notes.isEmpty {
+            notes.append("Recent imports do not show duplicate, conflict, or unresolved mapping counts.")
+        }
+        return notes
+    }
+
+    private func sanitizedImportLabel(_ label: String, sourceFileName: String) -> String {
+        let candidate = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? sourceFileName
+            : label
+        let baseName = (candidate as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return baseName.isEmpty ? "Import" : baseName
     }
 
     private func formatCurrency(_ value: Decimal) -> String {

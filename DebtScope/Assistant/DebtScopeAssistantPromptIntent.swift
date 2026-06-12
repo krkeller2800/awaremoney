@@ -5,6 +5,7 @@ enum AssistantPromptIntent {
     case payoffFocus
     case strategySavings
     case extraPaymentSimulation
+    case importReview
     case upcomingBills
     case debtAffordability
     case transactionDetails
@@ -21,6 +22,8 @@ enum AssistantPromptIntent {
             self = .debtAffordability
         } else if normalized.containsAny(["what happens if", "what if", "if i add", "add $", "extra payment", "extra monthly", "additional payment", "additional monthly"]) && normalized.containsAny(["debt", "payment", "payoff", "per month", "monthly"]) {
             self = .extraPaymentSimulation
+        } else if normalized.containsAny(["latest import", "recent import", "last import", "import review", "what changed after my import", "what changed after my latest import", "what needs review", "duplicates", "duplicate imports", "account mapping", "mapping issues"]) {
+            self = .importReview
         } else if normalized.containsAny(["debt picture", "current debt", "debt summary", "how much debt", "total debt"]) {
             self = .debtPicture
         } else if normalized.containsAny(["focus on first", "focus first", "pay first", "which debt", "payoff first", "prioritize"]) {

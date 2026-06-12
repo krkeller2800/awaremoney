@@ -196,6 +196,37 @@ struct AssistantImportSummary: Codable, Sendable {
     let excludedTransactionCount: Int
 }
 
+struct AssistantImportReviewSummary: Codable, Sendable {
+    let generatedAt: Date
+    let importCount: Int
+    let latestImport: AssistantImportBatchReviewSummary?
+    let recentImports: [AssistantImportBatchReviewSummary]
+    let totalImportedBalanceCount: Int
+    let totalImportedTransactionCount: Int
+    let totalImportedHoldingCount: Int
+    let duplicateTransactionCandidateCount: Int
+    let conflictCount: Int
+    let unresolvedAccountMappingCount: Int
+    let mappedAccountCount: Int
+    let transactionLevelDetailAvailable: Bool
+    let includesTransactionLevelDetail: Bool
+    let reviewNotes: [String]
+    let sourceNote: String
+}
+
+struct AssistantImportBatchReviewSummary: Codable, Sendable {
+    let importedAt: Date
+    let label: String
+    let parserName: String?
+    let detectedInstitutionName: String?
+    let importedBalanceCount: Int
+    let importedTransactionCount: Int
+    let importedHoldingCount: Int
+    let excludedRecordCount: Int
+    let editedRecordCount: Int
+    let unresolvedAccountMappingCount: Int
+}
+
 struct AssistantTransactionPatternSummary: Codable, Sendable {
     let generatedAt: Date
     let currencyCode: String

@@ -15,6 +15,8 @@ struct DebtScopeAssistantServiceTests {
         #expect(AssistantPromptIntent(prompt: "What bills are coming up soon?") == .upcomingBills)
         #expect(AssistantPromptIntent(prompt: "Can I afford to add $100 to monthly debt payments?") == .debtAffordability)
         #expect(AssistantPromptIntent(prompt: "What happens if I add $100 per month to debt payments?") == .extraPaymentSimulation)
+        #expect(AssistantPromptIntent(prompt: "What changed after my latest import?") == .importReview)
+        #expect(AssistantPromptIntent(prompt: "What needs review in account mapping?") == .importReview)
         #expect(AssistantPromptIntent(prompt: "Show me my raw transactions and memos.") == .transactionDetails)
     }
 
@@ -22,6 +24,15 @@ struct DebtScopeAssistantServiceTests {
     func assistantPromptIntentRecognizesOriginalAvalancheWording() {
         #expect(AssistantPromptIntent(prompt: "How much interest do I save by using avalanche versus snowball?") == .strategySavings)
         #expect(AssistantPromptIntent(prompt: "How much interest will I save by using avalanche over snowball") == .strategySavings)
+    }
+
+    @Test("Import review question focus recognizes specific follow-up categories")
+    func importReviewQuestionFocusRecognizesSpecificFollowUpCategories() {
+        #expect(AssistantImportReviewQuestionFocus(prompt: "Do I have duplicate import candidates?") == .duplicates)
+        #expect(AssistantImportReviewQuestionFocus(prompt: "Are there account mapping issues from my latest import?") == .accountMapping)
+        #expect(AssistantImportReviewQuestionFocus(prompt: "What import records are excluded or edited?") == .conflicts)
+        #expect(AssistantImportReviewQuestionFocus(prompt: "What changed after my latest import?") == .latestImport)
+        #expect(AssistantImportReviewQuestionFocus(prompt: "Summarize my recent imports") == .general)
     }
 
     @Test("Debt summary returns display-safe liability totals")
@@ -746,6 +757,124 @@ struct DebtScopeAssistantServiceTests {
         #expect(clampedBills.map(\.name) == ["Rent"])
     }
 
+    @Test("Import review returns empty state without imports")
+    func importReviewReturnsEmptyStateWithoutImports() throws {
+        let context = try makeInMemoryContext()
+        let settings = makeSettings()
+        let service = DebtScopeAssistantService(context: context, settings: settings)
+
+        let summary = try service.importReviewSummary()
+
+        #expect(summary.importCount == 0)
+        #expect(summary.latestImport == nil)
+        #expect(summary.recentImports.isEmpty)
+        #expect(summary.totalImportedBalanceCount == 0)
+        #expect(summary.totalImportedTransactionCount == 0)
+        #expect(summary.totalImportedHoldingCount == 0)
+        #expect(summary.duplicateTransactionCandidateCount == 0)
+        #expect(summary.conflictCount == 0)
+        #expect(summary.unresolvedAccountMappingCount == 0)
+        #expect(summary.includesTransactionLevelDetail == false)
+        #expect(summary.reviewNotes.contains("No completed imports are available to review."))
+    }
+
+    @Test("Import review summarizes duplicates conflicts and mappings without transaction details")
+    func importReviewSummarizesDuplicatesConflictsAndMappingsWithoutTransactionDetails() throws {
+        withPreservedAssistantDefaults {
+            UserDefaults.standard.set(false, forKey: "assistant_include_transactions")
+
+            do {
+                let context = try makeInMemoryContext()
+                let settings = makeSettings()
+                let checking = Account(name: "Main Checking", type: .checking, institutionName: "Sample Bank")
+                let latestBatch = ImportBatch(
+                    createdAt: date(2026, 5, 12),
+                    label: "sample-bank-may.csv",
+                    sourceFileName: "sample-bank-may.csv",
+                    parserId: "bank.csv"
+                )
+                let olderBatch = ImportBatch(
+                    createdAt: date(2026, 4, 12),
+                    label: "Older Import",
+                    sourceFileName: "older.csv",
+                    parserId: "bank.csv"
+                )
+
+                context.insert(checking)
+                context.insert(latestBatch)
+                context.insert(olderBatch)
+                context.insert(Transaction(
+                    datePosted: date(2026, 5, 1),
+                    amount: -25,
+                    payee: "Coffee",
+                    memo: "Private memo should not be surfaced",
+                    hashKey: "duplicate-key",
+                    account: checking,
+                    importBatch: latestBatch,
+                    importHashKey: "duplicate-key"
+                ))
+                context.insert(Transaction(
+                    datePosted: date(2026, 5, 1),
+                    amount: -25,
+                    payee: "Coffee Duplicate",
+                    hashKey: "duplicate-key",
+                    importBatch: latestBatch,
+                    isUserEdited: true,
+                    importHashKey: "duplicate-key"
+                ))
+                context.insert(Transaction(
+                    datePosted: date(2026, 4, 1),
+                    amount: -10,
+                    payee: "Older",
+                    hashKey: "older-key",
+                    account: checking,
+                    importBatch: olderBatch,
+                    isExcluded: true,
+                    importHashKey: "older-key"
+                ))
+                context.insert(BalanceSnapshot(
+                    asOfDate: date(2026, 5, 12),
+                    balance: 1_000,
+                    account: checking,
+                    importBatch: latestBatch
+                ))
+                context.insert(BalanceSnapshot(
+                    asOfDate: date(2026, 5, 12),
+                    balance: 2_000,
+                    importBatch: latestBatch,
+                    isUserModified: true
+                ))
+                try context.save()
+
+                let service = DebtScopeAssistantService(context: context, settings: settings)
+                let summary = try service.importReviewSummary(recentLimit: 1)
+
+                #expect(summary.importCount == 2)
+                #expect(summary.recentImports.count == 1)
+                #expect(summary.latestImport?.label == "sample-bank-may")
+                #expect(summary.latestImport?.parserName == "bank.csv")
+                #expect(summary.latestImport?.detectedInstitutionName == "Sample Bank")
+                #expect(summary.latestImport?.importedBalanceCount == 2)
+                #expect(summary.latestImport?.importedTransactionCount == 2)
+                #expect(summary.latestImport?.editedRecordCount == 2)
+                #expect(summary.latestImport?.unresolvedAccountMappingCount == 2)
+                #expect(summary.totalImportedBalanceCount == 2)
+                #expect(summary.totalImportedTransactionCount == 3)
+                #expect(summary.duplicateTransactionCandidateCount == 2)
+                #expect(summary.conflictCount == 3)
+                #expect(summary.unresolvedAccountMappingCount == 2)
+                #expect(summary.mappedAccountCount == 1)
+                #expect(summary.transactionLevelDetailAvailable == false)
+                #expect(summary.includesTransactionLevelDetail == false)
+                #expect(summary.sourceNote.contains("Raw file contents"))
+                #expect(summary.reviewNotes.contains { $0.contains("duplicate import keys") })
+                #expect(summary.reviewNotes.contains { $0.contains("account mapping review") })
+            } catch {
+                Issue.record(error)
+            }
+        }
+    }
+
     @Test("Assistant settings default to hidden and privacy-first")
     func assistantSettingsDefaultToHiddenAndPrivacyFirst() {
         withPreservedAssistantDefaults {
@@ -786,9 +915,14 @@ struct DebtScopeAssistantServiceTests {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
             for: Account.self,
+            Transaction.self,
+            ImportBatch.self,
+            HoldingSnapshot.self,
+            Security.self,
             BalanceSnapshot.self,
             CashFlowItem.self,
             BillFundingAllocation.self,
+            AccountImportMapping.self,
             configurations: config
         )
         return ModelContext(container)

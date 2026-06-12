@@ -231,6 +231,38 @@ struct SimulateExtraDebtPaymentTool: Tool {
 }
 
 @available(iOS 26.0, *)
+struct GetImportReviewSummaryTool: Tool {
+    let name = "get_import_review_summary"
+    let description = "Get count-level summaries of recent imports, duplicate candidates, conflicts, and account mapping issues without exposing raw file contents, hashes, memos, or persistent identifiers."
+
+    private let serviceBox: DebtScopeAssistantToolServiceBox
+
+    @MainActor
+    init(service: DebtScopeAssistantService) {
+        self.serviceBox = DebtScopeAssistantToolServiceBox(service: service)
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Number of recent imports to summarize. Use 5 unless the user asks for a different count. Clamped to 1 through 10.")
+        let recentLimit: Int?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        do {
+            let recentLimit = DebtScopeAssistantToolEncoding.clamp(arguments.recentLimit ?? 5, to: 1...10)
+            return try await MainActor.run {
+                let summary = try serviceBox.service.importReviewSummary(recentLimit: recentLimit)
+                return try DebtScopeAssistantToolEncoding.encode(summary)
+            }
+        } catch {
+            await DebtScopeAssistantToolEncoding.logFailure(toolName: name, error: error)
+            throw error
+        }
+    }
+}
+
+@available(iOS 26.0, *)
 struct DebtScopeAssistantToolFactory {
     @MainActor
     static func debtAndPayoffTools(service: DebtScopeAssistantService) -> [any Tool] {
@@ -240,7 +272,8 @@ struct DebtScopeAssistantToolFactory {
             GetUpcomingBillsTool(service: service),
             GetPayoffPlanTool(service: service),
             ComparePayoffStrategiesTool(service: service),
-            SimulateExtraDebtPaymentTool(service: service)
+            SimulateExtraDebtPaymentTool(service: service),
+            GetImportReviewSummaryTool(service: service)
         ]
     }
 }

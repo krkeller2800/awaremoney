@@ -30,6 +30,29 @@ private struct PendingExtraPaymentStrategyChoice {
     let startDate: Date
 }
 
+enum AssistantImportReviewQuestionFocus {
+    case latestImport
+    case duplicates
+    case accountMapping
+    case conflicts
+    case general
+
+    init(prompt: String) {
+        let normalized = prompt.lowercased()
+        if normalized.containsAnyImportReviewTerms(["duplicate", "duplicates", "dupe", "duplicated"]) {
+            self = .duplicates
+        } else if normalized.containsAnyImportReviewTerms(["account mapping", "mapping issue", "mapping issues", "unmapped", "unresolved mapping", "linked to an account"]) {
+            self = .accountMapping
+        } else if normalized.containsAnyImportReviewTerms(["conflict", "conflicts", "excluded", "skipped", "edited", "adjustment", "adjustments"]) {
+            self = .conflicts
+        } else if normalized.containsAnyImportReviewTerms(["latest import", "last import", "most recent import", "what changed after my import", "what changed after my latest import"]) {
+            self = .latestImport
+        } else {
+            self = .general
+        }
+    }
+}
+
 @MainActor
 final class DebtScopeAssistantViewModel: ObservableObject {
     @Published var currentInput = ""
@@ -246,6 +269,8 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                     scenarioStrategy: scenarioStrategy
                 )
             )
+        case .importReview:
+            return try formatImportReview(service.importReviewSummary(), prompt: prompt)
         case .upcomingBills:
             return try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode)
         case .debtAffordability:
@@ -414,6 +439,91 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
     }
 
+    private func formatImportReview(_ summary: AssistantImportReviewSummary, prompt: String) -> String {
+        guard summary.importCount > 0 else {
+            return missingDataResponse("DebtScope does not show completed imports yet.", notes: summary.reviewNotes)
+        }
+
+        let focus = AssistantImportReviewQuestionFocus(prompt: prompt)
+        var lines: [String]
+
+        switch focus {
+        case .duplicates:
+            lines = [
+                "DebtScope shows \(summary.duplicateTransactionCandidateCount) duplicate import candidate record(s)."
+            ]
+            if summary.duplicateTransactionCandidateCount == 0 {
+                lines.append("Recent imports do not show duplicate transaction import-key matches.")
+            }
+            appendLatestImportContextIfUseful(to: &lines, summary: summary)
+            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
+            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("duplicate") }.prefix(2))
+            return lines.joined(separator: "\n")
+
+        case .accountMapping:
+            lines = [
+                "DebtScope shows \(summary.unresolvedAccountMappingCount) imported record(s) that may need account mapping review."
+            ]
+            if let latest = summary.latestImport {
+                lines.append("Latest import mapping count: \(latest.unresolvedAccountMappingCount) unresolved record(s).")
+            }
+            lines.append("Mapped imported account count: \(summary.mappedAccountCount).")
+            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
+            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("mapping") || $0.contains("linked to an account") }.prefix(2))
+            return lines.joined(separator: "\n")
+
+        case .conflicts:
+            lines = [
+                "DebtScope shows \(summary.conflictCount) imported record(s) that are excluded, edited, or adjusted."
+            ]
+            if let latest = summary.latestImport {
+                lines.append("Latest import has \(latest.excludedRecordCount) excluded record(s) and \(latest.editedRecordCount) edited record(s).")
+            }
+            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
+            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("excluded") || $0.contains("edits") || $0.contains("conflicts") || $0.contains("adjustments") }.prefix(2))
+            return lines.joined(separator: "\n")
+
+        case .latestImport, .general:
+            lines = []
+        }
+
+        if let latest = summary.latestImport {
+            lines.append("Latest import: \(latest.label) on \(formatDate(latest.importedAt)).")
+            lines.append("Imported \(latest.importedBalanceCount) balance(s), \(latest.importedTransactionCount) transaction(s), and \(latest.importedHoldingCount) holding(s).")
+            if let parserName = latest.parserName {
+                lines.append("Parser: \(parserName).")
+            }
+            if let institutionName = latest.detectedInstitutionName {
+                lines.append("Detected institution: \(institutionName).")
+            }
+            if latest.unresolvedAccountMappingCount > 0 {
+                lines.append("\(latest.unresolvedAccountMappingCount) record(s) from the latest import still need account mapping review.")
+            }
+            if latest.excludedRecordCount > 0 || latest.editedRecordCount > 0 {
+                lines.append("Latest import has \(latest.excludedRecordCount) excluded record(s) and \(latest.editedRecordCount) edited record(s).")
+            }
+        }
+
+        if focus == .general {
+            lines.append("Across imports: \(summary.totalImportedBalanceCount) balance(s), \(summary.totalImportedTransactionCount) transaction(s), \(summary.totalImportedHoldingCount) holding(s).")
+            lines.append("Review counts: \(summary.duplicateTransactionCandidateCount) duplicate candidate record(s), \(summary.conflictCount) conflict/adjustment record(s), \(summary.unresolvedAccountMappingCount) unresolved mapping record(s).")
+        }
+        appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
+        lines.append(contentsOf: summary.reviewNotes.prefix(4))
+        return lines.joined(separator: "\n")
+    }
+
+    private func appendLatestImportContextIfUseful(to lines: inout [String], summary: AssistantImportReviewSummary) {
+        guard let latest = summary.latestImport else { return }
+        lines.append("Latest import: \(latest.label), with \(latest.importedTransactionCount) imported transaction(s).")
+    }
+
+    private func appendTransactionPrivacyLineIfNeeded(to lines: inout [String], summary: AssistantImportReviewSummary) {
+        if !summary.transactionLevelDetailAvailable {
+            lines.append("Transaction-level detail is disabled, so this answer stays at count level.")
+        }
+    }
+
     private func extraPaymentStrategyLine(_ summary: AssistantExtraPaymentSimulationSummary) -> String {
         if summary.strategy == summary.scenarioStrategy {
             return "Strategy used for both baseline and scenario: \(formatStrategy(summary.strategy))."
@@ -542,6 +652,12 @@ final class DebtScopeAssistantViewModel: ObservableObject {
 
 private enum DebtScopeAssistantViewModelError: Error {
     case foundationModelsUnavailable
+}
+
+private extension String {
+    func containsAnyImportReviewTerms(_ needles: [String]) -> Bool {
+        needles.contains { contains($0) }
+    }
 }
 
 enum AssistantPromptAmountParser {
