@@ -293,6 +293,7 @@ struct QuickStartView: View {
     @State private var selection: QuickStartTopic? = .debtPayoff
     @State private var compactPath: [QuickStartTopic] = []
     @State private var showImporter = false
+    @State private var showAccountSearch = false
     @State private var showAbout = false
     @State private var showSettings = false
     @State private var showBackupRestore = false
@@ -731,6 +732,14 @@ struct QuickStartView: View {
         ToolbarItem(placement: .topBarLeading) {
             PlanToolbarButton("Import", fixedWidth: 75) { showImporter = true }
         }
+
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                showAccountSearch = true
+            } label: {
+                Label("Search Accounts", systemImage: "magnifyingglass")
+            }
+        }
     }
 
     private var importStartHint: some View {
@@ -779,91 +788,13 @@ struct QuickStartView: View {
     var body: some View {
         Group {
             if isCompactLayout {
-                NavigationStack(path: $compactPath) {
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            if shouldShowImportStartHint {
-                                importStartHint
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                            }
-
-                            quickStartGroupedTopicCard { topic in
-                                selection = topic
-                                compactPath.append(topic)
-                            }
-
-                            quickStartSidebarCard(
-                                title: "Utility",
-                                items: utilityItems.map { ($0.title, $0.systemImage, false) },
-                                action: { tappedTitle in
-                                    handleUtilityTap(title: tappedTitle)
-                                }
-                            )
-
-                            TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
-                                showPaywall = true
-                            }
-                            .padding(.horizontal, 8)
-                        }
-                        .padding(10)
-                    }
-                    .navigationTitle("DebtScope")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { importToolbarContent }
-                    .overlay(alignment: .bottom) {
-                        importStatusOverlay
-                    }
-                    .navigationDestination(for: QuickStartTopic.self) { topic in
-                        topicContent(topic, compact: true)
-                            .onAppear {
-                                selection = topic
-                            }
-                            .navigationTitle(compactNavigationTitle(for: topic))
-                            .navigationBarTitleDisplayMode(.inline)
-                    }
-                }
+                compactQuickStartLayout
             } else {
-                NavigationSplitView {
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            if shouldShowImportStartHint {
-                                importStartHint
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 12)
-                            }
-
-                            quickStartGroupedTopicCard { topic in
-                                selection = topic
-                            }
-
-                            quickStartSidebarCard(
-                                title: "Utility",
-                                items: utilityItems.map { ($0.title, $0.systemImage, false) },
-                                action: { tappedTitle in
-                                    handleUtilityTap(title: tappedTitle)
-                                }
-                            )
-
-                            TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
-                                showPaywall = true
-                            }
-                            .padding(.horizontal, 12)
-                        }
-                        .padding(10)
-                    }
-                    .navigationTitle("DebtScope")
-                    .toolbar { importToolbarContent }
-                } detail: {
-                    detailContent
-                        .padding(.horizontal, 10)
-                        .overlay(alignment: .bottom) {
-                            importStatusOverlay
-                        }
-                        .navigationTitle(selection == .assets ? "" : (selection?.title ?? "DebtScope"))
-                        .navigationBarTitleDisplayMode(.inline)
-                }
+                regularQuickStartLayout
             }
+        }
+        .sheet(isPresented: $showAccountSearch) {
+            AccountSearchView()
         }
         .sheet(isPresented: $showAbout) {
             AboutView()
@@ -953,6 +884,95 @@ struct QuickStartView: View {
                 selection = .debtPayoff
             }
             compactPath.removeAll { $0 == .assistant }
+        }
+    }
+
+    private var compactQuickStartLayout: some View {
+        NavigationStack(path: $compactPath) {
+            ScrollView {
+                VStack(spacing: 12) {
+                    if shouldShowImportStartHint {
+                        importStartHint
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                    }
+
+                    quickStartGroupedTopicCard { topic in
+                        selection = topic
+                        compactPath.append(topic)
+                    }
+
+                    quickStartSidebarCard(
+                        title: "Utility",
+                        items: utilityItems.map { ($0.title, $0.systemImage, false) },
+                        action: { tappedTitle in
+                            handleUtilityTap(title: tappedTitle)
+                        }
+                    )
+
+                    TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                        showPaywall = true
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .padding(10)
+            }
+            .navigationTitle("DebtScope")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { importToolbarContent }
+            .overlay(alignment: .bottom) {
+                importStatusOverlay
+            }
+            .navigationDestination(for: QuickStartTopic.self) { topic in
+                topicContent(topic, compact: true)
+                    .onAppear {
+                        selection = topic
+                    }
+                    .navigationTitle(compactNavigationTitle(for: topic))
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    private var regularQuickStartLayout: some View {
+        NavigationSplitView {
+            ScrollView {
+                VStack(spacing: 12) {
+                    if shouldShowImportStartHint {
+                        importStartHint
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                    }
+
+                    quickStartGroupedTopicCard { topic in
+                        selection = topic
+                    }
+
+                    quickStartSidebarCard(
+                        title: "Utility",
+                        items: utilityItems.map { ($0.title, $0.systemImage, false) },
+                        action: { tappedTitle in
+                            handleUtilityTap(title: tappedTitle)
+                        }
+                    )
+
+                    TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                        showPaywall = true
+                    }
+                    .padding(.horizontal, 12)
+                }
+                .padding(10)
+            }
+            .navigationTitle("DebtScope")
+            .toolbar { importToolbarContent }
+        } detail: {
+            detailContent
+                .padding(.horizontal, 10)
+                .overlay(alignment: .bottom) {
+                    importStatusOverlay
+                }
+                .navigationTitle(selection == .assets ? "" : (selection?.title ?? "DebtScope"))
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 
@@ -2670,6 +2690,390 @@ private struct StatementReviewDetailView: View {
                 component: "Import"
             )
         }
+    }
+}
+
+private struct AccountSearchView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
+    @Query(sort: [SortDescriptor(\Transaction.datePosted, order: .reverse)]) private var transactions: [Transaction]
+    @Query(sort: [SortDescriptor(\BalanceSnapshot.asOfDate, order: .reverse)]) private var balanceSnapshots: [BalanceSnapshot]
+    @State private var searchText = ""
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var filteredAccounts: [Account] {
+        guard !trimmedSearchText.isEmpty else { return [] }
+
+        return accounts.filter { account in
+            searchableValues(for: account).contains { value in
+                value.localizedCaseInsensitiveContains(trimmedSearchText)
+            }
+        }
+    }
+
+    private var filteredTransactions: [Transaction] {
+        guard !trimmedSearchText.isEmpty else { return [] }
+
+        return transactions.filter { transaction in
+            searchableValues(for: transaction).contains { value in
+                value.localizedCaseInsensitiveContains(trimmedSearchText)
+            }
+        }
+    }
+
+    private var filteredBalances: [BalanceSnapshot] {
+        guard !trimmedSearchText.isEmpty else { return [] }
+
+        return balanceSnapshots.filter { snapshot in
+            searchableValues(for: snapshot).contains { value in
+                value.localizedCaseInsensitiveContains(trimmedSearchText)
+            }
+        }
+    }
+
+    private var hasResults: Bool {
+        !filteredAccounts.isEmpty || !filteredTransactions.isEmpty || !filteredBalances.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if accounts.isEmpty && transactions.isEmpty && balanceSnapshots.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing to search yet",
+                        systemImage: "magnifyingglass",
+                        description: Text("Import a statement or add an account to make financial data searchable inside DebtScope.")
+                    )
+                } else if trimmedSearchText.isEmpty {
+                    ContentUnavailableView(
+                        "Search DebtScope",
+                        systemImage: "magnifyingglass",
+                        description: Text("Find accounts, transactions, balances, payees, memos, dates, and amounts.")
+                    )
+                } else if !hasResults {
+                    ContentUnavailableView.search(text: trimmedSearchText)
+                } else {
+                    List {
+                        if !filteredAccounts.isEmpty {
+                            Section("Accounts") {
+                                ForEach(filteredAccounts.prefix(20)) { account in
+                                    NavigationLink {
+                                        AccountDetailView(accountID: account.id)
+                                            .navigationBarTitleDisplayMode(.inline)
+                                    } label: {
+                                        AccountSearchResultRow(account: account)
+                                    }
+                                }
+                            }
+                        }
+
+                        if !filteredTransactions.isEmpty {
+                            Section("Transactions") {
+                                ForEach(filteredTransactions.prefix(50)) { transaction in
+                                    NavigationLink {
+                                        EditTransactionView(transaction: transaction)
+                                            .navigationBarTitleDisplayMode(.inline)
+                                    } label: {
+                                        TransactionSearchResultRow(transaction: transaction)
+                                    }
+                                }
+                            }
+                        }
+
+                        if !filteredBalances.isEmpty {
+                            Section("Balances") {
+                                ForEach(filteredBalances.prefix(30)) { snapshot in
+                                    if let accountID = snapshot.account?.id ?? snapshot.accountID {
+                                        NavigationLink {
+                                            AccountTransactionsListView(accountID: accountID)
+                                                .navigationBarTitleDisplayMode(.inline)
+                                        } label: {
+                                            BalanceSearchResultRow(snapshot: snapshot)
+                                        }
+                                    } else {
+                                        BalanceSearchResultRow(snapshot: snapshot)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Transaction, payee, amount, account")
+            .focused($isSearchFieldFocused)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                isSearchFieldFocused = true
+            }
+        }
+    }
+
+    private func searchableValues(for account: Account) -> [String] {
+        let latestBalance = account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first?.balance
+        return [
+            displayName(for: account),
+            account.institutionName ?? "",
+            accountTypeDisplayName(for: account),
+            latestBalance.map(formatAmountForSearch) ?? ""
+        ]
+    }
+
+    private func searchableValues(for transaction: Transaction) -> [String] {
+        [
+            transaction.payee,
+            transaction.memo ?? "",
+            transaction.kind.rawValue,
+            transaction.symbol ?? "",
+            transaction.account.map(displayName) ?? "",
+            formatAmountForSearch(transaction.amount),
+            plainAmountString(transaction.amount),
+            formatSearchDate(transaction.datePosted)
+        ]
+    }
+
+    private func searchableValues(for snapshot: BalanceSnapshot) -> [String] {
+        [
+            "balance",
+            snapshot.account.map(displayName) ?? "",
+            formatAmountForSearch(snapshot.balance),
+            plainAmountString(snapshot.balance),
+            formatSearchDate(snapshot.asOfDate),
+            snapshot.interestRateAPR.map { "APR \(plainAmountString($0))" } ?? ""
+        ]
+    }
+
+    private func displayName(for account: Account) -> String {
+        let trimmedName = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedName.isEmpty { return trimmedName }
+
+        let trimmedInstitution = (account.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedInstitution.isEmpty { return trimmedInstitution }
+
+        return "Unnamed"
+    }
+
+    private func accountTypeDisplayName(for account: Account) -> String {
+        AccountSearchFormatting.accountTypeDisplayName(for: account)
+    }
+
+    private func formatAmountForSearch(_ amount: Decimal) -> String {
+        AccountSearchFormatting.currency(amount)
+    }
+
+    private func plainAmountString(_ amount: Decimal) -> String {
+        NSDecimalNumber(decimal: amount).stringValue
+    }
+
+    private func formatSearchDate(_ date: Date) -> String {
+        AccountSearchFormatting.date(date)
+    }
+}
+
+private struct AccountSearchResultRow: View {
+    let account: Account
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(displayName)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            if let latestBalance {
+                Text(AccountSearchFormatting.currency(latestBalance.balance))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(latestBalance.balance < 0 ? .red : .secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var displayName: String {
+        AccountSearchFormatting.displayName(for: account)
+    }
+
+    private var subtitle: String {
+        let type = AccountSearchFormatting.accountTypeDisplayName(for: account)
+        let trimmedInstitution = (account.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedInstitution.isEmpty, trimmedInstitution != displayName else {
+            return type
+        }
+
+        return "\(type) · \(trimmedInstitution)"
+    }
+
+    private var latestBalance: BalanceSnapshot? {
+        account.balanceSnapshots.sorted { $0.asOfDate > $1.asOfDate }.first
+    }
+}
+
+private struct TransactionSearchResultRow: View {
+    let transaction: Transaction
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(transaction.payee.isEmpty ? transaction.kind.rawValue.capitalized : transaction.payee)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(AccountSearchFormatting.currency(transaction.amount))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(transaction.amount < 0 ? .red : .secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var subtitle: String {
+        var parts = [AccountSearchFormatting.date(transaction.datePosted)]
+
+        if let account = transaction.account {
+            parts.append(AccountSearchFormatting.accountDescription(for: account))
+        }
+
+        if let memo = transaction.memo?.trimmingCharacters(in: .whitespacesAndNewlines), !memo.isEmpty {
+            parts.append(memo)
+        } else if let symbol = transaction.symbol?.trimmingCharacters(in: .whitespacesAndNewlines), !symbol.isEmpty {
+            parts.append(symbol)
+        }
+
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct BalanceSearchResultRow: View {
+    let snapshot: BalanceSnapshot
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(accountName)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(AccountSearchFormatting.currency(snapshot.balance))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(snapshot.balance < 0 ? .red : .secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var accountName: String {
+        guard let account = snapshot.account else { return "Balance" }
+        return AccountSearchFormatting.displayName(for: account)
+    }
+
+    private var subtitle: String {
+        var parts = ["Balance", AccountSearchFormatting.date(snapshot.asOfDate)]
+        if let account = snapshot.account {
+            parts.append(AccountSearchFormatting.accountTypeDisplayName(for: account))
+        }
+        if let apr = snapshot.interestRateAPR {
+            parts.append("APR \(AccountSearchFormatting.percent(apr, scale: snapshot.interestRateScale))")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private enum AccountSearchFormatting {
+    static func displayName(for account: Account) -> String {
+        let trimmedName = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedName.isEmpty { return trimmedName }
+
+        let trimmedInstitution = (account.institutionName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedInstitution.isEmpty { return trimmedInstitution }
+
+        return "Unnamed"
+    }
+
+    static func accountDescription(for account: Account) -> String {
+        "\(displayName(for: account)) · \(accountTypeDisplayName(for: account))"
+    }
+
+    static func accountTypeDisplayName(for account: Account) -> String {
+        switch account.type {
+        case .checking:
+            return "Checking"
+        case .savings:
+            return "Savings"
+        case .creditCard:
+            return "Credit Card"
+        case .loan:
+            return "Loan"
+        case .cash:
+            return "Cash"
+        case .brokerage:
+            return "Brokerage"
+        case .property:
+            return "Property"
+        case .other:
+            return "Other"
+        }
+    }
+
+    static func currency(_ amount: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        return formatter.string(from: NSDecimalNumber(decimal: amount)) ?? NSDecimalNumber(decimal: amount).stringValue
+    }
+
+    static func percent(_ amount: Decimal, scale: Int?) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .percent
+        if let scale {
+            formatter.minimumFractionDigits = scale
+            formatter.maximumFractionDigits = scale
+        } else {
+            formatter.minimumFractionDigits = 2
+            formatter.maximumFractionDigits = 3
+        }
+        return formatter.string(from: NSDecimalNumber(decimal: amount)) ?? NSDecimalNumber(decimal: amount).stringValue
+    }
+
+    static func date(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 
