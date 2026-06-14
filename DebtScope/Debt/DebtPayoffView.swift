@@ -186,7 +186,7 @@ struct DebtPayoffView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Debt Payoff")
+        .navigationTitle("Liability Account")
         .onAppear {
             // Seed UI fields from model
             aprInput = aprInputForUI()

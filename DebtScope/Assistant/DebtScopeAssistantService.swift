@@ -542,9 +542,9 @@ final class DebtScopeAssistantService {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .missingAPR,
                 title: "Add missing APRs",
-                destination: "Debt Payoff",
+                destination: "Liability Accounts",
                 expectedBenefit: "Makes avalanche ordering and projected interest totals more accurate.",
-                requiredUserConfirmation: "Open Debt Payoff, choose the liability account, enter the APR from your statement in the APR field, and confirm the value before leaving the field.",
+                requiredUserConfirmation: "Open Liability Accounts, choose the liability account, enter the APR from your statement in the APR field, and confirm the value before leaving the field.",
                 affectedRecordCount: missingAPRCount,
                 details: ["APR is missing for \(missingAPRCount) active debt account(s)."]
             ))
@@ -555,9 +555,9 @@ final class DebtScopeAssistantService {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .missingMinimumPayments,
                 title: "Add missing minimum payments",
-                destination: "Debt Payoff",
+                destination: "Liability Accounts",
                 expectedBenefit: "Reduces reliance on fallback minimum-payment estimates in payoff planning.",
-                requiredUserConfirmation: "Open Debt Payoff, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and confirm the value before leaving the field.",
+                requiredUserConfirmation: "Open Liability Accounts, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and confirm the value before leaving the field.",
                 affectedRecordCount: missingMinimumPaymentCount,
                 details: ["DebtScope is currently using fallback minimum-payment estimates for these debt account(s)."]
             ))

@@ -1,43 +1,61 @@
 # Codex Handoff
 
 ## Current Focus
-- Phase 1, Phase 2, Phase 3, and Phase 4 of `DebtScope/DebtScope/Docs/Assistant-Future-Enhancements-Implementation-Plan.md` are implemented and smoke tested for the read-only assistant.
-- Assistant remains privacy-first and read-only. Response generation still snapshots/restores protected payoff defaults.
+- Phase 1, Phase 2, Phase 3, and Phase 4 of `DebtScope/DebtScope/Docs/Assistant-Future-Enhancements-Implementation-Plan.md` are implemented, smoke tested, and committed per user note.
+- Phase 5 has begun with privacy-preserving App Intents for navigation-only system shortcuts.
+- The Debt Payoff Plan shortcut now has a dedicated read-only in-app destination instead of opening the liability account setup list.
+- The old "Debt Payoff" setup/list destination has been renamed to "Liability Accounts" in the QuickStart UI and detail/editor title to distinguish it from the read-only Payoff Plan screen.
+- QuickStart tile cleanup also renamed the "Money Flow" heading to "Cash Flow" and the former "Cash Flow" tile under it to "Asset Accounts".
+- Assistant remains privacy-first and read-only. Do not expose balances, transactions, import filenames, payoff amounts, or payoff dates in Siri, Shortcuts, Spotlight, or other system surfaces without a separate privacy review.
 
 ## Completed This Checkpoint
-- Phase 4 cleanup recommendations:
-  - added read-only cleanup recommendation contracts for duplicate imports, unresolved account mappings, missing APRs, missing minimum payments, and incomplete bill/income schedules.
-  - added `DebtScopeAssistantService.cleanupRecommendationSummary()` using current app state and count-level review signals only.
-  - added `get_cleanup_recommendations` Foundation Models tool.
-  - added direct-response prompt routing and focused how-to guidance for cleanup prompts.
-  - improved APR/minimum-payment guidance to use visible app fields and statement-source wording.
-  - clarified duplicate import and account mapping cleanup as decisions made during statement import review.
-  - kept recommendations read-only: no delete, merge, edit, categorize, move, save, raw transaction list, full memo, hash, or persistent ID exposure.
-- Assistant UI:
-  - increased the bottom `Ask DebtScope` input field to a normal chat-control tap target with a 44pt minimum height.
-- Test coverage:
-  - cleanup prompt intent and focus recognition.
-  - cleanup recommendations summarize mixed debt/import/cash-flow setup issues without transaction-level detail.
-  - cleanup recommendation generation does not mutate protected `UserDefaults` or stored record counts.
-  - recommendation text now asserts statement-import-review wording for import cleanup and statement-source wording for APR/minimum-payment cleanup.
+- Added `DebtScope/DebtScope/Assistant/DebtScopeAppIntents.swift`.
+- Added `DebtScopeAppSection` AppEnum with non-sensitive section targets:
+  - Debt Summary
+  - Upcoming Bills
+  - Assistant
+  - Debt Payoff Plan
+- Added `OpenDebtScopeSectionIntent`, which opens the app and stores only a section identifier.
+- Added `DebtScopeAppShortcuts` phrases for the four section-opening shortcuts.
+- Added `DebtScopeAppSectionRequestStore` for live notification delivery and cold-launch pending-section handoff through `UserDefaults`.
+- Added `DebtScope/DebtScope/Debt/DebtPayoffPlanView.swift` as a read-only saved payoff plan destination.
+- The payoff plan screen uses `DebtScopeAssistantService.payoffPlanSummary(startDate:)` and `debtSummary()` so it reuses existing `PayoffPlanProvider` calculation paths and missing-data notes.
+- Wired `QuickStartView` to route App Intent requests into existing screens:
+  - Debt Summary -> Compare Strategies / debt summary screen
+  - Upcoming Bills -> Income & Bills screen
+  - Assistant -> Assistant screen when enabled, otherwise Debt Payoff
+  - Debt Payoff Plan -> new Payoff Plan screen
+- Added Payoff Plan as a first-class QuickStart Debt topic, alongside Debt Payoff and Compare Strategies.
+- Renamed the setup/list topic from Debt Payoff to Liability Accounts.
+- Updated the per-account payoff editor navigation title to Liability Account.
+- Updated payoff-plan and assistant cleanup guidance to point users to Liability Accounts when they need to fix APR or minimum-payment inputs.
+- Renamed the QuickStart Money Flow group to Cash Flow.
+- Renamed the QuickStart cash-flow account tile to Asset Accounts and suppress the compact navigation title for that route to avoid a truncated duplicate of the in-page heading.
 
 ## Latest Validation
-- Xcode live diagnostics found no issues in edited assistant and assistant test files.
-- Full focused assistant service suite passed after Phase 4 how-to changes: `33 tests: 33 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
-- Focused cleanup wording checks passed after later wording refinements.
-- Full Xcode project build previously succeeded after Phase 4.
-- Full active `DebtScope` test plan previously passed after Phase 4 base work: `52 tests: 52 passed, 0 failed, 0 skipped, 0 expected failures, 0 not run`.
-- SwiftUI Assistant preview rendered successfully after input-field sizing change.
-- User reported Phase 2, Phase 3, and Phase 4 smoke testing complete.
+- User reported the original four App Shortcuts smoke test was successful, with the note that Payoff Plan should open a dedicated saved-plan screen.
+- Xcode live diagnostics found no issues in:
+  - `DebtScope/Assistant/DebtScopeAppIntents.swift`
+  - `DebtScope/Assistant/DebtScopeAssistantService.swift`
+  - `DebtScope/Assistant/DebtScopeAssistantViewModel.swift`
+  - `DebtScope/Debt/DebtPayoffDetailView.swift`
+  - `DebtScope/Debt/DebtPayoffPlanView.swift`
+  - `DebtScope/Debt/DebtPayoffView.swift`
+  - `DebtScope/View/QuickStartView.swift`
+- Full Xcode project build succeeded after the dedicated Payoff Plan screen, Liability Accounts rename, and QuickStart Cash Flow tile cleanup changes.
+- SwiftUI preview rendering for `DebtPayoffPlanView` timed out after 120 seconds; no preview result was captured.
 
 ## Known Constraints / Risks
-- Codex cannot directly read the foreground iPhone app container; device UI remains the source of truth for manual smoke checks.
-- Cleanup recommendations currently describe workflows and field-level steps; they do not deep-link or navigate automatically.
-- `CashFlowItem` does not currently expose a stored category field, so Phase 4 treats bill/income cleanup as incomplete schedule setup rather than inventing uncategorized item semantics.
-- The assistant remains read-only; do not add write-capable AI tools without a confirmed app UI workflow and audit trail.
-- Keep transaction work aggregated by default and gated by `assistantIncludeTransactions` plus an explicit user request.
+- App Shortcuts are navigation-only and intentionally return no financial data.
+- The Assistant shortcut falls back to Debt Payoff if the assistant feature flag is disabled.
+- No Spotlight or App Entity indexing has been added yet.
+- The Payoff Plan screen is read-only and includes a Manage Liability Accounts button for fixing debt inputs in the existing liability account workflow.
+- Device-level Siri/Shortcuts should be manually rechecked after the Payoff Plan reroute.
 
 ## Recommended Next Step
-- Commit the assistant payoff/import-review/cleanup recommendation work and Assistant input-field sizing change.
-- Suggested commit message: `Add assistant payoff simulations and cleanup guidance`
-- After committing, continue to Phase 5 App Intents and indexing only if system-surface privacy requirements are confirmed.
+- Manually smoke test the `Open debt payoff plan in DebtScope` shortcut again and confirm it opens the new Payoff Plan screen.
+- Confirm the Debt section shows Payoff Plan, Liability Accounts, and Compare Strategies with clear distinction between plan viewing and liability setup.
+- Confirm the Cash Flow section shows Asset Accounts and Income & Bills with the expected destinations.
+- Confirm Siri/Shortcuts only launches DebtScope and does not show or speak financial values, import filenames, transaction details, or payoff details in the system result UI. It is expected that the opened DebtScope app screen displays the user’s in-app financial data.
+- If validation passes, commit this Phase 5 checkpoint.
+- Suggested commit message: `Add navigation-only DebtScope app shortcuts`

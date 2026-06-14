@@ -2377,7 +2377,7 @@ struct DebtPayoffDetailView: View {
                     self.detectionSheetModel = DetectionSheetModel(
                         detection: seededDetection,
                         url: stagedURL,
-                        routeConfirmationText: "Opened as Debt Payoff"
+                        routeConfirmationText: "Opened as Liability Accounts"
                     )
                     self.isPreparingDetectionReview = false
                     self.pendingExternal = nil

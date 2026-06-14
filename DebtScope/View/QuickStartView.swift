@@ -4,12 +4,13 @@ import UniformTypeIdentifiers
 import SwiftData
 
 private enum QuickStartTopic: String, CaseIterable, Identifiable {
-    case debtPayoff = "Debt Payoff"
+    case debtPayoff = "Liability Accounts"
+    case debtPayoffPlan = "Payoff Plan"
     case compareStrategies = "Compare Strategies"
     case netWorth = "Net Worth"
-    case cashFlow = "Cash Flow"
+    case cashFlow = "Asset Accounts"
     case incomeBills = "Income & Bills"
-    case assets = "Assets"
+    case assets = "Physical Assets"
     case statementReview = "Needs Review"
     case assistant = "Assistant"
 
@@ -319,8 +320,8 @@ struct QuickStartView: View {
 
     private var topicGroups: [(title: String, topics: [QuickStartTopic])] {
         var groups: [(title: String, topics: [QuickStartTopic])] = [
-            ("Debt", [.debtPayoff, .compareStrategies]),
-            ("Money Flow", [.cashFlow, .incomeBills]),
+            ("Debt", [.debtPayoffPlan, .debtPayoff, .compareStrategies]),
+            ("Cash Flow", [.cashFlow, .incomeBills]),
             ("Worth", [.netWorth, .assets]),
             ("Review", [.statementReview])
         ]
@@ -342,6 +343,37 @@ struct QuickStartView: View {
             return .netWorth
         default:
             return .statementReview
+        }
+    }
+
+    private func topicFor(appSection: DebtScopeAppSection) -> QuickStartTopic {
+        switch appSection {
+        case .debtSummary:
+            return .compareStrategies
+        case .upcomingBills:
+            return .incomeBills
+        case .assistant:
+            return .assistant
+        case .debtPayoffPlan:
+            return .debtPayoffPlan
+        }
+    }
+
+    private func routeToAppSection(_ section: DebtScopeAppSection) {
+        var topic = topicFor(appSection: section)
+        if topic == .assistant && !settings.assistantEnabled {
+            topic = .debtPayoff
+        }
+
+        if section == .upcomingBills {
+            planSheetMode = .incomeBills
+        }
+
+        if isCompactLayout {
+            compactPath.removeAll()
+            compactPath.append(topic)
+        } else {
+            selection = topic
         }
     }
 
@@ -571,6 +603,10 @@ struct QuickStartView: View {
         horizontalSizeClass == .compact
     }
 
+    private func compactNavigationTitle(for topic: QuickStartTopic) -> String {
+        topic == .cashFlow ? "" : topic.title
+    }
+
     @ViewBuilder
     private var utilitySection: some View {
         Section("Utility") {
@@ -647,6 +683,14 @@ struct QuickStartView: View {
                 onRouteImport: routeImportedAccount,
                 pendingExternal: $quickStartPending
             )
+        case .debtPayoffPlan:
+            DebtPayoffPlanView {
+                if compact {
+                    compactPath.append(.debtPayoff)
+                } else {
+                    selection = .debtPayoff
+                }
+            }
         case .compareStrategies:
             DebtSummaryView(embeddedInNavigation: true) {
                 routeToIncomeBills(compact: compact)
@@ -775,7 +819,7 @@ struct QuickStartView: View {
                             .onAppear {
                                 selection = topic
                             }
-                            .navigationTitle(topic == .cashFlow ? "Flow" : topic.title)
+                            .navigationTitle(compactNavigationTitle(for: topic))
                             .navigationBarTitleDisplayMode(.inline)
                     }
                 }
@@ -886,8 +930,16 @@ struct QuickStartView: View {
                 importRouter.quickStartPendingImport = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: DebtScopeAppSectionRequestStore.notificationName)) { notification in
+            guard let rawValue = notification.object as? String,
+                  let section = DebtScopeAppSection(rawValue: rawValue) else { return }
+            routeToAppSection(section)
+        }
         .onAppear {
             loadPersistedReviewStateIfNeeded()
+            if let pendingSection = DebtScopeAppSectionRequestStore.consumePendingSection() {
+                routeToAppSection(pendingSection)
+            }
         }
         .onChange(of: reviewItems) { _, _ in
             persistReviewState()

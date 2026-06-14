@@ -591,14 +591,14 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             recommendationKind = .missingAPR
             cleanStateLine = "DebtScope doesn't show missing APR cleanup right now."
             guidanceLines = [
-                "To fix APRs in the app, go to Debt Payoff, choose the liability account, enter the APR from your statement in the APR field, and tap the checkmark or Done to confirm.",
+                "To fix APRs in the app, go to Liability Accounts, choose the liability account, enter the APR from your statement in the APR field, and tap the checkmark or Done to confirm.",
                 "Adding APRs improves avalanche ordering and projected interest totals."
             ]
         case .missingMinimumPayments:
             recommendationKind = .missingMinimumPayments
             cleanStateLine = "DebtScope doesn't show missing minimum-payment cleanup right now."
             guidanceLines = [
-                "To fix minimum payments in the app, go to Debt Payoff, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and tap the checkmark or Done to confirm.",
+                "To fix minimum payments in the app, go to Liability Accounts, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and tap the checkmark or Done to confirm.",
                 "Adding minimum payments reduces fallback estimates and makes payoff projections more reliable."
             ]
         case .accountMapping:
