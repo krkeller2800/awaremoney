@@ -59,6 +59,17 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(assistantRetainConversationHistory, forKey: "assistant_retain_conversation_history") }
     }
 
+    @Published var spotlightAllowsSensitiveFinancialIndexing: Bool {
+        didSet {
+            UserDefaults.standard.set(spotlightAllowsSensitiveFinancialIndexing, forKey: "spotlight_allows_sensitive_financial_indexing")
+            Task { @MainActor in
+                Task { @MainActor in
+            DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
+        }
+            }
+        }
+    }
+
     // Developer
     @Published var showDebugTools: Bool {
         didSet { UserDefaults.standard.set(showDebugTools, forKey: "show_debug_tools") }
@@ -98,6 +109,7 @@ final class SettingsStore: ObservableObject {
         self.assistantEnabled = UserDefaults.standard.object(forKey: "assistant_enabled") as? Bool ?? false
         self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false
         self.assistantRetainConversationHistory = UserDefaults.standard.object(forKey: "assistant_retain_conversation_history") as? Bool ?? false
+        self.spotlightAllowsSensitiveFinancialIndexing = UserDefaults.standard.object(forKey: "spotlight_allows_sensitive_financial_indexing") as? Bool ?? false
         
         #if DEBUG
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true
@@ -108,6 +120,8 @@ final class SettingsStore: ObservableObject {
         self.didInitializeReserveAnchors = UserDefaults.standard.object(forKey: "didInitializeReserveAnchors") as? Bool ?? false
         self.didMigrateBillFundingAllocations = UserDefaults.standard.object(forKey: "didMigrateBillFundingAllocations") as? Bool ?? false
         self.lastReserveUpdateMonth = UserDefaults.standard.string(forKey: "last_reserve_update_month")
+
+        DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
     }
 }
 

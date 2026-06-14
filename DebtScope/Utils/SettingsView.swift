@@ -70,12 +70,19 @@ struct SettingsView: View {
                     Text("When available, the assistant uses on-device Apple Intelligence and receives only scoped DebtScope summaries instead of direct database access.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Toggle("Allow financial details in Spotlight", isOn: $settings.spotlightAllowsSensitiveFinancialIndexing)
+                    Text("Spotlight indexes generic DebtScope sections by default. Financial details stay out of system search unless explicitly allowed here.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
 
                     Button(role: .destructive) {
                         showResetAlert = true
                     } label: {
                         Text("Reset App Data")
                     }
+                    Text("Deletes all imported or manually added accounts, transactions, balances, holdings, bills, and related app data.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Appearance & UX") {
@@ -238,6 +245,7 @@ struct SettingsView: View {
         settings.assistantEnabled = false
         settings.assistantIncludeTransactions = false
         settings.assistantRetainConversationHistory = false
+        settings.spotlightAllowsSensitiveFinancialIndexing = false
         settings.didInitializeReserveAnchors = false
     }
 

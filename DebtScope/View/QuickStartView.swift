@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreSpotlight
 import UniformTypeIdentifiers
 import SwiftData
 
@@ -376,6 +377,16 @@ struct QuickStartView: View {
         } else {
             selection = topic
         }
+    }
+
+    private func routeSpotlightActivity(_ userActivity: NSUserActivity) {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+              let section = DebtScopeSpotlightIndexer.section(from: identifier) else {
+            return
+        }
+
+        routeToAppSection(section)
     }
 
     private func routeImportedAccount(statementType: StatementType?, accountID: UUID?) {
@@ -865,6 +876,9 @@ struct QuickStartView: View {
             guard let rawValue = notification.object as? String,
                   let section = DebtScopeAppSection(rawValue: rawValue) else { return }
             routeToAppSection(section)
+        }
+        .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
+            routeSpotlightActivity(userActivity)
         }
         .onAppear {
             loadPersistedReviewStateIfNeeded()
