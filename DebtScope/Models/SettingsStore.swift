@@ -1,6 +1,14 @@
 import SwiftUI
 import Combine
 
+struct DebtScopeSpotlightIndexingOptions: Equatable {
+    var allowsSensitiveFinancialIndexing: Bool
+    var includesAccountNames: Bool
+    var includesBillNames: Bool
+    var includesTransactionPayees: Bool
+    var includesDebtPayoffNames: Bool
+}
+
 final class SettingsStore: ObservableObject {
     // Published currency code stored in UserDefaults; defaults to device locale or USD
     @Published var currencyCode: String {
@@ -63,11 +71,35 @@ final class SettingsStore: ObservableObject {
         didSet {
             UserDefaults.standard.set(spotlightAllowsSensitiveFinancialIndexing, forKey: "spotlight_allows_sensitive_financial_indexing")
             Task { @MainActor in
-                Task { @MainActor in
-            DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
-        }
+                DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
             }
         }
+    }
+
+    @Published var spotlightIncludesAccountNames: Bool {
+        didSet { UserDefaults.standard.set(spotlightIncludesAccountNames, forKey: "spotlight_includes_account_names") }
+    }
+
+    @Published var spotlightIncludesBillNames: Bool {
+        didSet { UserDefaults.standard.set(spotlightIncludesBillNames, forKey: "spotlight_includes_bill_names") }
+    }
+
+    @Published var spotlightIncludesTransactionPayees: Bool {
+        didSet { UserDefaults.standard.set(spotlightIncludesTransactionPayees, forKey: "spotlight_includes_transaction_payees") }
+    }
+
+    @Published var spotlightIncludesDebtPayoffNames: Bool {
+        didSet { UserDefaults.standard.set(spotlightIncludesDebtPayoffNames, forKey: "spotlight_includes_debt_payoff_names") }
+    }
+
+    var spotlightIndexingOptions: DebtScopeSpotlightIndexingOptions {
+        DebtScopeSpotlightIndexingOptions(
+            allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing,
+            includesAccountNames: spotlightIncludesAccountNames,
+            includesBillNames: spotlightIncludesBillNames,
+            includesTransactionPayees: spotlightIncludesTransactionPayees,
+            includesDebtPayoffNames: spotlightIncludesDebtPayoffNames
+        )
     }
 
     // Developer
@@ -110,6 +142,10 @@ final class SettingsStore: ObservableObject {
         self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false
         self.assistantRetainConversationHistory = UserDefaults.standard.object(forKey: "assistant_retain_conversation_history") as? Bool ?? false
         self.spotlightAllowsSensitiveFinancialIndexing = UserDefaults.standard.object(forKey: "spotlight_allows_sensitive_financial_indexing") as? Bool ?? false
+        self.spotlightIncludesAccountNames = UserDefaults.standard.object(forKey: "spotlight_includes_account_names") as? Bool ?? true
+        self.spotlightIncludesBillNames = UserDefaults.standard.object(forKey: "spotlight_includes_bill_names") as? Bool ?? true
+        self.spotlightIncludesTransactionPayees = UserDefaults.standard.object(forKey: "spotlight_includes_transaction_payees") as? Bool ?? true
+        self.spotlightIncludesDebtPayoffNames = UserDefaults.standard.object(forKey: "spotlight_includes_debt_payoff_names") as? Bool ?? true
         
         #if DEBUG
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true
@@ -124,4 +160,3 @@ final class SettingsStore: ObservableObject {
         DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
     }
 }
-

@@ -291,6 +291,7 @@ struct QuickStartView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
+    @Query(sort: [SortDescriptor(\CashFlowItem.name, order: .forward)]) private var cashFlowItems: [CashFlowItem]
     @State private var selection: QuickStartTopic? = .debtPayoff
     @State private var compactPath: [QuickStartTopic] = []
     @State private var showImporter = false
@@ -381,12 +382,142 @@ struct QuickStartView: View {
 
     private func routeSpotlightActivity(_ userActivity: NSUserActivity) {
         guard userActivity.activityType == CSSearchableItemActionType,
-              let identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
-              let section = DebtScopeSpotlightIndexer.section(from: identifier) else {
+              let identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else {
             return
         }
 
-        routeToAppSection(section)
+        if let section = DebtScopeSpotlightIndexer.section(from: identifier) {
+            routeToAppSection(section)
+            return
+        }
+
+        if let accountID = DebtScopeSpotlightIndexer.accountID(from: identifier) {
+            routeToAccount(accountID)
+            return
+        }
+
+        if DebtScopeSpotlightIndexer.billID(from: identifier) != nil {
+            planSheetMode = .incomeBills
+            routeToTopic(.incomeBills)
+            return
+        }
+
+        if let transactionID = DebtScopeSpotlightIndexer.transactionID(from: identifier) {
+            routeToTransaction(transactionID)
+            return
+        }
+
+        if let accountID = DebtScopeSpotlightIndexer.debtPayoffAccountID(from: identifier) {
+            debtPayoffSelectedAccountID = accountID
+            routeToTopic(.debtPayoff)
+        }
+    }
+
+    private func routeToAccount(_ accountID: UUID) {
+        guard let account = accounts.first(where: { $0.id == accountID }) else { return }
+
+        let topic: QuickStartTopic
+        switch account.type {
+        case .creditCard, .loan:
+            debtPayoffSelectedAccountID = accountID
+            topic = .debtPayoff
+        case .checking, .savings, .cash:
+            cashFlowSelectedAccountID = accountID
+            topic = .cashFlow
+        case .property:
+            topic = .assets
+        case .brokerage:
+            topic = .netWorth
+        case .other:
+            topic = account.isManualAsset ? .assets : .cashFlow
+        }
+
+        routeToTopic(topic)
+    }
+
+    private func routeToTransaction(_ transactionID: UUID) {
+        guard let transaction = fetchTransaction(id: transactionID) else {
+            routeToTopic(.cashFlow)
+            return
+        }
+
+        if let accountID = transaction.account?.id ?? transaction.accountID {
+            routeToAccount(accountID)
+        } else {
+            routeToTopic(.cashFlow)
+        }
+    }
+
+    private func routeToTopic(_ topic: QuickStartTopic) {
+        if isCompactLayout {
+            compactPath.removeAll()
+            compactPath.append(topic)
+        } else {
+            selection = topic
+        }
+    }
+
+    private var spotlightIndexFingerprint: String {
+        let options = settings.spotlightIndexingOptions
+        let accountFingerprint = accounts.map { account in
+            [
+                account.id.uuidString,
+                account.name,
+                account.typeRaw,
+                account.assetCategoryRaw ?? "",
+                account.institutionName ?? ""
+            ].joined(separator: "|")
+        }
+        .joined(separator: "||")
+
+        let billFingerprint = cashFlowItems.map { item in
+            [
+                item.id.uuidString,
+                item.kindRaw,
+                item.name
+            ].joined(separator: "|")
+        }
+        .joined(separator: "||")
+
+        return accountFingerprint
+            + "|bills:\(billFingerprint)"
+            + "|spotlight:\(options.allowsSensitiveFinancialIndexing)"
+            + ":\(options.includesAccountNames)"
+            + ":\(options.includesBillNames)"
+            + ":\(options.includesTransactionPayees)"
+            + ":\(options.includesDebtPayoffNames)"
+    }
+
+    private func refreshSpotlightIndexWithAccounts() {
+        let options = settings.spotlightIndexingOptions
+        DebtScopeSpotlightIndexer.refreshIndex(
+            options: options,
+            accounts: accounts,
+            cashFlowItems: options.includesBillNames ? cashFlowItems : [],
+            transactions: options.includesTransactionPayees ? fetchTransactions() : []
+        )
+    }
+
+    private func fetchTransactions() -> [Transaction] {
+        do {
+            var descriptor = FetchDescriptor<Transaction>()
+            descriptor.sortBy = [SortDescriptor(\Transaction.payee, order: .forward)]
+            return try modelContext.fetch(descriptor)
+        } catch {
+            AMLogging.error("Failed to fetch transactions for Spotlight indexing: \(error.localizedDescription)", component: "Spotlight")
+            return []
+        }
+    }
+
+    private func fetchTransaction(id: UUID) -> Transaction? {
+        do {
+            let predicate = #Predicate<Transaction> { $0.id == id }
+            let descriptor = FetchDescriptor<Transaction>(predicate: predicate)
+            return try modelContext.fetch(descriptor).first
+        } catch {
+            AMLogging.error("Failed to fetch Spotlight transaction route target: \(error.localizedDescription)", component: "Spotlight")
+            return nil
+        }
     }
 
     private func routeImportedAccount(statementType: StatementType?, accountID: UUID?) {
@@ -886,6 +1017,9 @@ struct QuickStartView: View {
                 routeToAppSection(pendingSection)
             }
         }
+        .task(id: spotlightIndexFingerprint) {
+            refreshSpotlightIndexWithAccounts()
+        }
         .onChange(of: reviewItems) { _, _ in
             persistReviewState()
         }
@@ -898,6 +1032,15 @@ struct QuickStartView: View {
                 selection = .debtPayoff
             }
             compactPath.removeAll { $0 == .assistant }
+        }
+        .onChange(of: settings.spotlightIndexingOptions) { _, _ in
+            refreshSpotlightIndexWithAccounts()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
+            refreshSpotlightIndexWithAccounts()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .transactionsDidChange)) { _ in
+            refreshSpotlightIndexWithAccounts()
         }
     }
 

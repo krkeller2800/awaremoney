@@ -1,34 +1,53 @@
 # Codex Handoff
 
 ## Current Focus
-- Enhanced in-app search is complete and remains entirely inside DebtScope.
-- App Shortcuts and Spotlight indexing are privacy-first and navigation-only by default.
-- The assistant remains read-only and privacy-first.
+- Sensitive Spotlight indexing was expanded behind the existing `Allow financial details in Spotlight` master toggle.
+- The user is testing on a real iOS device.
+- Spotlight financial results are intentionally label-only: no amounts, balances, due dates, transaction dates, memos, notes, account numbers, hashes, import filenames, or raw record details.
 
-## Completed Recently
-- Added navigation-only App Intents and App Shortcuts for Debt Summary, Upcoming Bills, Assistant, and Debt Payoff Plan.
-- Added generic Core Spotlight indexing for the same app sections via `DebtScopeSpotlightIndexer`.
-- Spotlight result continuation routes back into `QuickStartView` using the existing app-section routing path.
-- Added a Settings preference: `Allow financial details in Spotlight`.
-- Generic app sections are indexed by default. Sensitive financial Spotlight indexing remains gated by the preference and no sensitive financial indexer has been implemented yet.
-- Reordered Data & Privacy settings so the assistant hint sits under assistant preferences.
-- Added reset-data explanatory copy under `Reset App Data`.
-- Added a dedicated read-only `DebtPayoffPlanView` and routed the Debt Payoff Plan shortcut to it.
-- Renamed the old Debt Payoff setup/list destination to Liability Accounts and renamed QuickStart Money Flow to Cash Flow.
-- Added QuickStart toolbar in-app search across accounts, transactions, and balances.
+## Completed This Session
+- Added `DebtScopeSpotlightIndexingOptions` and separate settings for Spotlight financial result categories:
+  - account names
+  - bill names
+  - transaction payees
+  - debt and payoff names
+- Updated Settings > Data & Privacy to show the category toggles only as subordinate options under the master financial Spotlight toggle.
+- Expanded `DebtScopeSpotlightIndexer` to index selected label-only financial results in the sensitive Spotlight domain.
+- Transaction payee Spotlight entries are deduplicated by normalized payee so repeated merchants do not flood Spotlight.
+- Added separate Spotlight identifier prefixes for accounts, bills, transaction payees, and debt/payoff results.
+- Updated `QuickStartView` Spotlight continuation routing:
+  - generic sections still route to their existing app sections
+  - account results route to the relevant account area
+  - bill results route to Income & Bills
+  - transaction payee results route through the linked account when available, otherwise Cash Flow
+  - debt/payoff results route to Liability Accounts with the liability selected
+- Kept generic navigation-only app section indexing intact.
 
 ## Latest Validation
-- Full Xcode project build succeeded after Spotlight/indexing implementation.
-- Live diagnostics were clean for `DebtScope/DebtScope/Assistant/DebtScopeSpotlightIndexer.swift`.
-- Live diagnostics were clean for `DebtScope/DebtScope/Utils/SettingsView.swift` after the settings text adjustments.
+- Live diagnostics were clean for:
+  - `DebtScope/DebtScope/Assistant/DebtScopeSpotlightIndexer.swift`
+  - `DebtScope/DebtScope/View/QuickStartView.swift`
+  - `DebtScope/DebtScope/Models/SettingsStore.swift`
+  - `DebtScope/DebtScope/Utils/SettingsView.swift`
+- Full Xcode project build succeeded after the expanded Spotlight implementation.
 
-## Known Constraints / Risks
-- Do not expose transaction keywords, balances, account names, import filenames, payoff amounts, payoff dates, or transaction details to system search without a separate privacy review and explicit user opt-in.
-- The new Spotlight preference is only a gate for future sensitive indexing; current indexing remains generic app sections only.
+## Privacy / Scope Rules
+- Default behavior remains generic app-section Spotlight results only unless the master financial details toggle is enabled.
+- Financial Spotlight results expose labels only.
+- Do not add amounts, balances, dates, memos, notes, account numbers, import filenames, hashes, or raw database identifiers to Spotlight result text.
 - Do not add write-capable AI/App Intent workflows without a confirmed normal app UI workflow and audit trail.
 - Keep transaction-level assistant work aggregated by default and gated by `assistantIncludeTransactions` plus an explicit user request.
-- In-app search still uses straightforward localized substring matching, not fuzzy matching.
+
+## Known Notes / Risks
+- Transaction payee indexing currently fetches transactions only when that Spotlight category is enabled; it is not held as a persistent root query.
+- Bill names are driven by the root `CashFlowItem` query in `QuickStartView`, so bill label changes should refresh while QuickStart is active.
+- Real-device Spotlight behavior may lag indexing updates because iOS Spotlight can cache and refresh asynchronously.
 
 ## Recommended Next Step
-- Commit the completed Spotlight/settings checkpoint.
-- If continuing search work, the next increment should be either fuzzy matching inside the app or implementing sensitive Spotlight/App Entity indexing behind the completed privacy gate, after explicit user approval for the exact financial data types to expose.
+- On the real iOS device, verify each Settings combination:
+  - master toggle off clears sensitive results
+  - account names appear only when account names are enabled
+  - bill names appear only when bill names are enabled
+  - transaction payees appear only when transaction payees are enabled
+  - debt/payoff names appear only when debt/payoff names are enabled
+- If real-device testing behaves correctly, commit the Spotlight/settings changes.

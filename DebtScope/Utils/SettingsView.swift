@@ -71,7 +71,14 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Toggle("Allow financial details in Spotlight", isOn: $settings.spotlightAllowsSensitiveFinancialIndexing)
-                    Text("Spotlight indexes generic DebtScope sections by default. Financial details stay out of system search unless explicitly allowed here.")
+                    Group {
+                        Toggle("Show account names", isOn: $settings.spotlightIncludesAccountNames)
+                        Toggle("Show bill names", isOn: $settings.spotlightIncludesBillNames)
+                        Toggle("Show transaction payees", isOn: $settings.spotlightIncludesTransactionPayees)
+                        Toggle("Show debt and payoff names", isOn: $settings.spotlightIncludesDebtPayoffNames)
+                    }
+                    .disabled(!settings.spotlightAllowsSensitiveFinancialIndexing)
+                    Text("Spotlight indexes generic DebtScope sections by default. Optional financial results include names only, never amounts, balances, dates, memos, or account numbers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
