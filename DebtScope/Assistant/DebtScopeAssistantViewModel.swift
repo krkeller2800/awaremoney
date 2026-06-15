@@ -5,6 +5,29 @@ import SwiftData
 import FoundationModels
 #endif
 
+struct AssistantMessageAction: Identifiable, Hashable {
+    let title: String
+    let destination: DebtScopeAppSection
+    let accountID: UUID?
+    let focus: DebtScopeAppRouteFocus?
+
+    init(
+        title: String,
+        destination: DebtScopeAppSection,
+        accountID: UUID? = nil,
+        focus: DebtScopeAppRouteFocus? = nil
+    ) {
+        self.title = title
+        self.destination = destination
+        self.accountID = accountID
+        self.focus = focus
+    }
+
+    var id: String {
+        "\(destination.rawValue):\(accountID?.uuidString ?? "section"):\(focus?.rawValue ?? "none"):\(title)"
+    }
+}
+
 struct AssistantMessage: Identifiable, Hashable {
     enum Role: Hashable {
         case user
@@ -16,12 +39,30 @@ struct AssistantMessage: Identifiable, Hashable {
     let role: Role
     let text: String
     let createdAt: Date
+    let actions: [AssistantMessageAction]
 
-    init(id: UUID = UUID(), role: Role, text: String, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        createdAt: Date = Date(),
+        actions: [AssistantMessageAction] = []
+    ) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
+        self.actions = actions
+    }
+}
+
+private struct AssistantGeneratedResponse {
+    let text: String
+    let actions: [AssistantMessageAction]
+
+    init(text: String, actions: [AssistantMessageAction] = []) {
+        self.text = text
+        self.actions = actions
     }
 }
 
@@ -152,12 +193,12 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                 let response = try await self.generateResponse(to: trimmedPrompt)
                 guard !Task.isCancelled else { return }
 
-                let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedResponse = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let displayText = trimmedResponse.isEmpty
                     ? "DebtScope could not generate a response for that question."
                     : trimmedResponse
 
-                self.messages.append(AssistantMessage(role: .assistant, text: displayText))
+                self.messages.append(AssistantMessage(role: .assistant, text: displayText, actions: response.actions))
                 self.isLoading = false
 
                 if !self.settings.assistantRetainConversationHistory {
@@ -219,7 +260,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         return "DebtScope Assistant could not answer that question. Try again with a more specific prompt."
     }
 
-    private func generateResponse(to prompt: String) async throws -> String {
+    private func generateResponse(to prompt: String) async throws -> AssistantGeneratedResponse {
         if let directResponse = try directResponse(for: prompt) {
             return directResponse
         }
@@ -229,14 +270,14 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             let session = sessionStorage as? LanguageModelSession ?? makeSession()
             sessionStorage = session
             let response = try await session.respond(to: prompt)
-            return response.content
+            return AssistantGeneratedResponse(text: response.content)
         }
         #endif
 
         throw DebtScopeAssistantViewModelError.foundationModelsUnavailable
     }
 
-    private func directResponse(for prompt: String) throws -> String? {
+    private func directResponse(for prompt: String) throws -> AssistantGeneratedResponse? {
         let intent = AssistantPromptIntent(prompt: prompt)
         if let pendingResponse = try pendingExtraPaymentStrategyResponse(for: prompt, intent: intent) {
             return pendingResponse
@@ -248,27 +289,27 @@ final class DebtScopeAssistantViewModel: ObservableObject {
 
         switch intent {
         case .debtPicture:
-            return try formatDebtPicture(service.debtSummary())
+            return AssistantGeneratedResponse(text: try formatDebtPicture(service.debtSummary()))
         case .payoffFocus:
-            return try formatPayoffFocus(service.payoffPlanSummary(startDate: Date()))
+            return AssistantGeneratedResponse(text: try formatPayoffFocus(service.payoffPlanSummary(startDate: Date())))
         case .strategySavings:
             let startDate = Date()
             let monthlyBudgetOverride = requestedStrategyComparisonMonthlyBudget(in: prompt)
             do {
-                return try formatStrategySavings(
+                return AssistantGeneratedResponse(text: try formatStrategySavings(
                     service.payoffStrategyComparison(
                         startDate: startDate,
                         monthlyBudgetOverride: monthlyBudgetOverride
                     ),
                     startDate: startDate,
                     error: nil
-                )
+                ))
             } catch {
                 AMLogging.error(
                     "Assistant strategy comparison failed errorType=\(String(describing: type(of: error)))",
                     component: "DebtScopeAssistantViewModel"
                 )
-                return formatStrategySavings(nil, startDate: startDate, error: error)
+                return AssistantGeneratedResponse(text: formatStrategySavings(nil, startDate: startDate, error: error))
             }
         case .extraPaymentSimulation:
             let scenarioStrategy = AssistantPromptAmountParser.extraPaymentStrategy(in: prompt)
@@ -281,36 +322,36 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                         startDate: Date()
                     )
                 }
-                return "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment."
+                return AssistantGeneratedResponse(text: "Choose which strategy to use (minimums, avalanche, or snowball) when applying the extra payment.")
             }
 
             guard let extraMonthlyPayment else {
-                return "Tell me the extra monthly payment amount to simulate, such as $100 per month."
+                return AssistantGeneratedResponse(text: "Tell me the extra monthly payment amount to simulate, such as $100 per month.")
             }
             pendingExtraPaymentStrategyChoice = nil
-            return try formatExtraPaymentSimulation(
+            return AssistantGeneratedResponse(text: try formatExtraPaymentSimulation(
                 service.extraPaymentSimulation(
                     extraMonthlyPayment: extraMonthlyPayment,
                     startDate: Date(),
                     scenarioStrategy: scenarioStrategy
                 )
-            )
+            ))
         case .importReview:
-            return try formatImportReview(service.importReviewSummary(), prompt: prompt)
+            return AssistantGeneratedResponse(text: try formatImportReview(service.importReviewSummary(), prompt: prompt))
         case .cleanupRecommendations:
-            return try formatCleanupRecommendations(service.cleanupRecommendationSummary(), prompt: prompt)
+            return try cleanupRecommendationResponse(service.cleanupRecommendationSummary(), prompt: prompt)
         case .upcomingBills:
-            return try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode)
+            return AssistantGeneratedResponse(text: try formatUpcomingBills(service.upcomingBills(days: 30), currencyCode: settings.currencyCode))
         case .debtAffordability:
-            return try formatDebtAffordability(service.cashFlowSummary(months: 3), prompt: prompt)
+            return AssistantGeneratedResponse(text: try formatDebtAffordability(service.cashFlowSummary(months: 3), prompt: prompt))
         case .transactionDetails:
-            return "Transaction details are disabled or not included in the current assistant tools. I can summarize DebtScope debt, payoff plans, upcoming bills, and cash-flow context, but I cannot show raw transactions or full memo text."
+            return AssistantGeneratedResponse(text: "Transaction details are disabled or not included in the current assistant tools. I can summarize DebtScope debt, payoff plans, upcoming bills, and cash-flow context, but I cannot show raw transactions or full memo text.")
         case .none:
             return nil
         }
     }
 
-    private func pendingExtraPaymentStrategyResponse(for prompt: String, intent: AssistantPromptIntent) throws -> String? {
+    private func pendingExtraPaymentStrategyResponse(for prompt: String, intent: AssistantPromptIntent) throws -> AssistantGeneratedResponse? {
         guard
             intent == .none,
             let pendingExtraPaymentStrategyChoice,
@@ -320,13 +361,13 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         self.pendingExtraPaymentStrategyChoice = nil
-        return try formatExtraPaymentSimulation(
+        return AssistantGeneratedResponse(text: try formatExtraPaymentSimulation(
             service.extraPaymentSimulation(
                 extraMonthlyPayment: pendingExtraPaymentStrategyChoice.extraMonthlyPayment,
                 startDate: pendingExtraPaymentStrategyChoice.startDate,
                 scenarioStrategy: scenarioStrategy
             )
-        )
+        ))
     }
 
     private func formatDebtPicture(_ summary: AssistantDebtSummary) -> String {
@@ -552,6 +593,74 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
     }
 
+    private func cleanupRecommendationResponse(_ summary: AssistantCleanupRecommendationSummary, prompt: String) -> AssistantGeneratedResponse {
+        AssistantGeneratedResponse(
+            text: formatCleanupRecommendations(summary, prompt: prompt),
+            actions: cleanupRecommendationActions(summary, prompt: prompt)
+        )
+    }
+
+    private func cleanupRecommendationActions(_ summary: AssistantCleanupRecommendationSummary, prompt: String) -> [AssistantMessageAction] {
+        let focus = AssistantCleanupRecommendationFocus(prompt: prompt)
+        let recommendations: [AssistantCleanupRecommendation]
+
+        switch focus {
+        case .missingAPR:
+            recommendations = summary.recommendations.filter { $0.kind == .missingAPR }
+        case .missingMinimumPayments:
+            recommendations = summary.recommendations.filter { $0.kind == .missingMinimumPayments }
+        case .accountMapping:
+            recommendations = summary.recommendations.filter { $0.kind == .missingAccountMappings }
+        case .duplicateImports:
+            recommendations = summary.recommendations.filter { $0.kind == .duplicateImports }
+        case .cashFlowSchedules:
+            recommendations = summary.recommendations.filter { $0.kind == .incompleteCashFlowSetup }
+        case .general:
+            recommendations = Array(summary.recommendations.prefix(5))
+        }
+
+        var seenRoutes = Set<String>()
+        return recommendations.compactMap { recommendation in
+            let route = actionRoute(for: recommendation)
+            let routeKey = "\(route.destination.rawValue):\(route.accountID?.uuidString ?? "section"):\(route.focus?.rawValue ?? "none")"
+            guard seenRoutes.insert(routeKey).inserted else { return nil }
+            return AssistantMessageAction(
+                title: actionTitle(for: recommendation),
+                destination: route.destination,
+                accountID: route.accountID,
+                focus: route.focus
+            )
+        }
+    }
+
+    private func actionRoute(for recommendation: AssistantCleanupRecommendation) -> (destination: DebtScopeAppSection, accountID: UUID?, focus: DebtScopeAppRouteFocus?) {
+        switch recommendation.kind {
+        case .missingAPR:
+            guard let accountID = recommendation.targetAccountID else {
+                return (recommendation.destination.appSection, nil, nil)
+            }
+            return (.accountDetail, accountID, .apr)
+        case .missingMinimumPayments:
+            guard let accountID = recommendation.targetAccountID else {
+                return (recommendation.destination.appSection, nil, nil)
+            }
+            return (.accountDetail, accountID, .paymentAmount)
+        case .duplicateImports, .missingAccountMappings, .incompleteCashFlowSetup:
+            return (recommendation.destination.appSection, recommendation.targetAccountID, nil)
+        }
+    }
+
+    private func actionTitle(for recommendation: AssistantCleanupRecommendation) -> String {
+        switch recommendation.kind {
+        case .missingAPR:
+            return recommendation.targetAccountID == nil ? "Open Liability Accounts" : "Open account APR"
+        case .missingMinimumPayments:
+            return recommendation.targetAccountID == nil ? "Open Liability Accounts" : "Open account payment"
+        case .duplicateImports, .missingAccountMappings, .incompleteCashFlowSetup:
+            return "Open \(recommendation.destination.title)"
+        }
+    }
+
     private func formatCleanupRecommendations(_ summary: AssistantCleanupRecommendationSummary, prompt: String) -> String {
         let focus = AssistantCleanupRecommendationFocus(prompt: prompt)
         if focus != .general {
@@ -568,7 +677,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         ]
 
         lines.append(contentsOf: summary.recommendations.prefix(5).map { recommendation in
-            "- \(recommendation.title): review \(recommendation.affectedRecordCount) item(s) in \(recommendation.destination). \(recommendation.expectedBenefit)"
+            "- \(recommendation.title): review \(recommendation.affectedRecordCount) item(s) in \(recommendation.destination.title). \(recommendation.expectedBenefit)"
         })
 
         if !summary.transactionLevelDetailAvailable {

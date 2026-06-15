@@ -1,32 +1,96 @@
 import AppIntents
 import Foundation
 
+enum DebtScopeAppRouteFocus: String, Sendable {
+    case apr
+    case paymentAmount
+}
+
+struct DebtScopeAppRoute: Sendable {
+    let section: DebtScopeAppSection
+    let accountID: UUID?
+    let focus: DebtScopeAppRouteFocus?
+}
+
 struct DebtScopeAppSectionRequestStore {
     static let notificationName = Notification.Name("DebtScopeAppSectionRequest")
 
     private static let pendingSectionKey = "debtScope.pendingAppIntentSection"
+    private static let pendingAccountIDKey = "debtScope.pendingAppIntentAccountID"
+    private static let notificationSectionKey = "section"
+    private static let notificationAccountIDKey = "accountID"
+    private static let pendingFocusKey = "debtScope.pendingAppIntentFocus"
+    private static let notificationFocusKey = "focus"
 
-    static func request(_ section: DebtScopeAppSection) {
+    static func request(_ section: DebtScopeAppSection, accountID: UUID? = nil, focus: DebtScopeAppRouteFocus? = nil) {
         UserDefaults.standard.set(section.rawValue, forKey: pendingSectionKey)
-        NotificationCenter.default.post(name: notificationName, object: section.rawValue)
+        if let accountID {
+            UserDefaults.standard.set(accountID.uuidString, forKey: pendingAccountIDKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: pendingAccountIDKey)
+        }
+        if let focus {
+            UserDefaults.standard.set(focus.rawValue, forKey: pendingFocusKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: pendingFocusKey)
+        }
+
+        NotificationCenter.default.post(
+            name: notificationName,
+            object: [
+                notificationSectionKey: section.rawValue,
+                notificationAccountIDKey: accountID?.uuidString ?? "",
+                notificationFocusKey: focus?.rawValue ?? ""
+            ]
+        )
     }
 
-    static func consumePendingSection() -> DebtScopeAppSection? {
+    static func route(from notification: Notification) -> DebtScopeAppRoute? {
+        if let rawValue = notification.object as? String,
+           let section = DebtScopeAppSection(rawValue: rawValue) {
+            return DebtScopeAppRoute(section: section, accountID: nil, focus: nil)
+        }
+
+        guard let payload = notification.object as? [String: String],
+              let rawValue = payload[notificationSectionKey],
+              let section = DebtScopeAppSection(rawValue: rawValue) else {
+            return nil
+        }
+
+        let accountID = payload[notificationAccountIDKey].flatMap(UUID.init(uuidString:))
+        let focus = payload[notificationFocusKey].flatMap(DebtScopeAppRouteFocus.init(rawValue:))
+        return DebtScopeAppRoute(section: section, accountID: accountID, focus: focus)
+    }
+
+    static func consumePendingRoute() -> DebtScopeAppRoute? {
         guard let rawValue = UserDefaults.standard.string(forKey: pendingSectionKey),
               let section = DebtScopeAppSection(rawValue: rawValue) else {
             return nil
         }
 
+        let accountID = UserDefaults.standard.string(forKey: pendingAccountIDKey).flatMap(UUID.init(uuidString:))
+        let focus = UserDefaults.standard.string(forKey: pendingFocusKey).flatMap(DebtScopeAppRouteFocus.init(rawValue:))
         UserDefaults.standard.removeObject(forKey: pendingSectionKey)
-        return section
+        UserDefaults.standard.removeObject(forKey: pendingAccountIDKey)
+        UserDefaults.standard.removeObject(forKey: pendingFocusKey)
+        return DebtScopeAppRoute(section: section, accountID: accountID, focus: focus)
+    }
+
+    static func consumePendingSection() -> DebtScopeAppSection? {
+        consumePendingRoute()?.section
     }
 }
 
-enum DebtScopeAppSection: String, AppEnum {
+enum DebtScopeAppSection: String, AppEnum, Codable, Sendable {
     case debtSummary
     case upcomingBills
     case assistant
     case debtPayoffPlan
+    case liabilityAccounts
+    case accountDetail
+    case incomeBills
+    case statementReview
+    case importReview
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation = "DebtScope Section"
 
@@ -34,7 +98,12 @@ enum DebtScopeAppSection: String, AppEnum {
         .debtSummary: "Debt Summary",
         .upcomingBills: "Upcoming Bills",
         .assistant: "Assistant",
-        .debtPayoffPlan: "Debt Payoff Plan"
+        .debtPayoffPlan: "Debt Payoff Plan",
+        .liabilityAccounts: "Liability Accounts",
+        .accountDetail: "Account Detail",
+        .incomeBills: "Income & Bills",
+        .statementReview: "Statement Review",
+        .importReview: "Import Review"
     ]
 }
 

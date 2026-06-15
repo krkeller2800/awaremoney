@@ -961,18 +961,18 @@ struct DebtScopeAssistantServiceTests {
                     .missingMinimumPayments,
                     .incompleteCashFlowSetup
                 ])
-                #expect(summary.recommendations.allSatisfy { !$0.destination.isEmpty })
+                #expect(summary.recommendations.allSatisfy { !$0.destination.title.isEmpty })
                 #expect(summary.recommendations.allSatisfy { $0.requiredUserConfirmation.contains("confirm") || $0.requiredUserConfirmation.contains("confirmation") })
 
                 let duplicateRecommendation = try #require(summary.recommendations.first { $0.kind == .duplicateImports })
                 #expect(duplicateRecommendation.affectedRecordCount == 2)
-                #expect(duplicateRecommendation.destination == "Import review during statement import")
+                #expect(duplicateRecommendation.destination == .importReview)
                 #expect(duplicateRecommendation.requiredUserConfirmation.contains("During statement import review"))
                 #expect(duplicateRecommendation.details.joined().contains("transaction lists") == true)
 
                 let mappingRecommendation = try #require(summary.recommendations.first { $0.kind == .missingAccountMappings })
                 #expect(mappingRecommendation.affectedRecordCount == 1)
-                #expect(mappingRecommendation.destination == "Account mapping during statement import")
+                #expect(mappingRecommendation.destination == .importReview)
                 #expect(mappingRecommendation.requiredUserConfirmation.contains("before accepting the import"))
 
                 let missingAPRRecommendation = try #require(summary.recommendations.first { $0.kind == .missingAPR })
@@ -986,7 +986,7 @@ struct DebtScopeAssistantServiceTests {
                 #expect(missingMinimumRecommendation.requiredUserConfirmation.contains("Typical payment"))
 
                 let cashFlowRecommendation = try #require(summary.recommendations.first { $0.kind == .incompleteCashFlowSetup })
-                #expect(cashFlowRecommendation.destination == "Income & Bills")
+                #expect(cashFlowRecommendation.destination == .incomeBills)
                 #expect(cashFlowRecommendation.affectedRecordCount == 1)
             } catch {
                 Issue.record(error)

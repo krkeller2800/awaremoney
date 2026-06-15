@@ -244,14 +244,68 @@ struct AssistantCleanupRecommendationSummary: Codable, Sendable {
     let sourceNote: String
 }
 
+enum AssistantCleanupDestination: String, Codable, Sendable {
+    case liabilityAccounts
+    case incomeBills
+    case statementReview
+    case importReview
+
+    var title: String {
+        switch self {
+        case .liabilityAccounts:
+            return "Liability Accounts"
+        case .incomeBills:
+            return "Income & Bills"
+        case .statementReview:
+            return "Statement Review"
+        case .importReview:
+            return "Import Review"
+        }
+    }
+
+    var appSection: DebtScopeAppSection {
+        switch self {
+        case .liabilityAccounts:
+            return .liabilityAccounts
+        case .incomeBills:
+            return .incomeBills
+        case .statementReview:
+            return .statementReview
+        case .importReview:
+            return .importReview
+        }
+    }
+}
+
 struct AssistantCleanupRecommendation: Codable, Sendable {
     let kind: AssistantCleanupRecommendationKind
     let title: String
-    let destination: String
+    let destination: AssistantCleanupDestination
+    let targetAccountID: UUID?
     let expectedBenefit: String
     let requiredUserConfirmation: String
     let affectedRecordCount: Int
     let details: [String]
+
+    init(
+        kind: AssistantCleanupRecommendationKind,
+        title: String,
+        destination: AssistantCleanupDestination,
+        targetAccountID: UUID? = nil,
+        expectedBenefit: String,
+        requiredUserConfirmation: String,
+        affectedRecordCount: Int,
+        details: [String]
+    ) {
+        self.kind = kind
+        self.title = title
+        self.destination = destination
+        self.targetAccountID = targetAccountID
+        self.expectedBenefit = expectedBenefit
+        self.requiredUserConfirmation = requiredUserConfirmation
+        self.affectedRecordCount = affectedRecordCount
+        self.details = details
+    }
 }
 
 struct AssistantTransactionPatternSummary: Codable, Sendable {

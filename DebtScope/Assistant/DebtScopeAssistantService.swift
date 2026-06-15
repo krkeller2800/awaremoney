@@ -25,14 +25,14 @@ final class DebtScopeAssistantService {
                 minimumPayment: input.minimumPayment,
                 paymentFrequency: input.account.loanTerms.map { assistantPaymentFrequency(for: $0.frequency) },
                 payoffDate: payoffDates[input.account.id],
-                missingAPR: input.apr == nil,
+                missingAPR: isMissingAPR(input.apr),
                 missingMinimumPayment: input.missingMinimumPayment
             )
         }
 
         let highestAPRDebt = liabilities
             .compactMap { input -> (name: String, apr: Decimal)? in
-                guard let apr = input.apr else { return nil }
+                guard let apr = input.apr, !isMissingAPR(apr) else { return nil }
                 return (input.account.name, apr)
             }
             .max { lhs, rhs in lhs.apr < rhs.apr }
@@ -177,7 +177,7 @@ final class DebtScopeAssistantService {
                 details.append("DebtScope could not determine a monthly payoff budget from the current budget settings.")
             }
 
-            let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+            let missingAPRCount = liabilities.filter { isMissingAPR($0.apr) }.count
             if missingAPRCount > 0 {
                 details.append("APR is missing for \(missingAPRCount) debt account(s), so avalanche ordering may not reflect true interest cost.")
             }
@@ -517,7 +517,7 @@ final class DebtScopeAssistantService {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .duplicateImports,
                 title: "Review duplicate import candidates",
-                destination: "Import review during statement import",
+                destination: .importReview,
                 expectedBenefit: "Helps prevent imported activity from being counted twice in account and cash-flow summaries.",
                 requiredUserConfirmation: "During statement import review, confirm which duplicate candidates should be kept, excluded, or left unchanged before accepting the import.",
                 affectedRecordCount: importReview.duplicateTransactionCandidateCount,
@@ -529,7 +529,7 @@ final class DebtScopeAssistantService {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .missingAccountMappings,
                 title: "Map imported records to accounts",
-                destination: "Account mapping during statement import",
+                destination: .importReview,
                 expectedBenefit: "Improves account balances, import review clarity, and future duplicate detection.",
                 requiredUserConfirmation: "During statement import review, choose and confirm the correct DebtScope account for unresolved imported records before accepting the import.",
                 affectedRecordCount: importReview.unresolvedAccountMappingCount,
@@ -537,12 +537,14 @@ final class DebtScopeAssistantService {
             ))
         }
 
-        let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+        let missingAPRAccounts = liabilities.filter { isMissingAPR($0.apr) }
+        let missingAPRCount = missingAPRAccounts.count
         if missingAPRCount > 0 {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .missingAPR,
                 title: "Add missing APRs",
-                destination: "Liability Accounts",
+                destination: .liabilityAccounts,
+                targetAccountID: missingAPRAccounts.first?.account.id,
                 expectedBenefit: "Makes avalanche ordering and projected interest totals more accurate.",
                 requiredUserConfirmation: "Open Liability Accounts, choose the liability account, enter the APR from your statement in the APR field, and confirm the value before leaving the field.",
                 affectedRecordCount: missingAPRCount,
@@ -550,12 +552,14 @@ final class DebtScopeAssistantService {
             ))
         }
 
-        let missingMinimumPaymentCount = liabilities.filter(\.missingMinimumPayment).count
+        let missingMinimumPaymentAccounts = liabilities.filter(\.missingMinimumPayment)
+        let missingMinimumPaymentCount = missingMinimumPaymentAccounts.count
         if missingMinimumPaymentCount > 0 {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .missingMinimumPayments,
                 title: "Add missing minimum payments",
-                destination: "Liability Accounts",
+                destination: .liabilityAccounts,
+                targetAccountID: missingMinimumPaymentAccounts.first?.account.id,
                 expectedBenefit: "Reduces reliance on fallback minimum-payment estimates in payoff planning.",
                 requiredUserConfirmation: "Open Liability Accounts, choose the liability account, enter the minimum payment from your statement in the Typical payment field, and confirm the value before leaving the field.",
                 affectedRecordCount: missingMinimumPaymentCount,
@@ -570,7 +574,7 @@ final class DebtScopeAssistantService {
             recommendations.append(AssistantCleanupRecommendation(
                 kind: .incompleteCashFlowSetup,
                 title: "Complete bill and income schedules",
-                destination: "Income & Bills",
+                destination: .incomeBills,
                 expectedBenefit: "Improves upcoming bill timing, monthly cash-flow summaries, and reserve planning.",
                 requiredUserConfirmation: "Open Income & Bills and confirm due dates or payment days for the incomplete items.",
                 affectedRecordCount: incompleteCashFlowCount,
@@ -586,6 +590,10 @@ final class DebtScopeAssistantService {
             includesTransactionLevelDetail: false,
             sourceNote: "Based on current DebtScope setup and count-level review signals. Recommendations are read-only and require normal app confirmation before any data changes."
         )
+    }
+
+    private func isMissingAPR(_ apr: Decimal?) -> Bool {
+        apr == nil
     }
 
     private func debtAccountInputs() throws -> [DebtAccountInput] {
@@ -1348,7 +1356,7 @@ final class DebtScopeAssistantService {
 
     private func missingDataNotes(for debts: [DebtAccountInput], payoffDates: [UUID: Date]) -> [String] {
         var notes: [String] = []
-        let missingAPRCount = debts.filter { $0.apr == nil }.count
+        let missingAPRCount = debts.filter { isMissingAPR($0.apr) }.count
         let missingMinimumCount = debts.filter(\.missingMinimumPayment).count
         let missingPayoffDateCount = debts.filter { payoffDates[$0.account.id] == nil }.count
 
@@ -1376,7 +1384,7 @@ final class DebtScopeAssistantService {
             notes.append("No active credit-card or loan debts with current balances are available to compare.")
         }
 
-        let missingAPRCount = liabilities.filter { $0.apr == nil }.count
+        let missingAPRCount = liabilities.filter { isMissingAPR($0.apr) }.count
         if missingAPRCount > 0 {
             notes.append("APR is missing for \(missingAPRCount) debt account(s), so avalanche ordering may not reflect true interest cost.")
         }

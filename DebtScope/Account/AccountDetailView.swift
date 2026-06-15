@@ -2,8 +2,14 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum AccountDetailInitialFocus: Hashable, Sendable {
+    case apr
+    case paymentAmount
+}
+
 struct AccountDetailView: View {
     let accountID: UUID
+    let initialFocus: AccountDetailInitialFocus?
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var settings: SettingsStore
@@ -29,6 +35,11 @@ struct AccountDetailView: View {
     @State private var showDeleteAlert = false
     @State private var manualAssetValueDraft: String = ""
     @State private var manualAssetValueDraftAccountID: UUID? = nil
+    @State private var aprDraft: String = ""
+    @State private var aprDraftAccountID: UUID? = nil
+    @State private var paymentDraft: String = ""
+    @State private var paymentDraftAccountID: UUID? = nil
+    @State private var didApplyInitialFocus = false
 
     @Query(filter: #Predicate<Account> { $0.typeRaw == "loan" }, sort: [SortDescriptor(\Account.name, order: .forward)]) private var liabilityAccounts: [Account]
 
@@ -43,14 +54,16 @@ struct AccountDetailView: View {
 
     private enum Field: Hashable {
         case institution
+        case apr
         case paymentAmount
         case assetValue
     }
 
     private var isEditing: Bool { focusedField != nil }
 
-    init(accountID: UUID) {
+    init(accountID: UUID, initialFocus: AccountDetailInitialFocus? = nil) {
         self.accountID = accountID
+        self.initialFocus = initialFocus
         _fetchedAccounts = Query(filter: #Predicate<Account> { $0.id == accountID }, sort: [])
     }
 
@@ -159,13 +172,19 @@ struct AccountDetailView: View {
         }
         .onAppear {
             AMLogging.log("AccountDetailView appear accountID=\(accountID)", component: "AccountDetailView")
+            if let account {
+                applyInitialFocusIfNeeded(for: account)
+            }
         }
         .onChange(of: focusedField) { _, newValue in
             guard let field = newValue else { return }
             if field == .assetValue, let account {
                 prepareManualAssetValueDraft(for: account)
             }
-            if field == .institution || field == .paymentAmount || field == .assetValue {
+            if field == .apr, let account {
+                prepareAPRDraft(for: account)
+            }
+            if field == .institution || field == .apr || field == .paymentAmount || field == .assetValue {
                 selectAllInFirstResponder()
             }
         }
@@ -324,25 +343,66 @@ struct AccountDetailView: View {
 
             if account.type == .loan || account.type == .creditCard {
                 Section(header: GroupedSectionHeader("Payment Plan")) {
+                    LabeledContent("APR") {
+                        HStack(spacing: 6) {
+                            TextField("0.00%", text: Binding<String>(
+                                get: {
+                                    if aprDraftAccountID == account.id {
+                                        return aprDraft
+                                    }
+                                    return account.loanTerms?.apr.map { formatAPR($0, scale: account.loanTerms?.aprScale) } ?? ""
+                                },
+                                set: { newVal in
+                                    aprDraft = newVal
+                                    aprDraftAccountID = account.id
+                                    saveAPRInput(newVal, for: account)
+                                }
+                            ))
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.numbersAndPunctuation)
+                            .focused($focusedField, equals: .apr)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onChange(of: focusedField) { oldValue, newValue in
+                                if oldValue == .apr && newValue != .apr {
+                                    formatAPRDraft(for: account)
+                                }
+                            }
+                            .simultaneousGesture(
+                                TapGesture().onEnded {
+                                    prepareAPRDraft(for: account)
+                                    focusedField = .apr
+                                    selectAllInFirstResponder()
+                                }
+                            )
+
+                            Button {
+                                prepareAPRDraft(for: account)
+                                focusedField = .apr
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .foregroundStyle(.secondary)
+                                    .imageScale(.small)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit APR")
+                        }
+                    }
+
                     // Typical payment editor
                     LabeledContent("Typical Payment") {
                         HStack(spacing: 6) {
                             TextField("0.00", text: Binding<String>(
                                 get: {
-                                    if let amt = account.loanTerms?.paymentAmount {
-                                        return formatAmountForInput(amt)
-                                    } else { return "" }
+                                    if paymentDraftAccountID == account.id {
+                                        return paymentDraft
+                                    }
+                                    return account.loanTerms?.paymentAmount.map { formatAmountForInput($0) } ?? ""
                                 },
                                 set: { newVal in
-                                    var terms = account.loanTerms ?? LoanTerms()
-                                    if let dec = parseCurrencyInput(newVal) {
-                                        terms.paymentAmount = dec
-                                    } else {
-                                        terms.paymentAmount = nil
-                                    }
-                                    account.loanTerms = terms
-                                    try? modelContext.save()
-                                    NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+                                    paymentDraft = newVal
+                                    paymentDraftAccountID = account.id
+                                    savePaymentInput(newVal, for: account)
                                 }
                             ))
                             .multilineTextAlignment(.trailing)
@@ -350,8 +410,21 @@ struct AccountDetailView: View {
                             .focused($focusedField, equals: .paymentAmount)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .onChange(of: focusedField) { oldValue, newValue in
+                                if oldValue == .paymentAmount && newValue != .paymentAmount {
+                                    formatPaymentDraft(for: account)
+                                }
+                            }
+                            .simultaneousGesture(
+                                TapGesture().onEnded {
+                                    preparePaymentDraft(for: account)
+                                    focusedField = .paymentAmount
+                                    selectAllInFirstResponder()
+                                }
+                            )
 
                             Button {
+                                preparePaymentDraft(for: account)
                                 focusedField = .paymentAmount
                             } label: {
                                 Image(systemName: "pencil")
@@ -787,6 +860,88 @@ struct AccountDetailView: View {
         manualAssetValueDraftAccountID = account.id
     }
 
+    private func prepareAPRDraft(for account: Account) {
+        guard aprDraftAccountID != account.id else { return }
+        aprDraft = account.loanTerms?.apr.map { formatAPR($0, scale: account.loanTerms?.aprScale) } ?? ""
+        aprDraftAccountID = account.id
+    }
+
+    private func preparePaymentDraft(for account: Account) {
+        guard paymentDraftAccountID != account.id else { return }
+        paymentDraft = account.loanTerms?.paymentAmount.map { formatAmountForInput($0) } ?? ""
+        paymentDraftAccountID = account.id
+    }
+
+    private func saveAPRInput(_ rawValue: String, for account: Account) {
+        var terms = account.loanTerms ?? LoanTerms()
+        if let (fraction, scale) = parsePercentInput(rawValue) {
+            terms.apr = fraction
+            terms.aprScale = scale
+            if let snapshot = lastBalanceSnapshot(for: account) {
+                snapshot.interestRateAPR = fraction
+                snapshot.interestRateScale = scale
+                snapshot.isUserModified = true
+            }
+        } else if rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            terms.apr = nil
+            terms.aprScale = nil
+            if let snapshot = lastBalanceSnapshot(for: account) {
+                snapshot.interestRateAPR = nil
+                snapshot.interestRateScale = nil
+                snapshot.isUserModified = true
+            }
+        }
+        account.loanTerms = terms
+        try? modelContext.save()
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+    }
+
+    private func savePaymentInput(_ rawValue: String, for account: Account) {
+        var terms = account.loanTerms ?? LoanTerms()
+        if let decimal = parseCurrencyInput(rawValue) {
+            terms.paymentAmount = decimal
+        } else if rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            terms.paymentAmount = nil
+        }
+        account.loanTerms = terms
+        try? modelContext.save()
+        NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+    }
+
+    private func formatAPRDraft(for account: Account) {
+        guard aprDraftAccountID == account.id else { return }
+        if let (fraction, scale) = parsePercentInput(aprDraft) {
+            aprDraft = formatAPR(fraction, scale: scale)
+        } else if account.loanTerms?.apr == nil {
+            aprDraft = ""
+        }
+    }
+
+    private func formatPaymentDraft(for account: Account) {
+        guard paymentDraftAccountID == account.id else { return }
+        if let decimal = parseCurrencyInput(paymentDraft) {
+            paymentDraft = formatAmountForInput(decimal)
+        } else if account.loanTerms?.paymentAmount == nil {
+            paymentDraft = ""
+        }
+    }
+
+    private func applyInitialFocusIfNeeded(for account: Account) {
+        guard !didApplyInitialFocus, let initialFocus else { return }
+        didApplyInitialFocus = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            switch initialFocus {
+            case .apr:
+                prepareAPRDraft(for: account)
+                focusedField = .apr
+            case .paymentAmount:
+                preparePaymentDraft(for: account)
+                focusedField = .paymentAmount
+            }
+            selectAllInFirstResponder(after: 0.05)
+        }
+    }
+
     private func editableDecimalString(_ amount: Decimal) -> String {
         NSDecimalNumber(decimal: amount).stringValue
     }
@@ -794,6 +949,7 @@ struct AccountDetailView: View {
     private func focusOrder(for account: Account) -> [Field] {
         var arr: [Field] = [.institution]
         if account.type == .loan || account.type == .creditCard {
+            arr.append(.apr)
             arr.append(.paymentAmount)
         }
         if account.isManualAsset {
@@ -829,6 +985,10 @@ struct AccountDetailView: View {
 
     private func commitAndDismissKeyboard() {
         // Commit any pending edits and dismiss the keyboard
+        if let account {
+            formatAPRDraft(for: account)
+            formatPaymentDraft(for: account)
+        }
         try? modelContext.save()
         focusedField = nil
         #if canImport(UIKit)
@@ -1060,6 +1220,24 @@ struct AccountDetailView: View {
             normalized = filtered.replacingOccurrences(of: ",", with: ".")
         }
         return Decimal(string: normalized)
+    }
+
+    private func parsePercentInput(_ s: String) -> (Decimal, Int)? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let cleaned = trimmed.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: ",", with: ".")
+        guard let decimal = Decimal(string: cleaned) else { return nil }
+        let scale: Int = {
+            if let dot = cleaned.firstIndex(of: ".") {
+                return cleaned.distance(from: cleaned.index(after: dot), to: cleaned.endIndex)
+            }
+            return 0
+        }()
+        var fraction = decimal
+        if fraction > 1 {
+            fraction /= 100
+        }
+        return (fraction, scale)
     }
 
     private func formatAmountForInput(_ amount: Decimal) -> String {

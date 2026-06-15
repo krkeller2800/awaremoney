@@ -312,6 +312,15 @@ struct QuickStartView: View {
     @State private var didLoadPersistedReviewState = false
     @State private var debtPayoffSelectedAccountID: UUID? = nil
     @State private var cashFlowSelectedAccountID: UUID? = nil
+    private struct RoutedAccountDetail: Identifiable {
+        let accountID: UUID
+        let focus: AccountDetailInitialFocus?
+
+        var id: String {
+            "\(accountID.uuidString):\(String(describing: focus))"
+        }
+    }
+    @State private var routedAccountDetail: RoutedAccountDetail? = nil
     fileprivate enum PlanSheetMode: String, CaseIterable { case incomeBills, summary }
     @State private var planSheetMode: PlanSheetMode = .incomeBills
 
@@ -350,24 +359,48 @@ struct QuickStartView: View {
         }
     }
 
+    private func accountDetailFocus(for routeFocus: DebtScopeAppRouteFocus?) -> AccountDetailInitialFocus? {
+        switch routeFocus {
+        case .apr:
+            return .apr
+        case .paymentAmount:
+            return .paymentAmount
+        case .none:
+            return nil
+        }
+    }
+
     private func topicFor(appSection: DebtScopeAppSection) -> QuickStartTopic {
         switch appSection {
         case .debtSummary:
             return .compareStrategies
-        case .upcomingBills:
+        case .upcomingBills, .incomeBills:
             return .incomeBills
         case .assistant:
             return .assistant
         case .debtPayoffPlan:
             return .debtPayoffPlan
+        case .liabilityAccounts, .accountDetail:
+            return .debtPayoff
+        case .statementReview, .importReview:
+            return .statementReview
         }
     }
 
-    private func routeToAppSection(_ section: DebtScopeAppSection) {
+    private func routeToAppSection(_ section: DebtScopeAppSection, accountID: UUID? = nil, focus: DebtScopeAppRouteFocus? = nil) {
+        if section == .accountDetail, let accountID {
+            routedAccountDetail = RoutedAccountDetail(accountID: accountID, focus: accountDetailFocus(for: focus))
+            return
+        }
+
         let topic = topicFor(appSection: section)
 
-        if section == .upcomingBills {
+        if section == .upcomingBills || section == .incomeBills {
             planSheetMode = .incomeBills
+        }
+
+        if section == .liabilityAccounts, let accountID {
+            debtPayoffSelectedAccountID = accountID
         }
 
         if isCompactLayout {
@@ -936,6 +969,19 @@ struct QuickStartView: View {
         .sheet(isPresented: $showAccountSearch) {
             AccountSearchView()
         }
+        .sheet(item: $routedAccountDetail) { route in
+            NavigationStack {
+                AccountDetailView(accountID: route.accountID, initialFocus: route.focus)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { routedAccountDetail = nil }
+                        }
+                    }
+            }
+            .environment(\.modelContext, modelContext)
+            .environmentObject(settings)
+            .applySheetSizing()
+        }
         .sheet(isPresented: $showAbout) {
             AboutView()
         }
@@ -1002,17 +1048,16 @@ struct QuickStartView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: DebtScopeAppSectionRequestStore.notificationName)) { notification in
-            guard let rawValue = notification.object as? String,
-                  let section = DebtScopeAppSection(rawValue: rawValue) else { return }
-            routeToAppSection(section)
+            guard let route = DebtScopeAppSectionRequestStore.route(from: notification) else { return }
+            routeToAppSection(route.section, accountID: route.accountID, focus: route.focus)
         }
         .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
             routeSpotlightActivity(userActivity)
         }
         .onAppear {
             loadPersistedReviewStateIfNeeded()
-            if let pendingSection = DebtScopeAppSectionRequestStore.consumePendingSection() {
-                routeToAppSection(pendingSection)
+            if let pendingRoute = DebtScopeAppSectionRequestStore.consumePendingRoute() {
+                routeToAppSection(pendingRoute.section, accountID: pendingRoute.accountID, focus: pendingRoute.focus)
             }
         }
         .task(id: spotlightIndexFingerprint) {

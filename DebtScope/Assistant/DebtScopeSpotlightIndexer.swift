@@ -368,6 +368,16 @@ extension DebtScopeAppSection {
             return "Assistant"
         case .debtPayoffPlan:
             return "Debt Payoff Plan"
+        case .liabilityAccounts:
+            return "Liability Accounts"
+        case .accountDetail:
+            return "Account Detail"
+        case .incomeBills:
+            return "Income & Bills"
+        case .statementReview:
+            return "Statement Review"
+        case .importReview:
+            return "Import Review"
         }
     }
 
@@ -381,6 +391,16 @@ extension DebtScopeAppSection {
             return "Open the DebtScope assistant screen."
         case .debtPayoffPlan:
             return "Open the DebtScope payoff plan screen."
+        case .liabilityAccounts:
+            return "Open the DebtScope liability accounts screen."
+        case .accountDetail:
+            return "Open a DebtScope account detail screen."
+        case .incomeBills:
+            return "Open the DebtScope income and bills screen."
+        case .statementReview:
+            return "Open the DebtScope statement review screen."
+        case .importReview:
+            return "Open the DebtScope import review screen."
         }
     }
 
@@ -394,6 +414,16 @@ extension DebtScopeAppSection {
             return ["assistant", "help", "DebtScope"]
         case .debtPayoffPlan:
             return ["payoff", "plan", "debt", "DebtScope"]
+        case .liabilityAccounts:
+            return ["liability", "accounts", "debt", "DebtScope"]
+        case .accountDetail:
+            return ["account", "detail", "DebtScope"]
+        case .incomeBills:
+            return ["income", "bills", "cash flow", "DebtScope"]
+        case .statementReview:
+            return ["statement", "review", "import", "DebtScope"]
+        case .importReview:
+            return ["import", "review", "statement", "DebtScope"]
         }
     }
 }

@@ -30,10 +30,10 @@ private struct DebtScopeAssistantChatView: View {
     let embeddedInNavigation: Bool
 
     private let suggestedPrompts = [
-        "Summarize my debts",
-        "What bills are due soon?",
-        "Can I pay extra this month?",
-        "Explain my payoff plan"
+        "What should I clean up next?",
+        "Compare avalanche and snowball",
+        "What changed after my latest import?",
+        "What if I add $100 avalanche?"
     ]
 
     init(context: ModelContext, settings: SettingsStore, embeddedInNavigation: Bool = false) {
@@ -316,6 +316,22 @@ private struct AssistantMessageRow: View {
                     .foregroundStyle(foregroundStyle)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if !message.actions.isEmpty {
+                    FlowLayout(spacing: 8) {
+                        ForEach(message.actions) { action in
+                            Button {
+                                DebtScopeAppSectionRequestStore.request(action.destination, accountID: action.accountID, focus: action.focus)
+                            } label: {
+                                Label(action.title, systemImage: "arrow.turn.down.right")
+                                    .font(.footnote.weight(.medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
