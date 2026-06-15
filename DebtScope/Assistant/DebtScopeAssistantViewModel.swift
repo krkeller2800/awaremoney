@@ -738,7 +738,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         var lines: [String]
         if let recommendation = summary.recommendations.first(where: { $0.kind == recommendationKind }) {
             lines = [
-                "DebtScope shows \(recommendation.affectedRecordCount) item(s) to review for \(recommendation.title.lowercased())."
+                "DebtScope shows \(recommendation.affectedRecordCount) item(s) to review for \(recommendation.title.lowercasedFirstLetter())."
             ]
         } else {
             lines = [cleanStateLine]
@@ -886,6 +886,11 @@ private extension String {
 
     func containsAnyCleanupTerms(_ needles: [String]) -> Bool {
         needles.contains { contains($0) }
+    }
+
+    func lowercasedFirstLetter() -> String {
+        guard !isEmpty else { return "" }
+        return prefix(1).lowercased() + dropFirst()
     }
 }
 
