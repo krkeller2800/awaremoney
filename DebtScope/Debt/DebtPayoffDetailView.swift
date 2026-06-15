@@ -165,43 +165,45 @@ struct DebtPayoffDetailView: View {
 
     @ToolbarContentBuilder
     private func impactKeyboardToolbar() -> some ToolbarContent {
-        ToolbarItemGroup(placement: .keyboard) {
-            GeometryReader { geo in
-                HStack(spacing: 0) {
-                    Spacer()
-                        .frame(width: geo.size.width * 0.25)
-
-                    HStack(spacing: 20) {
-                        Button {
-                            if let account = currentAccount() {
-                                moveFocus(-1, for: account)
+        if isEditing {
+            ToolbarItemGroup(placement: .keyboard) {
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        Spacer()
+                            .frame(width: geo.size.width * 0.25)
+                        
+                        HStack(spacing: 20) {
+                            Button {
+                                if let account = currentAccount() {
+                                    moveFocus(-1, for: account)
+                                }
+                            } label: {
+                                Image(systemName: "chevron.left")
                             }
-                        } label: {
-                            Image(systemName: "chevron.left")
-                        }
-                        .disabled(!canMovePrevious)
-
-                        Button {
-                            if let account = currentAccount() {
-                                moveFocus(1, for: account)
+                            .disabled(!canMovePrevious)
+                            
+                            Button {
+                                if let account = currentAccount() {
+                                    moveFocus(1, for: account)
+                                }
+                            } label: {
+                                Image(systemName: "chevron.right")
                             }
-                        } label: {
-                            Image(systemName: "chevron.right")
+                            .disabled(!canMoveNext)
                         }
-                        .disabled(!canMoveNext)
+                        
+                        Spacer()
+                        
+                        Button {
+                            commitAndDismissKeyboard()
+                        } label: {
+                            Image(systemName: "checkmark")
+                        }
+                        .disabled(!isEditing)
                     }
-
-                    Spacer()
-
-                    Button {
-                        commitAndDismissKeyboard()
-                    } label: {
-                        Image(systemName: "checkmark")
-                    }
-                    .disabled(!isEditing)
                 }
+                .frame(height: 44)
             }
-            .frame(height: 44)
         }
     }
 
@@ -2165,6 +2167,32 @@ struct DebtPayoffDetailView: View {
 
             Spacer()
         }
+#if os(iOS) || os(visionOS)
+        .sheet(item: $editingAccount) { item in
+            NavigationStack {
+                AccountDetailView(accountID: item.id)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { editingAccount = nil }
+                        }
+                    }
+            }
+            .applySheetSizing()
+        }
+#else
+        .sheet(item: $editingAccount) { item in
+            NavigationStack {
+                AccountDetailView(accountID: item.id)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { editingAccount = nil }
+                        }
+                    }
+            }
+        }
+#endif
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 32)
         .background(.background)
@@ -2284,32 +2312,6 @@ struct DebtPayoffDetailView: View {
         } message: {
             Text(quickIngestError?.localizedDescription ?? "Unknown error")
         }
-#if os(iOS) || os(visionOS)
-        .sheet(item: $editingAccount) { item in
-            NavigationStack {
-                AccountDetailView(accountID: item.id)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { editingAccount = nil }
-                        }
-                    }
-            }
-            .applySheetSizing()
-        }
-#else
-        .sheet(item: $editingAccount) { item in
-            NavigationStack {
-                AccountDetailView(accountID: item.id)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { editingAccount = nil }
-                        }
-                    }
-            }
-        }
-#endif
 #if os(iOS) || os(visionOS)
         .sheet(item: $detectionSheetModel) { model in
             detectionReviewSheetContent(model: model)
