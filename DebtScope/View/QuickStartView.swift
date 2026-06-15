@@ -2870,9 +2870,7 @@ private struct AccountSearchView: View {
         guard !trimmedSearchText.isEmpty else { return [] }
 
         return accounts.filter { account in
-            searchableValues(for: account).contains { value in
-                value.localizedCaseInsensitiveContains(trimmedSearchText)
-            }
+            DebtScopeFuzzySearch.matches(query: trimmedSearchText, values: searchableValues(for: account))
         }
     }
 
@@ -2880,9 +2878,7 @@ private struct AccountSearchView: View {
         guard !trimmedSearchText.isEmpty else { return [] }
 
         return transactions.filter { transaction in
-            searchableValues(for: transaction).contains { value in
-                value.localizedCaseInsensitiveContains(trimmedSearchText)
-            }
+            DebtScopeFuzzySearch.matches(query: trimmedSearchText, values: searchableValues(for: transaction))
         }
     }
 
@@ -2890,9 +2886,7 @@ private struct AccountSearchView: View {
         guard !trimmedSearchText.isEmpty else { return [] }
 
         return balanceSnapshots.filter { snapshot in
-            searchableValues(for: snapshot).contains { value in
-                value.localizedCaseInsensitiveContains(trimmedSearchText)
-            }
+            DebtScopeFuzzySearch.matches(query: trimmedSearchText, values: searchableValues(for: snapshot))
         }
     }
 

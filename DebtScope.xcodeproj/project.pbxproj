@@ -48,6 +48,7 @@
 			membershipExceptions = (
 				Testing/BillReservePlannerTests.swift,
 				Testing/DebtScopeAssistantServiceTests.swift,
+				Testing/DebtScopeFuzzySearchTests.swift,
 				Testing/IncomeSchedulerTests.swift,
 				Testing/ReservePlannerTests.swift,
 				Testing/ReserveUpdaterTests.swift,
