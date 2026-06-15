@@ -70,6 +70,12 @@ final class SettingsStore: ObservableObject {
     @Published var spotlightAllowsSensitiveFinancialIndexing: Bool {
         didSet {
             UserDefaults.standard.set(spotlightAllowsSensitiveFinancialIndexing, forKey: "spotlight_allows_sensitive_financial_indexing")
+            if !spotlightAllowsSensitiveFinancialIndexing {
+                spotlightIncludesAccountNames = false
+                spotlightIncludesBillNames = false
+                spotlightIncludesTransactionPayees = false
+                spotlightIncludesDebtPayoffNames = false
+            }
             Task { @MainActor in
                 DebtScopeSpotlightIndexer.refreshIndex(allowsSensitiveFinancialIndexing: spotlightAllowsSensitiveFinancialIndexing)
             }
@@ -141,11 +147,12 @@ final class SettingsStore: ObservableObject {
         self.assistantEnabled = UserDefaults.standard.object(forKey: "assistant_enabled") as? Bool ?? false
         self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false
         self.assistantRetainConversationHistory = UserDefaults.standard.object(forKey: "assistant_retain_conversation_history") as? Bool ?? false
-        self.spotlightAllowsSensitiveFinancialIndexing = UserDefaults.standard.object(forKey: "spotlight_allows_sensitive_financial_indexing") as? Bool ?? false
-        self.spotlightIncludesAccountNames = UserDefaults.standard.object(forKey: "spotlight_includes_account_names") as? Bool ?? true
-        self.spotlightIncludesBillNames = UserDefaults.standard.object(forKey: "spotlight_includes_bill_names") as? Bool ?? true
-        self.spotlightIncludesTransactionPayees = UserDefaults.standard.object(forKey: "spotlight_includes_transaction_payees") as? Bool ?? true
-        self.spotlightIncludesDebtPayoffNames = UserDefaults.standard.object(forKey: "spotlight_includes_debt_payoff_names") as? Bool ?? true
+        let spotlightAllowsSensitiveFinancialIndexing = UserDefaults.standard.object(forKey: "spotlight_allows_sensitive_financial_indexing") as? Bool ?? false
+        self.spotlightAllowsSensitiveFinancialIndexing = spotlightAllowsSensitiveFinancialIndexing
+        self.spotlightIncludesAccountNames = spotlightAllowsSensitiveFinancialIndexing && (UserDefaults.standard.object(forKey: "spotlight_includes_account_names") as? Bool ?? false)
+        self.spotlightIncludesBillNames = spotlightAllowsSensitiveFinancialIndexing && (UserDefaults.standard.object(forKey: "spotlight_includes_bill_names") as? Bool ?? false)
+        self.spotlightIncludesTransactionPayees = spotlightAllowsSensitiveFinancialIndexing && (UserDefaults.standard.object(forKey: "spotlight_includes_transaction_payees") as? Bool ?? false)
+        self.spotlightIncludesDebtPayoffNames = spotlightAllowsSensitiveFinancialIndexing && (UserDefaults.standard.object(forKey: "spotlight_includes_debt_payoff_names") as? Bool ?? false)
         
         #if DEBUG
         self.showDebugTools = UserDefaults.standard.object(forKey: "show_debug_tools") as? Bool ?? true

@@ -33,7 +33,7 @@ enum DebtScopeAssistantAvailability: Equatable {
         case .available:
             return "DebtScope can use the on-device system language model. Supported questions use scoped read-only summaries from your app data."
         case .disabledInSettings:
-            return "Turn on DebtScope Assistant in Data & Privacy settings to check Apple Intelligence availability."
+            return "Turn on the read-only assistant to check Apple Intelligence availability. Transaction details stay off unless you allow them separately."
         case .deviceNotEligible:
             return "This device does not support Apple Intelligence, so the on-device assistant cannot run here."
         case .appleIntelligenceNotEnabled:

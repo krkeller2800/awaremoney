@@ -216,7 +216,7 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             return "The assistant response was canceled."
         }
 
-        return "DebtScope Assistant could not answer that question. Try again with a shorter, more specific prompt."
+        return "DebtScope Assistant could not answer that question. Try again with a more specific prompt."
     }
 
     private func generateResponse(to prompt: String) async throws -> String {

@@ -325,13 +325,14 @@ struct QuickStartView: View {
         var groups: [(title: String, topics: [QuickStartTopic])] = [
             ("Debt", [.debtPayoffPlan, .debtPayoff, .compareStrategies]),
             ("Cash Flow", [.cashFlow, .incomeBills]),
-            ("Worth", [.netWorth, .assets]),
-            ("Review", [.statementReview])
+            ("Worth", [.netWorth, .assets])
         ]
 
-        if settings.assistantEnabled {
-            groups.append(("Local AI", [.assistant]))
+        if !reviewItems.isEmpty {
+            groups.append(("Review", [.statementReview]))
         }
+
+        groups.append(("Local AI", [.assistant]))
 
         return groups
     }
@@ -363,10 +364,7 @@ struct QuickStartView: View {
     }
 
     private func routeToAppSection(_ section: DebtScopeAppSection) {
-        var topic = topicFor(appSection: section)
-        if topic == .assistant && !settings.assistantEnabled {
-            topic = .debtPayoff
-        }
+        let topic = topicFor(appSection: section)
 
         if section == .upcomingBills {
             planSheetMode = .incomeBills
@@ -1022,6 +1020,12 @@ struct QuickStartView: View {
         }
         .onChange(of: reviewItems) { _, _ in
             persistReviewState()
+            if reviewItems.isEmpty {
+                if selection == .statementReview {
+                    selection = .debtPayoff
+                }
+                compactPath.removeAll { $0 == .statementReview }
+            }
         }
         .onChange(of: selectedReviewItemID) { _, _ in
             persistReviewState()

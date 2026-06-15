@@ -24,6 +24,7 @@ private struct DebtScopeAssistantChatView: View {
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var viewModel: DebtScopeAssistantViewModel
     @AppStorage("assistant_privacy_notice_dismissed") private var privacyNoticeDismissed = false
+    @State private var isAssistantSettingsPresented = false
     @FocusState private var isInputFocused: Bool
 
     let embeddedInNavigation: Bool
@@ -75,6 +76,19 @@ private struct DebtScopeAssistantChatView: View {
                 }
                 .accessibilityLabel("Reset assistant")
                 .disabled(viewModel.messages.isEmpty && !viewModel.isLoading)
+
+                Button {
+                    isAssistantSettingsPresented = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Assistant settings")
+            }
+        }
+        .sheet(isPresented: $isAssistantSettingsPresented) {
+            NavigationStack {
+                AssistantSettingsSheet()
+                    .environmentObject(settings)
             }
         }
         .onAppear {
@@ -146,6 +160,17 @@ private struct DebtScopeAssistantChatView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if viewModel.availability == .disabledInSettings {
+                    Button {
+                        isAssistantSettingsPresented = true
+                    } label: {
+                        Label("Turn On Assistant", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                }
             }
 
             Spacer(minLength: 0)
@@ -170,7 +195,7 @@ private struct DebtScopeAssistantChatView: View {
                 .accessibilityLabel("Dismiss privacy notice")
             }
 
-            Text("The assistant uses on-device Apple Intelligence when available and receives scoped DebtScope summaries instead of direct database access.")
+            Text("The assistant uses on-device Apple Intelligence only and receives scoped DebtScope summaries instead of direct database access.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -331,6 +356,65 @@ private struct AssistantMessageRow: View {
             return Color(.secondarySystemGroupedBackground)
         case .systemNotice:
             return Color.orange.opacity(0.16)
+        }
+    }
+}
+
+private struct AssistantSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var settings: SettingsStore
+
+    private var availability: DebtScopeAssistantAvailability {
+        DebtScopeAssistantAvailability.current(assistantEnabled: settings.assistantEnabled)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: availability.systemImage)
+                        .font(.title3)
+                        .foregroundStyle(availability.isAvailable ? .green : .orange)
+                        .frame(width: 28)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(availability.title)
+                            .font(.subheadline.weight(.semibold))
+                        Text(availability.message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section {
+                Toggle("DebtScope Assistant", isOn: $settings.assistantEnabled)
+                Toggle("Allow transaction details", isOn: $settings.assistantIncludeTransactions)
+                    .disabled(!settings.assistantEnabled)
+                Toggle("Keep assistant history", isOn: $settings.assistantRetainConversationHistory)
+                    .disabled(!settings.assistantEnabled)
+            } header: {
+                Text("Assistant")
+            } footer: {
+                Text("The assistant is read-only and uses scoped DebtScope summaries. Transaction-level details stay off unless explicitly allowed.")
+            }
+
+            Section("Privacy") {
+                Label("Uses on-device Apple Intelligence only", systemImage: "lock.shield")
+                Label("Receives scoped DebtScope summaries", systemImage: "doc.text.magnifyingglass")
+                Label("No write actions or account changes", systemImage: "checkmark.shield")
+            }
+        }
+        .navigationTitle("Assistant Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") {
+                    dismiss()
+                }
+            }
         }
     }
 }

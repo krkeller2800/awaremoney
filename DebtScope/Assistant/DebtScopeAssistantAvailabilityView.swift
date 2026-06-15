@@ -28,7 +28,7 @@ struct DebtScopeAssistantAvailabilityView: View {
             }
 
             Section("Privacy") {
-                Label("Uses on-device Apple Intelligence when available", systemImage: "lock.shield")
+                Label("Uses on-device Apple Intelligence only", systemImage: "lock.shield")
                 Label("Receives scoped DebtScope summaries", systemImage: "doc.text.magnifyingglass")
                 Label("Transaction details stay off unless allowed", systemImage: settings.assistantIncludeTransactions ? "checkmark.circle" : "xmark.circle")
             }
