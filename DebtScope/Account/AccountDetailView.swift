@@ -78,32 +78,16 @@ struct AccountDetailView: View {
                             glanceableHeader(for: account)
                                 .padding(.horizontal, 24)
 
-                            HStack(spacing: 0) {
-                                detailsList(for: account)
-                                    .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
-                                    .frame(maxHeight: .infinity)
-
-                                ZStack {
-                                    NavigationStack {
-                                        AccountTransactionsListView(accountID: account.id)
-                                            .id(account.id)
-                                    }
-                                    .environment(\.modelContext, modelContext)
-                                }
-                                .containerRelativeFrame(.horizontal, count: 2, spacing: 0)
-                                .frame(maxHeight: .infinity)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .overlay(alignment: .center) {
-                                Rectangle()
-                                    .fill(.separator)
-                                    .frame(width: 1)
-                                    .frame(maxHeight: .infinity)
-                            }
+                            detailsList(for: account)
+                                .listStyle(.plain)
+                                .scrollContentBackground(.hidden)
+                                .frame(maxWidth: 760, maxHeight: .infinity)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         detailsList(for: account)
+                            .listStyle(.insetGrouped)
+                            .scrollContentBackground(.automatic)
                     }
                 }
                 .navigationTitle(account.name)
@@ -565,10 +549,9 @@ struct AccountDetailView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
         .scrollDismissesKeyboard(.interactively)
-        .frame(maxWidth: isRegularWidth ? .infinity : 760, alignment: .center)
-        .padding(.horizontal, isRegularWidth ? 0 : 16)
+        .frame(maxWidth: isRegularWidth ? 760 : 760, alignment: .center)
+        .padding(.horizontal, isRegularWidth ? 24 : 16)
         .frame(maxWidth: .infinity, alignment: .center)
         .overlay(alignment: .topTrailing) {
             if !isRegularWidth && !account.isManualAsset {
@@ -725,15 +708,10 @@ struct AccountDetailView: View {
         }
 
         return VStack(alignment: .center, spacing: 12) {
-            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 12) {
                 GridRow {
-                    // Tx Balance
                     cell(title: "Transaction Balance", value: transactionalBalance, sub: nil)
-
-                    // Recorded (with date below or space)
                     cell(title: "Recorded Balance", value: recordedBalance, sub: recordedDate)
-
-                    // Δ Since Rec.
                     if let change = changeSinceRecorded {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Δ Since Rec.")
@@ -753,35 +731,28 @@ struct AccountDetailView: View {
                                 .minimumScaleFactor(0.8)
                         }
                     }
+                }
 
-                    // Net equity & LTV
+                GridRow {
                     if let eq = equityText { cell(title: "Net Equity", value: eq, sub: nil) }
                     if let ltv = ltvText { cell(title: "LTV", value: ltv, sub: nil) }
 
-                    // Linked liability info for manual assets
                     if account.supportsLinkedLiability {
                         if let name = linkedLoanName { cell(title: "Liability", value: name, sub: nil) }
                         if let bal = linkedLoanBalance { cell(title: "Liab Bal", value: bal, sub: nil) }
                     }
 
-                    // Loan/Credit Card items
                     if isLoanLike {
                         if let apr = aprText { cell(title: "APR", value: apr, sub: nil) }
                         if let pay = typicalPaymentText { cell(title: "Typical Payment", value: pay, sub: nil) }
                         if let parts = nextDueParts { cell(title: "Next Due", value: parts.date, sub: parts.rel) }
                     }
 
-                    // Brokerage items
                     if let age = valuationAgeText { cell(title: "Val Age", value: age, sub: nil) }
                 }
             }
             .frame(maxWidth: 700, alignment: .center)
-            .padding(16)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(.separator, lineWidth: 1)
-            )
+            .padding(.vertical, 12)
         }
         .frame(maxWidth: .infinity, alignment: .center)
     }

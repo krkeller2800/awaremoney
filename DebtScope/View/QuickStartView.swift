@@ -778,7 +778,12 @@ struct QuickStartView: View {
     }
 
     private func compactNavigationTitle(for topic: QuickStartTopic) -> String {
-        topic == .cashFlow ? "" : topic.title
+        switch topic {
+        case .cashFlow, .debtPayoff:
+            return ""
+        default:
+            return topic.title
+        }
     }
 
     @ViewBuilder

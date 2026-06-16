@@ -9,8 +9,9 @@ struct QAccountsListView: View {
     var showsDebtTools: Bool = true
     @Binding var selectedAccountID: UUID?
     var onEdit: (Account) -> Void
+    var onPaymentImpact: ((Account) -> Void)? = nil
     var onDeleteConfirmed: (Account) -> Void
-    var onSelectionChanged: (UUID?) -> Void
+    var onSelectionChanged: (UUID?) -> Void = { _ in }
 
     @State private var pendingDelete: Account? = nil
 
@@ -61,10 +62,18 @@ struct QAccountsListView: View {
                     .overlay(alignment: .trailing) {
                         HStack(spacing: 2) {
                             Menu {
-                                Button {
-                                    onEdit(account)
-                                } label: {
-                                    Label("Edit Account…", systemImage: "pencil")
+                                if let onPaymentImpact {
+                                    Button {
+                                        onPaymentImpact(account)
+                                    } label: {
+                                        Label("Payment Impact", systemImage: "slider.horizontal.3")
+                                    }
+                                } else {
+                                    Button {
+                                        onEdit(account)
+                                    } label: {
+                                        Label("Edit Account…", systemImage: "pencil")
+                                    }
                                 }
                                 Button(role: .destructive) {
                                     pendingDelete = account
@@ -91,15 +100,27 @@ struct QAccountsListView: View {
                     .background(selectedAccountID == account.id ? Color.accentColor.opacity(0.08) : Color.clear)
                     .contentShape(Rectangle())
                     .simultaneousGesture(TapGesture().onEnded {
-                        selectedAccountID = account.id
-                        onSelectionChanged(selectedAccountID)
+                        if onPaymentImpact != nil {
+                            onEdit(account)
+                        } else {
+                            selectedAccountID = account.id
+                            onSelectionChanged(selectedAccountID)
+                        }
                     })
                     // Context menu (all platforms)
                     .contextMenu {
-                        Button {
-                            onEdit(account)
-                        } label: {
-                            Label("Edit Account…", systemImage: "pencil")
+                        if let onPaymentImpact {
+                            Button {
+                                onPaymentImpact(account)
+                            } label: {
+                                Label("Payment Impact", systemImage: "slider.horizontal.3")
+                            }
+                        } else {
+                            Button {
+                                onEdit(account)
+                            } label: {
+                                Label("Edit Account…", systemImage: "pencil")
+                            }
                         }
 
                         Button(role: .destructive) {
@@ -111,12 +132,21 @@ struct QAccountsListView: View {
 #if os(iOS)
                     // Swipe action (iOS)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button {
-                            onEdit(account)
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
+                        if let onPaymentImpact {
+                            Button {
+                                onPaymentImpact(account)
+                            } label: {
+                                Label("Impact", systemImage: "slider.horizontal.3")
+                            }
+                            .tint(.blue)
+                        } else {
+                            Button {
+                                onEdit(account)
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
-                        .tint(.blue)
 
                         Button(role: .destructive) {
                             pendingDelete = account

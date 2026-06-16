@@ -30,7 +30,9 @@ struct DebtPayoffDetailView: View {
     @State private var quickIngestError: Error? = nil
     @State private var showManualAddSheet = false
     private struct EditingAccount: Identifiable { let id: UUID }
+    private struct PaymentImpactAccount: Identifiable { let id: UUID }
     @State private var editingAccount: EditingAccount? = nil
+    @State private var paymentImpactAccount: PaymentImpactAccount? = nil
     @State private var pendingDelete: Account? = nil
     @State private var importedPreview: ImportedStatementPreview? = nil
     @State private var detectedAccounts: [DetectionReviewSheet.DetectedAccountSelection] = []
@@ -345,13 +347,16 @@ struct DebtPayoffDetailView: View {
                 accounts: debtAccounts,
                 selectedAccountID: $selectedAccountID,
                 onEdit: { account in
-                    editingAccount = EditingAccount(id: account.id)
+                    selectedAccountID = account.id
+                    updateLastImportedURL(for: account.id)
+                },
+                onPaymentImpact: { account in
+                    selectedAccountID = account.id
+                    updateLastImportedURL(for: account.id)
+                    paymentImpactAccount = PaymentImpactAccount(id: account.id)
                 },
                 onDeleteConfirmed: { account in
                     deleteAccount(account)
-                },
-                onSelectionChanged: { id in
-                    if let id { self.updateLastImportedURL(for: id) }
                 }
             )
             .frame(minWidth: 280, maxWidth: 360, maxHeight: .infinity, alignment: .topLeading)
@@ -359,11 +364,28 @@ struct DebtPayoffDetailView: View {
 
             Divider()
 
-            payoffImpactPanel
+            accountDetailPanel
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(.quaternary.opacity(0.05))
         }
         .frame(maxWidth: .infinity, minHeight: 300)
+    }
+
+    @ViewBuilder
+    private var accountDetailPanel: some View {
+        if let accountID = selectedAccountID {
+            NavigationStack {
+                AccountDetailView(accountID: accountID)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        } else {
+            ContentUnavailableView(
+                "Select an account",
+                systemImage: "creditcard",
+                description: Text("Choose a liability account to edit its details.")
+            )
+            .padding(24)
+        }
     }
 
     @ViewBuilder
@@ -374,14 +396,13 @@ struct DebtPayoffDetailView: View {
             onEdit: { account in
                 editingAccount = EditingAccount(id: account.id)
             },
+            onPaymentImpact: { account in
+                selectedAccountID = account.id
+                updateLastImportedURL(for: account.id)
+                showCompactPayoffDetail = true
+            },
             onDeleteConfirmed: { account in
                 deleteAccount(account)
-            },
-            onSelectionChanged: { id in
-                guard let id else { return }
-                selectedAccountID = id
-                updateLastImportedURL(for: id)
-                showCompactPayoffDetail = true
             }
         )
         .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
@@ -436,14 +457,16 @@ struct DebtPayoffDetailView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Button {
-                        editingAccount = EditingAccount(id: account.id)
-                    } label: {
-                        Label("Edit Account", systemImage: "pencil")
+                    if horizontalSizeClass == .compact {
+                        Button {
+                            editingAccount = EditingAccount(id: account.id)
+                        } label: {
+                            Label("Edit Account", systemImage: "pencil")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .font(.caption.weight(.semibold))
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
 
                 if let baseline, let adjusted {
@@ -2193,6 +2216,35 @@ struct DebtPayoffDetailView: View {
             }
         }
 #endif
+        .sheet(item: $paymentImpactAccount) { item in
+            NavigationStack {
+                VStack(spacing: 0) {
+                    payoffImpactPanel
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity,
+                       maxHeight: .infinity,
+                       alignment: .top)
+                .navigationTitle("Payment Impact")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { paymentImpactAccount = nil }
+                    }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+
+                        Button("Done") {
+                            commitAndDismissKeyboard()
+                        }
+                    }
+                }
+            }
+            .applyFormSheetSizing()
+            .onAppear {
+                selectedAccountID = item.id
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 32)
         .background(.background)

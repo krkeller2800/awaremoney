@@ -1,52 +1,43 @@
 # Codex Handoff
 
 ## Current Focus
-- Fuzzy matching inside DebtScope in-app search is implemented, smoke tested, and ready to commit if it has not already been committed.
-- The assistant remains read-only, privacy-first, and on-device only. There is no off-device AI fallback.
-- The prior handoff's "next privacy-scoped assistant/App Intent improvement" was too vague. The recommended next product direction is now Assistant Action Routing.
+- QuickStart Liability Accounts interaction refinements are implemented, smoke tested, and build verified.
+- No immediate engineering follow-up is required for this completed work unless a regression appears in normal use or TestFlight.
 
 ## Completed / Verified Context
-- `DebtScopeFuzzySearch` exists in `DebtScope/Utils/DebtScopeFuzzySearch.swift`.
-- `AccountSearchView` in `QuickStartView` uses the shared fuzzy matcher for account, transaction, and balance result groups.
-- Focused fuzzy-search tests passed: 4 passed, 0 failed.
-- Full Xcode project build passed after the fuzzy-search work.
-- Assistant tooling is already broader than the old plan implied: debt summary, cash flow, upcoming bills, payoff plan, strategy comparison, extra-payment simulation, import review, and cleanup recommendations are present.
-- Navigation-only App Shortcuts and Spotlight section routing already exist.
-- Sensitive Spotlight labels for accounts, bills, transaction payees, and debt payoff items can route back into the app when the user enables the financial-details indexing toggles.
+- Liability account primary tap behavior now opens the account edit/detail surface instead of Payment Impact.
+- The liability account ellipsis/context action now exposes Payment Impact and Delete.
+- On iPhone, tapping a liability account opens Account Detail; ellipsis Payment Impact pushes the Payment Impact screen.
+- On iPhone, the compact QuickStart navigation title is blank for Liability Accounts so toolbar buttons are not truncated; the in-page heading remains.
+- On iPad, tapping a liability account selects it and shows Account Detail in the right-side detail pane.
+- On iPad, ellipsis Payment Impact opens Payment Impact as a smaller form-sized sheet instead of replacing the right-side Account Detail pane.
+- The iPad Payment Impact sheet hides the redundant Edit Account button.
+- iPad Account Detail now uses a one-column edit layout instead of a split details/transactions layout.
+- iPad Account Detail uses a plain edit list rather than inset grouped card styling.
+- The iPad Account Detail summary metrics no longer use the rounded/material card wrapper and now wrap into two rows to avoid unreadable truncation.
+- Asset Accounts still keep their existing tap-to-select behavior because `QAccountsListView` only switches to edit-on-tap when a Payment Impact action is supplied.
+- Smoke testing is complete per user report.
+- Focused diagnostics and full Xcode builds passed after each change set.
 
-## Next Step
-Build Assistant Action Routing instead of adding another assistant data tool.
+## Files Touched
+- `DebtScope/Account/QAccountsListView.swift`
+- `DebtScope/Debt/DebtPayoffDetailView.swift`
+- `DebtScope/Account/AccountDetailView.swift`
+- `DebtScope/View/QuickStartView.swift`
+- `DebtScope/Utils/Common.swift`
+- `DebtScope/Docs/CodexHandoff.md`
 
-The next implementer should:
-- Convert assistant cleanup/import recommendation destinations from plain strings into structured, privacy-safe app destinations.
-- Reuse existing QuickStart routing so recommendations can open the relevant normal app screen:
-  - Missing APR / minimum payment -> Liability Accounts.
-  - Incomplete bill or income schedules -> Income & Bills.
-  - Duplicate imports / account mapping issues -> Statement Review or the existing import review workflow when available.
-- Add assistant suggested prompts for the newer capabilities:
-  - `What should I clean up next?`
-  - `Compare avalanche and snowball`
-  - `What changed after my latest import?`
-  - `What if I add $100 avalanche?`
-- Keep all routing navigation-only. Any data change must still happen through the normal app UI with user confirmation.
+## Important Product Decisions
+- Account Detail is the source-of-truth editing surface for liability account data.
+- Payment Impact remains a planning/simulation surface and should be secondary from the liability account list.
+- iPad should keep Account Detail visible in the main detail pane while Payment Impact appears as a temporary sheet.
+- iPhone should avoid redundant toolbar titles when the screen already contains a clear heading and the title causes toolbar button truncation.
 
-## Privacy / Scope Rules
-- Do not add write-capable AI/App Intent workflows without a confirmed normal app UI workflow and audit trail.
-- Keep App Intents narrow and navigation-focused. Do not return balances, dates, account details, transaction details, or import content through Siri or Shortcuts.
-- Financial Spotlight results must expose labels only.
-- Do not add amounts, balances, dates, memos, notes, account numbers, import filenames, hashes, or raw database identifiers to Spotlight result text.
-- Keep transaction-level assistant work aggregated by default and gated by `assistantIncludeTransactions` plus an explicit user request.
-- Assistant copy should continue to state that AI use is on-device only and that unavailable Apple Intelligence means the assistant stays unavailable.
-
-## Useful Starting Points
-- `DebtScope/Assistant/DebtScopeAssistantService.swift`: `cleanupRecommendationSummary()` currently emits text destinations.
-- `DebtScope/Assistant/DebtScopeAssistantModels.swift`: `AssistantCleanupRecommendation` currently stores `destination` as `String`.
-- `DebtScope/Assistant/DebtScopeAssistantViewModel.swift`: formats direct assistant responses and can surface action-oriented copy.
-- `DebtScope/Assistant/DebtScopeAssistantView.swift`: suggested prompts are currently older and should be refreshed.
-- `DebtScope/View/QuickStartView.swift`: existing section, Spotlight, account, bill, transaction, and debt-payoff routing should be reused.
-- `DebtScope/Assistant/DebtScopeAppIntents.swift`: keep App Intent behavior navigation-only.
+## Suggested Next Step
+- Commit the completed QuickStart Liability Accounts interaction and layout work.
+- If future refinements are needed, validate both iPhone compact navigation and iPad split/detail behavior because `QAccountsListView` is shared with Asset Accounts.
 
 ## Notes / Risks
-- Avoid expanding system surfaces with sensitive financial data; the valuable next improvement is making existing assistant recommendations actionable inside DebtScope.
-- Duplicate/mapping recommendations may not always have an active persisted review item. Route gracefully to Statement Review when available, otherwise explain that the issue is resolved during the next import review.
-- After significant complete changes, remind the user to make a git commit.
+- `QAccountsListView` is shared. Its liability-specific behavior depends on callers supplying `onPaymentImpact`; callers without that action retain tap-to-select behavior.
+- `applyFormSheetSizing()` was added as a reusable helper, but currently only Payment Impact uses it.
+- No new automated tests were added; validation was via focused diagnostics, full Xcode builds, and manual smoke testing.

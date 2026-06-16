@@ -340,4 +340,13 @@ extension View {
             self.presentationDetents([.large])
         }
     }
+
+    @ViewBuilder
+    func applyFormSheetSizing() -> some View {
+        if #available(iOS 18, *) {
+            self.presentationSizing(.form)
+        } else {
+            self.presentationDetents([.medium, .large])
+        }
+    }
 }
