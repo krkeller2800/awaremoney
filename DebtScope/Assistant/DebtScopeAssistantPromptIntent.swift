@@ -21,7 +21,7 @@ enum AssistantPromptIntent {
             self = .strategySavings
         } else if normalized.containsAny(["can i afford", "afford to add", "extra", "additional"]) && normalized.containsAny(["debt payment", "debt payments", "monthly debt", "payment"]) {
             self = .debtAffordability
-        } else if normalized.containsAny(["what happens if", "what if", "if i add", "add $", "extra payment", "extra monthly", "additional payment", "additional monthly"]) && normalized.containsAny(["debt", "payment", "payoff", "per month", "monthly"]) {
+        } else if normalized.isExtraPaymentSimulationPrompt {
             self = .extraPaymentSimulation
         } else if normalized.containsAny(["cleanup", "clean up", "what should i fix", "what should i review", "recommended actions", "recommend actions", "suggest actions", "suggest cleanup", "needs attention", "how do i fix", "how do i resolve", "how do i complete", "missing APR", "missing minimum payment", "missing minimum payments", "complete bill", "complete income", "bill and income schedules"]) {
             self = .cleanupRecommendations
@@ -40,6 +40,19 @@ enum AssistantPromptIntent {
 }
 
 private extension String {
+    var isExtraPaymentSimulationPrompt: Bool {
+        let asksWhatIf = containsAny(["what happens if", "what if", "if i add", "add $", "extra payment", "extra monthly", "additional payment", "additional monthly"])
+        guard asksWhatIf else { return false }
+
+        let namesDebtPaymentContext = containsAny(["debt", "payment", "payoff", "per month", "monthly"])
+        let namesStrategyWithAmount = containsAny(["avalanche", "snowball", "minimum", "minimums"]) && containsCurrencyAmount
+        return namesDebtPaymentContext || namesStrategyWithAmount
+    }
+
+    var containsCurrencyAmount: Bool {
+        range(of: #"\$\s*\d"#, options: .regularExpression) != nil
+    }
+
     func containsAny(_ needles: [String]) -> Bool {
         needles.contains { contains($0) }
     }

@@ -5,6 +5,7 @@ struct DebtPayoffPlanView: View {
     var onManageDebtSetup: (() -> Void)? = nil
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject private var settings: SettingsStore
     @AppStorage("debtPlanStartModeRaw") private var debtPlanStartModeRaw: String = "currentInputs"
     @AppStorage("debtPlanStartDate") private var debtPlanStartDateEpoch: Double = 0
@@ -14,38 +15,73 @@ struct DebtPayoffPlanView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        List {
-            if let errorMessage {
+        payoffPlanContent
+            .navigationTitle("Payoff Plan")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear(perform: refresh)
+            .onChange(of: settings.defaultPayoffStrategyRaw) { _, _ in refresh() }
+            .onChange(of: debtPlanStartModeRaw) { _, _ in refresh() }
+            .onChange(of: debtPlanStartDateEpoch) { _, _ in refresh() }
+    }
+
+    @ViewBuilder
+    private var payoffPlanContent: some View {
+        if let errorMessage {
+            List {
                 ContentUnavailableView(
                     "Payoff Plan Unavailable",
                     systemImage: "exclamationmark.triangle",
                     description: Text(errorMessage)
                 )
-            } else if let planSummary {
-                planOverviewSection(planSummary)
-                payoffOrderSection(planSummary)
-                missingDataSection
-                sourceSection(planSummary)
-
-                if let onManageDebtSetup {
-                    Section {
-                        Button {
-                            onManageDebtSetup()
-                        } label: {
-                            Label("Manage Liability Accounts", systemImage: "slider.horizontal.3")
-                        }
-                    }
-                }
+            }
+        } else if let planSummary {
+            if usesTwoColumnLayout {
+                twoColumnPlanContent(planSummary)
             } else {
+                singleColumnPlanContent(planSummary)
+            }
+        } else {
+            List {
                 ProgressView("Loading payoff plan...")
             }
         }
-        .navigationTitle("Payoff Plan")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: refresh)
-        .onChange(of: settings.defaultPayoffStrategyRaw) { _, _ in refresh() }
-        .onChange(of: debtPlanStartModeRaw) { _, _ in refresh() }
-        .onChange(of: debtPlanStartDateEpoch) { _, _ in refresh() }
+    }
+
+    private var usesTwoColumnLayout: Bool {
+        horizontalSizeClass == .regular
+    }
+
+    private func singleColumnPlanContent(_ planSummary: AssistantPayoffPlanSummary) -> some View {
+        List {
+            planOverviewSection(planSummary)
+            payoffOrderSection(planSummary)
+            missingDataSection
+            sourceSection(planSummary)
+            manageLiabilityAccountsSection
+        }
+    }
+
+    private func twoColumnPlanContent(_ planSummary: AssistantPayoffPlanSummary) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            List {
+                planOverviewSection(planSummary)
+                missingDataSection
+                sourceSection(planSummary)
+                manageLiabilityAccountsSection
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .frame(minWidth: 320, idealWidth: 360, maxWidth: 420, maxHeight: .infinity)
+
+            List {
+                payoffOrderSection(planSummary)
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 16)
+        .background(Color(.systemGroupedBackground))
     }
 
     private func planOverviewSection(_ summary: AssistantPayoffPlanSummary) -> some View {
@@ -110,6 +146,19 @@ struct DebtPayoffPlanView: View {
             Text(summary.sourceNote)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var manageLiabilityAccountsSection: some View {
+        if let onManageDebtSetup {
+            Section {
+                Button {
+                    onManageDebtSetup()
+                } label: {
+                    Label("Manage Liability Accounts", systemImage: "slider.horizontal.3")
+                }
+            }
         }
     }
 

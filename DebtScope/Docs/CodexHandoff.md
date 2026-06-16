@@ -1,43 +1,45 @@
 # Codex Handoff
 
 ## Current Focus
-- QuickStart Liability Accounts interaction refinements are implemented, smoke tested, and build verified.
-- No immediate engineering follow-up is required for this completed work unless a regression appears in normal use or TestFlight.
+- Assistant readability and QuickStart/iPad layout refinements are implemented, build verified, and smoke testing is complete per user report.
+- No immediate engineering follow-up is required unless a regression appears in normal use or TestFlight.
 
 ## Completed / Verified Context
-- Liability account primary tap behavior now opens the account edit/detail surface instead of Payment Impact.
-- The liability account ellipsis/context action now exposes Payment Impact and Delete.
-- On iPhone, tapping a liability account opens Account Detail; ellipsis Payment Impact pushes the Payment Impact screen.
-- On iPhone, the compact QuickStart navigation title is blank for Liability Accounts so toolbar buttons are not truncated; the in-page heading remains.
-- On iPad, tapping a liability account selects it and shows Account Detail in the right-side detail pane.
-- On iPad, ellipsis Payment Impact opens Payment Impact as a smaller form-sized sheet instead of replacing the right-side Account Detail pane.
-- The iPad Payment Impact sheet hides the redundant Edit Account button.
-- iPad Account Detail now uses a one-column edit layout instead of a split details/transactions layout.
-- iPad Account Detail uses a plain edit list rather than inset grouped card styling.
-- The iPad Account Detail summary metrics no longer use the rounded/material card wrapper and now wrap into two rows to avoid unreadable truncation.
-- Asset Accounts still keep their existing tap-to-select behavior because `QAccountsListView` only switches to edit-on-tap when a Payment Impact action is supplied.
+- Assistant chat readability was improved: assistant/system messages now use a smaller callout-sized font with slightly increased line spacing; user messages keep body font.
+- Deterministic assistant responses now use a phone-readable structure: short takeaway first, compact labeled sections, bullets for numbers, and caveats under Notes.
+- FoundationModels assistant instructions now ask free-form local AI answers to follow the same readable structure.
+- The prompt `What if I add $100 avalanche?` now routes to the deterministic extra-payment simulation path instead of the free-form model path.
+- A regression expectation was added for that exact prompt in `DebtScopeAssistantServiceTests`.
+- iPad/regular-width Account Detail no longer shows the inconsistent top quick-look summary grid; it now opens directly into the edit/detail list.
+- QuickStart Payoff Plan now uses a two-column regular-width layout: left column contains Current Plan, Needs Attention, Source, and Manage Liability Accounts; right column contains Payoff Order.
+- Compact/iPhone Payoff Plan remains single-column.
+- Focused diagnostics passed for all touched Swift files during the work.
+- Full Xcode builds passed after each change set.
+- Focused assistant prompt intent test passed after the prompt-routing fix.
 - Smoke testing is complete per user report.
-- Focused diagnostics and full Xcode builds passed after each change set.
 
 ## Files Touched
-- `DebtScope/Account/QAccountsListView.swift`
-- `DebtScope/Debt/DebtPayoffDetailView.swift`
 - `DebtScope/Account/AccountDetailView.swift`
-- `DebtScope/View/QuickStartView.swift`
-- `DebtScope/Utils/Common.swift`
+- `DebtScope/Assistant/DebtScopeAssistantInstructions.swift`
+- `DebtScope/Assistant/DebtScopeAssistantPromptIntent.swift`
+- `DebtScope/Assistant/DebtScopeAssistantView.swift`
+- `DebtScope/Assistant/DebtScopeAssistantViewModel.swift`
+- `DebtScope/Debt/DebtPayoffPlanView.swift`
+- `DebtScope/Testing/DebtScopeAssistantServiceTests.swift`
 - `DebtScope/Docs/CodexHandoff.md`
 
 ## Important Product Decisions
-- Account Detail is the source-of-truth editing surface for liability account data.
-- Payment Impact remains a planning/simulation surface and should be secondary from the liability account list.
-- iPad should keep Account Detail visible in the main detail pane while Payment Impact appears as a temporary sheet.
-- iPhone should avoid redundant toolbar titles when the screen already contains a clear heading and the title causes toolbar button truncation.
+- Assistant answers should prioritize readability on phone screens over dense paragraph output.
+- Structured deterministic assistant answers should be preferred for known financial workflows so formatting and caveats remain predictable.
+- Account Detail should stay focused on editable account data; duplicate quick-look summary metrics at the top are removed.
+- iPad Payoff Plan should use the available width for comparison/scanning: setup and context on the left, payoff order on the right.
+- iPhone/compact layouts should remain conservative and single-column.
 
 ## Suggested Next Step
-- Commit the completed QuickStart Liability Accounts interaction and layout work.
-- If future refinements are needed, validate both iPhone compact navigation and iPad split/detail behavior because `QAccountsListView` is shared with Asset Accounts.
+- Commit the completed assistant readability, Account Detail cleanup, and iPad Payoff Plan layout work.
+- If future refinements are needed, validate both compact iPhone and regular-width iPad QuickStart flows because the views are shared across size classes.
 
 ## Notes / Risks
-- `QAccountsListView` is shared. Its liability-specific behavior depends on callers supplying `onPaymentImpact`; callers without that action retain tap-to-select behavior.
-- `applyFormSheetSizing()` was added as a reusable helper, but currently only Payment Impact uses it.
-- No new automated tests were added; validation was via focused diagnostics, full Xcode builds, and manual smoke testing.
+- The Payoff Plan two-column layout is gated by regular horizontal size class, so any non-iPad regular-width presentation will also receive the split layout.
+- The assistant can still fall back to free-form FoundationModels answers for prompts outside deterministic intent coverage, but instructions now request the same structured format.
+- `DebtScope.xcodeproj/project.pbxproj` shows local changes in the worktree; review before committing to ensure they are expected project metadata updates.

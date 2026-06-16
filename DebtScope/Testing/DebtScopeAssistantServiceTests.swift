@@ -15,6 +15,7 @@ struct DebtScopeAssistantServiceTests {
         #expect(AssistantPromptIntent(prompt: "What bills are coming up soon?") == .upcomingBills)
         #expect(AssistantPromptIntent(prompt: "Can I afford to add $100 to monthly debt payments?") == .debtAffordability)
         #expect(AssistantPromptIntent(prompt: "What happens if I add $100 per month to debt payments?") == .extraPaymentSimulation)
+        #expect(AssistantPromptIntent(prompt: "What if I add $100 avalanche?") == .extraPaymentSimulation)
         #expect(AssistantPromptIntent(prompt: "What changed after my latest import?") == .importReview)
         #expect(AssistantPromptIntent(prompt: "What needs review in account mapping?") == .importReview)
         #expect(AssistantPromptIntent(prompt: "What should I clean up next?") == .cleanupRecommendations)

@@ -376,19 +376,22 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         var lines = [
-            "DebtScope shows \(summary.debtCount) active debt \(summary.debtCount == 1 ? "account" : "accounts") totaling \(formatCurrency(summary.totalDebt, currencyCode: summary.currencyCode)).",
-            "Total minimum payments are \(formatCurrency(summary.totalMinimumPayment, currencyCode: summary.currencyCode)) per month."
+            "DebtScope shows \(summary.debtCount) active debt \(summary.debtCount == 1 ? "account" : "accounts") totaling \(formatCurrency(summary.totalDebt, currencyCode: summary.currencyCode))."
         ]
 
+        var overview = [
+            "Total minimum payments: \(formatCurrency(summary.totalMinimumPayment, currencyCode: summary.currencyCode)) per month"
+        ]
         if let name = summary.highestAPRDebtName, let apr = summary.highestAPR {
-            lines.append("The highest APR debt is \(name) at \(formatPercent(apr)).")
+            overview.append("Highest APR debt: \(name) at \(formatPercent(apr))")
         }
+        appendSection("Overview", items: overview, to: &lines)
 
         let accountLines = summary.accounts.prefix(3).map { account in
-            "- \(account.name): \(formatCurrency(account.latestBalance, currencyCode: summary.currencyCode))" + (account.apr.map { " at \(formatPercent($0))" } ?? "")
+            "\(account.name): \(formatCurrency(account.latestBalance, currencyCode: summary.currencyCode))" + (account.apr.map { " at \(formatPercent($0))" } ?? "")
         }
-        lines.append(contentsOf: accountLines)
-        lines.append(contentsOf: summary.missingDataNotes.prefix(3))
+        appendSection("Top Debts", items: accountLines, to: &lines)
+        appendNotes(summary.missingDataNotes, to: &lines)
         return lines.joined(separator: "\n")
     }
 
@@ -401,16 +404,20 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         var lines = [
-            "Based on DebtScope's current \(formatStrategy(summary.strategy)) plan, focus on \(first.name) first.",
-            "It starts at \(formatCurrency(first.startingBalance, currencyCode: summary.currencyCode))" + (first.apr.map { " with \(formatPercent($0)) APR." } ?? "."),
-            "Projected total interest is \(formatCurrency(summary.totalInterest, currencyCode: summary.currencyCode))."
+            "Focus on \(first.name) first under DebtScope's current \(formatStrategy(summary.strategy)) plan."
+        ]
+
+        var details = [
+            "Starting balance: \(formatCurrency(first.startingBalance, currencyCode: summary.currencyCode))" + (first.apr.map { " at \(formatPercent($0)) APR" } ?? ""),
+            "Projected total interest: \(formatCurrency(summary.totalInterest, currencyCode: summary.currencyCode))"
         ]
         if let date = first.payoffDate {
-            lines.append("Projected payoff for that debt: \(formatDate(date)).")
+            details.append("Projected payoff for this debt: \(formatDate(date))")
         }
         if let budget = summary.monthlyBudget {
-            lines.append("Current monthly debt budget: \(formatCurrency(budget, currencyCode: summary.currencyCode)).")
+            details.append("Monthly debt budget: \(formatCurrency(budget, currencyCode: summary.currencyCode))")
         }
+        appendSection("Plan Details", items: details, to: &lines)
         return lines.joined(separator: "\n")
     }
 
@@ -434,26 +441,38 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         var lines = [
-            comparisonBasisLine(summary),
-            "Using avalanche instead of snowball saves \(formatCurrency(summary.interestSavingsUsingAvalanche, currencyCode: summary.currencyCode)) in projected interest.",
-            "Avalanche interest: \(formatCurrency(summary.avalanche.totalInterest, currencyCode: summary.currencyCode)).",
-            "Snowball interest: \(formatCurrency(summary.snowball.totalInterest, currencyCode: summary.currencyCode)).",
-            "Minimum-payment interest: \(formatCurrency(summary.minimumPayments.totalInterest, currencyCode: summary.currencyCode))."
+            "Avalanche is projected to save \(formatCurrency(summary.interestSavingsUsingAvalanche, currencyCode: summary.currencyCode)) in interest compared with snowball."
         ]
-        if !summary.minimumPayments.paymentFeasible {
-            lines.append("The minimum-payment strategy is not feasible with the current setup.")
-        }
+
         if let months = summary.avalancheDebtFreeDateAdvantageMonths {
             if months > 0 {
-                lines.append("Avalanche is projected to finish \(months) \(months == 1 ? "month" : "months") sooner.")
+                lines.append("It is also projected to finish \(months) \(months == 1 ? "month" : "months") sooner.")
             } else if months == 0 {
                 lines.append("Both strategies are projected to finish in the same month.")
             }
         }
+
+        lines.append("")
+        lines.append("Comparison")
+        lines.append("- \(comparisonBasisLine(summary))")
+        lines.append("- Avalanche interest: \(formatCurrency(summary.avalanche.totalInterest, currencyCode: summary.currencyCode))")
+        lines.append("- Snowball interest: \(formatCurrency(summary.snowball.totalInterest, currencyCode: summary.currencyCode))")
         if let first = summary.avalanche.payoffOrder.first {
-            lines.append("Avalanche starts with \(first.name).")
+            lines.append("- First avalanche target: \(first.name)")
         }
-        lines.append(contentsOf: summary.missingDataNotes.prefix(4))
+
+        var caveats: [String] = []
+        if !summary.minimumPayments.paymentFeasible {
+            caveats.append("The minimum-payment strategy is not feasible with the current setup.")
+        }
+        caveats.append(contentsOf: summary.missingDataNotes.prefix(4))
+
+        if !caveats.isEmpty {
+            lines.append("")
+            lines.append("Notes")
+            lines.append(contentsOf: caveats.map { "- \($0)" })
+        }
+
         return lines.joined(separator: "\n")
     }
 
@@ -471,39 +490,48 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             return summary.validationMessage ?? "DebtScope could not simulate that extra payment amount."
         case .unavailable:
             var lines = [summary.validationMessage ?? "DebtScope could not compute that extra-payment simulation."]
-            lines.append(extraPaymentStrategyLine(summary))
-            lines.append(contentsOf: summary.missingDataNotes.prefix(4))
+            appendSection("Scenario", items: [extraPaymentStrategyLine(summary)], to: &lines)
+            appendNotes(summary.missingDataNotes, to: &lines, limit: 4)
             return lines.joined(separator: "\n")
         case .valid:
             guard let baseline = summary.baseline, let scenario = summary.scenario else {
                 return "DebtScope could not compute both the baseline and extra-payment payoff plans."
             }
 
+            let interestSaved = summary.interestSaved ?? 0
             var lines = [
-                extraPaymentStrategyLine(summary),
-                "Extra payment simulated: \(formatCurrency(summary.extraMonthlyPayment, currencyCode: summary.currencyCode)) per month starting \(formatMonthYear(summary.startDate)).",
-                "Baseline monthly debt budget: \(formatCurrency(summary.baselineMonthlyBudget ?? 0, currencyCode: summary.currencyCode)).",
-                "Temporary scenario monthly debt budget: \(formatCurrency(summary.scenarioMonthlyBudget ?? 0, currencyCode: summary.currencyCode)).",
-                "Baseline result: \(formatCurrency(baseline.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(baseline.projectedDebtFreeDate)).",
-                "Scenario result: \(formatCurrency(scenario.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(scenario.projectedDebtFreeDate)).",
-                "Projected interest saved: \(formatCurrency(summary.interestSaved ?? 0, currencyCode: summary.currencyCode))."
+                "The extra payment is projected to save \(formatCurrency(interestSaved, currencyCode: summary.currencyCode)) in interest."
             ]
-
-            if summary.extraMonthlyPayment == 0 {
-                lines.append("Because the extra payment is $0.00, the scenario matches the baseline.")
-            }
 
             if let months = summary.debtFreeDateAdvantageMonths {
                 if months > 0 {
-                    lines.append("The extra payment is projected to finish payoff \(months) \(months == 1 ? "month" : "months") sooner.")
+                    lines.append("It is also projected to finish payoff \(months) \(months == 1 ? "month" : "months") sooner.")
                 } else if months == 0 {
                     lines.append("Baseline and scenario are projected to finish in the same month.")
                 }
             }
+
+            appendSection("Scenario", items: [
+                extraPaymentStrategyLine(summary),
+                "Extra payment: \(formatCurrency(summary.extraMonthlyPayment, currencyCode: summary.currencyCode)) per month starting \(formatMonthYear(summary.startDate))",
+                "Baseline monthly debt budget: \(formatCurrency(summary.baselineMonthlyBudget ?? 0, currencyCode: summary.currencyCode))",
+                "Temporary scenario budget: \(formatCurrency(summary.scenarioMonthlyBudget ?? 0, currencyCode: summary.currencyCode))"
+            ], to: &lines)
+
+            var results = [
+                "Baseline: \(formatCurrency(baseline.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(baseline.projectedDebtFreeDate))",
+                "Scenario: \(formatCurrency(scenario.totalInterest, currencyCode: summary.currencyCode)) interest, debt-free date \(formatOptionalMonthYear(scenario.projectedDebtFreeDate))"
+            ]
             if let firstAffectedAccountName = summary.firstAffectedAccountName {
-                lines.append("First affected debt: \(firstAffectedAccountName).")
+                results.append("First affected debt: \(firstAffectedAccountName)")
             }
-            lines.append(contentsOf: summary.missingDataNotes.prefix(3))
+            appendSection("Results", items: results, to: &lines)
+
+            var notes = Array(summary.missingDataNotes.prefix(3))
+            if summary.extraMonthlyPayment == 0 {
+                notes.insert("Because the extra payment is $0.00, the scenario matches the baseline.", at: 0)
+            }
+            appendSection("Notes", items: notes, to: &lines)
             return lines.joined(separator: "\n")
         }
     }
@@ -519,26 +547,30 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         switch focus {
         case .duplicates:
             lines = [
-                "DebtScope shows \(summary.duplicateTransactionCandidateCount) duplicate import candidate record(s)."
+                summary.duplicateTransactionCandidateCount == 0
+                    ? "Recent imports do not show duplicate transaction import-key matches."
+                    : "DebtScope shows \(summary.duplicateTransactionCandidateCount) duplicate import candidate record(s)."
             ]
-            if summary.duplicateTransactionCandidateCount == 0 {
-                lines.append("Recent imports do not show duplicate transaction import-key matches.")
+            if let latest = summary.latestImport {
+                appendSection("Latest Import", items: ["\(latest.label): \(latest.importedTransactionCount) imported transaction(s)"], to: &lines)
             }
-            appendLatestImportContextIfUseful(to: &lines, summary: summary)
-            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
-            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("duplicate") }.prefix(2))
+            var notes = Array(summary.reviewNotes.filter { $0.contains("duplicate") }.prefix(2))
+            appendPrivacyNoteIfNeeded(to: &notes, summary: summary)
+            appendSection("Notes", items: notes, to: &lines)
             return lines.joined(separator: "\n")
 
         case .accountMapping:
             lines = [
                 "DebtScope shows \(summary.unresolvedAccountMappingCount) imported record(s) that may need account mapping review."
             ]
+            var mappingItems = ["Mapped imported accounts: \(summary.mappedAccountCount)"]
             if let latest = summary.latestImport {
-                lines.append("Latest import mapping count: \(latest.unresolvedAccountMappingCount) unresolved record(s).")
+                mappingItems.insert("Latest import unresolved mappings: \(latest.unresolvedAccountMappingCount)", at: 0)
             }
-            lines.append("Mapped imported account count: \(summary.mappedAccountCount).")
-            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
-            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("mapping") || $0.contains("linked to an account") }.prefix(2))
+            appendSection("Mapping", items: mappingItems, to: &lines)
+            var notes = Array(summary.reviewNotes.filter { $0.contains("mapping") || $0.contains("linked to an account") }.prefix(2))
+            appendPrivacyNoteIfNeeded(to: &notes, summary: summary)
+            appendSection("Notes", items: notes, to: &lines)
             return lines.joined(separator: "\n")
 
         case .conflicts:
@@ -546,10 +578,14 @@ final class DebtScopeAssistantViewModel: ObservableObject {
                 "DebtScope shows \(summary.conflictCount) imported record(s) that are excluded, edited, or adjusted."
             ]
             if let latest = summary.latestImport {
-                lines.append("Latest import has \(latest.excludedRecordCount) excluded record(s) and \(latest.editedRecordCount) edited record(s).")
+                appendSection("Latest Import", items: [
+                    "Excluded records: \(latest.excludedRecordCount)",
+                    "Edited records: \(latest.editedRecordCount)"
+                ], to: &lines)
             }
-            appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
-            lines.append(contentsOf: summary.reviewNotes.filter { $0.contains("excluded") || $0.contains("edits") || $0.contains("conflicts") || $0.contains("adjustments") }.prefix(2))
+            var notes = Array(summary.reviewNotes.filter { $0.contains("excluded") || $0.contains("edits") || $0.contains("conflicts") || $0.contains("adjustments") }.prefix(2))
+            appendPrivacyNoteIfNeeded(to: &notes, summary: summary)
+            appendSection("Notes", items: notes, to: &lines)
             return lines.joined(separator: "\n")
 
         case .latestImport, .general:
@@ -557,28 +593,46 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         if let latest = summary.latestImport {
-            lines.append("Latest import: \(latest.label) on \(formatDate(latest.importedAt)).")
-            lines.append("Imported \(latest.importedBalanceCount) balance(s), \(latest.importedTransactionCount) transaction(s), and \(latest.importedHoldingCount) holding(s).")
+            lines.append("Latest import was \(latest.label) on \(formatDate(latest.importedAt)).")
+
+            var importedItems = [
+                "Balances: \(latest.importedBalanceCount)",
+                "Transactions: \(latest.importedTransactionCount)",
+                "Holdings: \(latest.importedHoldingCount)"
+            ]
             if let parserName = latest.parserName {
-                lines.append("Parser: \(parserName).")
+                importedItems.append("Parser: \(parserName)")
             }
             if let institutionName = latest.detectedInstitutionName {
-                lines.append("Detected institution: \(institutionName).")
+                importedItems.append("Detected institution: \(institutionName)")
             }
+            appendSection("Imported Records", items: importedItems, to: &lines)
+
+            var reviewItems: [String] = []
             if latest.unresolvedAccountMappingCount > 0 {
-                lines.append("\(latest.unresolvedAccountMappingCount) record(s) from the latest import still need account mapping review.")
+                reviewItems.append("Unresolved mappings: \(latest.unresolvedAccountMappingCount)")
             }
             if latest.excludedRecordCount > 0 || latest.editedRecordCount > 0 {
-                lines.append("Latest import has \(latest.excludedRecordCount) excluded record(s) and \(latest.editedRecordCount) edited record(s).")
+                reviewItems.append("Excluded records: \(latest.excludedRecordCount)")
+                reviewItems.append("Edited records: \(latest.editedRecordCount)")
             }
+            appendSection("Review", items: reviewItems, to: &lines)
         }
 
         if focus == .general {
-            lines.append("Across imports: \(summary.totalImportedBalanceCount) balance(s), \(summary.totalImportedTransactionCount) transaction(s), \(summary.totalImportedHoldingCount) holding(s).")
-            lines.append("Review counts: \(summary.duplicateTransactionCandidateCount) duplicate candidate record(s), \(summary.conflictCount) conflict/adjustment record(s), \(summary.unresolvedAccountMappingCount) unresolved mapping record(s).")
+            appendSection("Across Imports", items: [
+                "Balances: \(summary.totalImportedBalanceCount)",
+                "Transactions: \(summary.totalImportedTransactionCount)",
+                "Holdings: \(summary.totalImportedHoldingCount)",
+                "Duplicate candidates: \(summary.duplicateTransactionCandidateCount)",
+                "Conflicts or adjustments: \(summary.conflictCount)",
+                "Unresolved mappings: \(summary.unresolvedAccountMappingCount)"
+            ], to: &lines)
         }
-        appendTransactionPrivacyLineIfNeeded(to: &lines, summary: summary)
-        lines.append(contentsOf: summary.reviewNotes.prefix(4))
+
+        var notes = Array(summary.reviewNotes.prefix(4))
+        appendPrivacyNoteIfNeeded(to: &notes, summary: summary)
+        appendSection("Notes", items: notes, to: &lines)
         return lines.joined(separator: "\n")
     }
 
@@ -672,17 +726,19 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         }
 
         var lines = [
-            "DebtScope found \(summary.recommendationCount) cleanup recommendation(s).",
-            "These are suggestions only; each change requires normal app confirmation."
+            "DebtScope found \(summary.recommendationCount) cleanup recommendation(s)."
         ]
 
-        lines.append(contentsOf: summary.recommendations.prefix(5).map { recommendation in
-            "- \(recommendation.title): review \(recommendation.affectedRecordCount) item(s) in \(recommendation.destination.title). \(recommendation.expectedBenefit)"
-        })
-
-        if !summary.transactionLevelDetailAvailable {
-            lines.append("Transaction-level detail is disabled, so import-related recommendations stay at count level.")
+        let recommendations = summary.recommendations.prefix(5).map { recommendation in
+            "\(recommendation.title): review \(recommendation.affectedRecordCount) item(s) in \(recommendation.destination.title). \(recommendation.expectedBenefit)"
         }
+        appendSection("Recommended Reviews", items: recommendations, to: &lines)
+
+        var notes = ["These are suggestions only; each change requires normal app confirmation."]
+        if !summary.transactionLevelDetailAvailable {
+            notes.append("Transaction-level detail is disabled, so import-related recommendations stay at count level.")
+        }
+        appendSection("Notes", items: notes, to: &lines)
 
         return lines.joined(separator: "\n")
     }
@@ -744,8 +800,8 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             lines = [cleanStateLine]
         }
 
-        lines.append(contentsOf: guidanceLines)
-        lines.append("I can't make the change directly; it needs the normal app confirmation flow.")
+        appendSection("How To Review", items: guidanceLines, to: &lines)
+        appendSection("Notes", items: ["I can't make the change directly; it needs the normal app confirmation flow."], to: &lines)
         return lines.joined(separator: "\n")
     }
 
@@ -762,15 +818,19 @@ final class DebtScopeAssistantViewModel: ObservableObject {
             return "DebtScope does not show bills due in the next 30 days."
         }
 
-        let lines = bills.prefix(8).map { bill in
+        var lines = [
+            "DebtScope shows \(bills.count) bill(s) due in the next 30 days."
+        ]
+        let billLines = bills.prefix(8).map { bill in
             let date = bill.dueDate.map { formatDate($0) } ?? "no due date"
-            var line = "- \(bill.name): \(formatCurrency(bill.amount, currencyCode: currencyCode)) due \(date)"
+            var line = "\(bill.name): \(formatCurrency(bill.amount, currencyCode: currencyCode)) due \(date)"
             if let fundingSourceName = bill.fundingSourceName {
                 line += ", funded by \(fundingSourceName)"
             }
             return line
         }
-        return (["Upcoming bills in the next 30 days:"] + lines).joined(separator: "\n")
+        appendSection("Upcoming Bills", items: billLines, to: &lines)
+        return lines.joined(separator: "\n")
     }
 
     private func formatDebtAffordability(_ summary: AssistantCashFlowSummary, prompt: String) -> String {
@@ -783,20 +843,43 @@ final class DebtScopeAssistantViewModel: ObservableObject {
         let canFit = available >= requestedAmount
         var lines = [
             canFit
-                ? "Based on DebtScope cash-flow data, an extra \(formatCurrency(requestedAmount, currencyCode: summary.currencyCode)) monthly debt payment appears to fit the current budget context."
-                : "Based on DebtScope cash-flow data, an extra \(formatCurrency(requestedAmount, currencyCode: summary.currencyCode)) monthly debt payment does not appear to fit the current budget context.",
-            "Reserve-adjusted amount available for debt: \(formatCurrency(available, currencyCode: summary.currencyCode)).",
-            "Recurring monthly income: \(formatCurrency(summary.monthlyIncome, currencyCode: summary.currencyCode)); recurring monthly bills: \(formatCurrency(summary.monthlyBills, currencyCode: summary.currencyCode)).",
-            "This is a DebtScope planning estimate, not financial advice."
+                ? "An extra \(formatCurrency(requestedAmount, currencyCode: summary.currencyCode)) monthly debt payment appears to fit the current budget context."
+                : "An extra \(formatCurrency(requestedAmount, currencyCode: summary.currencyCode)) monthly debt payment does not appear to fit the current budget context."
         ]
-        lines.append(contentsOf: summary.missingDataNotes.prefix(3))
+
+        appendSection("Cash Flow", items: [
+            "Reserve-adjusted amount available for debt: \(formatCurrency(available, currencyCode: summary.currencyCode))",
+            "Recurring monthly income: \(formatCurrency(summary.monthlyIncome, currencyCode: summary.currencyCode))",
+            "Recurring monthly bills: \(formatCurrency(summary.monthlyBills, currencyCode: summary.currencyCode))"
+        ], to: &lines)
+
+        var notes = ["This is a DebtScope planning estimate, not financial advice."]
+        notes.append(contentsOf: summary.missingDataNotes.prefix(3))
+        appendSection("Notes", items: notes, to: &lines)
         return lines.joined(separator: "\n")
     }
 
+    private func appendSection(_ title: String, items: [String], to lines: inout [String]) {
+        guard !items.isEmpty else { return }
+        lines.append("")
+        lines.append(title)
+        lines.append(contentsOf: items.map { "- \($0)" })
+    }
+
+    private func appendNotes(_ notes: [String], to lines: inout [String], limit: Int = 3) {
+        appendSection("Notes", items: Array(notes.prefix(limit)), to: &lines)
+    }
+
+    private func appendPrivacyNoteIfNeeded(to notes: inout [String], summary: AssistantImportReviewSummary) {
+        if !summary.transactionLevelDetailAvailable {
+            notes.append("Transaction-level detail is disabled, so this answer stays at count level.")
+        }
+    }
+
     private func missingDataResponse(_ lead: String, notes: [String]) -> String {
-        let noteLines = notes.prefix(3).map { "- \($0)" }
-        guard !noteLines.isEmpty else { return lead }
-        return ([lead, "Missing data:"] + noteLines).joined(separator: "\n")
+        var lines = [lead]
+        appendSection("Missing Data", items: Array(notes.prefix(3)), to: &lines)
+        return lines.joined(separator: "\n")
     }
 
     private func requestedMonthlyAmount(in prompt: String) -> Decimal? {

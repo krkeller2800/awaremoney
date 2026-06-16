@@ -312,7 +312,8 @@ private struct AssistantMessageRow: View {
                     .foregroundStyle(.secondary)
 
                 Text(message.text)
-                    .font(.body)
+                    .font(messageFont)
+                    .lineSpacing(isUserMessage ? 0 : 2)
                     .foregroundStyle(foregroundStyle)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -352,6 +353,15 @@ private struct AssistantMessageRow: View {
             return "DebtScope"
         case .systemNotice:
             return "Notice"
+        }
+    }
+
+    private var messageFont: Font {
+        switch message.role {
+        case .user:
+            return .body
+        case .assistant, .systemNotice:
+            return .callout
         }
     }
 
