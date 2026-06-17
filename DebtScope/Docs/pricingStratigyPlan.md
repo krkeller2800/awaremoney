@@ -172,14 +172,11 @@ Use this source when presenting `PaywallView` from import, Settings, About, Quic
 Update `PurchaseManager` responsibilities:
 
 - Keep the current lifetime product ID and free import allowance unchanged.
-- Add debug-only conversion counters stored in `UserDefaults` or Keychain-safe local storage.
-- Record paywall impressions by source.
-- Record purchase button taps.
-- Record purchase outcomes: success, cancelled, pending, unverified, failed.
-- Record product loading outcomes: success, empty, error.
-- Expose a debug summary string for `DebugSettingsView` and/or `SettingsView` developer section.
+- Keep `PaywallSource` threaded through paywall presentations so future analytics can attribute entry points.
+- Keep lightweight recording hook methods for paywall impressions, purchase button taps, purchase outcomes, and product loading outcomes.
+- Do not store local conversion counters or expose conversion diagnostics in Settings.
 
-Avoid adding remote analytics in this pass. Keep all diagnostics local.
+Avoid adding remote analytics in this pass. Future remote analytics require explicit privacy and App Store messaging review.
 
 ### PaywallView.swift
 

@@ -135,15 +135,6 @@ struct SettingsView: View {
                     LabeledContent("StoreKit Purchase", value: purchases.isPurchased ? "Active" : "Inactive")
                     LabeledContent("Effective Premium", value: purchases.hasPremiumAccess ? "Active" : "Inactive")
                     LabeledContent("Free Imports Used", value: "\(purchases.freeImportsUsed) of \(purchases.freeImportLimit)")
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Conversion Diagnostics")
-                            .font(.subheadline.weight(.semibold))
-                        Text(purchases.debugConversionSummary)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-
                     Button("Reset Free Imports") {
                         purchases.resetFreeImportAllowanceForDebug()
                         resetResultMessage = "Free imports were reset. All \(purchases.freeImportLimit) free imports are available again."
