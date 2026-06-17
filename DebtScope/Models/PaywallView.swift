@@ -25,14 +25,20 @@ struct PaywallView: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            header
-            allowanceStatus
-            purchaseSection
-            restoreSection
-            footer
+        ScrollView {
+            VStack(spacing: 20) {
+                header
+                sourceMessage
+                valueBullets
+                allowanceStatus
+                purchaseSection
+                restoreSection
+                footer
+            }
+            .padding()
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
         }
-        .padding()
         .presentationDetents([.medium, .large])
         .task {
             if !didRecordImpression {
@@ -72,11 +78,36 @@ struct PaywallView: View {
             Image(systemName: "star.circle.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.yellow)
-            Text("Premium Access")
+            Text("Unlock Lifetime Premium")
                 .font(.title.bold())
-            Text("Unlock lifetime premium features")
+                .multilineTextAlignment(.center)
+            Text("Unlimited local finance planning with no subscription, ads, or bank login.")
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
+    }
+
+    private var sourceMessage: some View {
+        Group {
+            if let message = source.contextMessage {
+                Label(message, systemImage: source.contextSystemImage)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var valueBullets: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Unlimited statement imports and review history", systemImage: "tray.and.arrow.down.fill")
+            Label("Debt payoff plans, strategy comparisons, and extra-payment impact", systemImage: "chart.line.uptrend.xyaxis")
+            Label("Cash flow, bills, reserves, and net worth in one place", systemImage: "list.bullet.rectangle.fill")
+            Label("Backup, restore, local search, Spotlight, and optional on-device assistant", systemImage: "lock.shield.fill")
+        }
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var allowanceStatus: some View {
@@ -142,7 +173,7 @@ struct PaywallView: View {
     }
 
     private func purchaseButtonTitle(for product: Product) -> String {
-        "Buy Lifetime — \(product.displayPrice)"
+        "Unlock Lifetime - \(product.displayPrice)"
     }
 
     private var restoreSection: some View {
@@ -160,7 +191,7 @@ struct PaywallView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Text("Includes 4 free imports. After those imports, a one-time purchase is required to continue importing.")
+            Text("One-time purchase. No subscription. Your financial data stays local unless you choose to export or share it.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -174,6 +205,40 @@ struct PaywallView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 8)
+    }
+}
+
+private extension PaywallSource {
+    var contextMessage: String? {
+        switch self {
+        case .fifthImport:
+            return "Your trial imports are used. Unlock Premium to keep importing statements and building your plan."
+        case .externalImport:
+            return "Unlock Premium to import this file and continue your local financial history."
+        case .backupRestore:
+            return "Unlock Premium to protect and move your local DebtScope data."
+        case .assistant:
+            return "Unlock Premium for private on-device finance assistance where supported."
+        case .payoffResult:
+            return "Unlock Premium to keep comparing payoff strategies and refining your plan."
+        case .settings, .about, .unknown:
+            return nil
+        }
+    }
+
+    var contextSystemImage: String {
+        switch self {
+        case .fifthImport, .externalImport:
+            return "doc.badge.plus"
+        case .backupRestore:
+            return "externaldrive.badge.timemachine"
+        case .assistant:
+            return "sparkles"
+        case .payoffResult:
+            return "chart.line.uptrend.xyaxis"
+        case .settings, .about, .unknown:
+            return "star.circle"
+        }
     }
 }
 
