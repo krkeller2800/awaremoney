@@ -52,13 +52,25 @@ struct SettingsView: View {
                 }
 
                 Section("Purchases") {
-                    Button("Upgrade to Premium") {
+                    Button {
+                        purchases.userMessage = nil
+                        purchases.errorMessage = nil
                         showPaywall = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Lifetime Premium")
+                            Text("Unlimited imports, backup/restore, payoff insights, and private local tools.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .buttonStyle(.borderless)
                     .disabled(purchases.hasPremiumAccess)
+
                     Button("Restore Purchases") {
                         Task { await purchases.restorePurchases() }
                     }
+                    .buttonStyle(.borderless)
                 }
 
                 Section("Data & Privacy") {

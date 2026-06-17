@@ -73,13 +73,18 @@ struct AboutView: View {
                             HStack {
                                 Spacer()
                                 Image(systemName: "star.fill")
-                                Text("Upgrade to Premium")
+                                Text("Unlock Lifetime Premium")
                                     .font(.headline)
                                 Spacer()
                             }
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(purchases.hasPremiumAccess)
+
+                        Text("Unlimited local planning with no subscription.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     .padding(.top, 10)
 

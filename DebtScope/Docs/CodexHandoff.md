@@ -2,37 +2,42 @@
 
 ## Current Focus
 - Pricing strategy implementation is in progress.
-- Paywall source modeling, Backup & Restore soft Premium upsell, local debug conversion diagnostics, and lifetime paywall messaging refresh are complete.
-- User reported smoke testing and git commit are complete for the paywall messaging pass.
+- Paywall source modeling, Backup & Restore soft Premium upsell, local debug conversion diagnostics, lifetime paywall messaging refresh, and trial language cleanup are complete.
+- User smoke tested the trial language/paywall presentation pass and committed the work.
 
 ## Completed / Verified Context
 - Added `PaywallSource` as a lightweight source model for Premium/paywall presentations.
-- Updated `PaywallView` to accept `source: PaywallSource = .unknown`.
+- Updated `PaywallView` to accept `source: PaywallSource = .unknown` and record DEBUG-only local conversion diagnostics.
 - Wired known paywall sources for import limit, external import, Settings, About, QuickStart trial banner, and Backup & Restore.
-- Added a soft Premium section to Backup & Restore that preserves free backup export, sharing, and restore access.
+- Added a soft Premium section to Backup & Restore while preserving free backup export, sharing, and restore access.
 - Added DEBUG-only local conversion counters in `PurchaseManager`, backed by `UserDefaults`.
-- Debug counters track paywall impressions by source, purchase taps by source, purchase outcomes, and product load outcomes.
 - Settings Developer section exposes a concise `Conversion Diagnostics` summary.
-- Refreshed `PaywallView` copy around `Unlock Lifetime Premium`, broader local finance planning value, no subscription/ads/bank login, concise `Label` value bullets, and `Unlock Lifetime - {price}` button text.
+- Refreshed `PaywallView` copy around `Unlock Lifetime Premium`, broader local finance planning value, no subscription/ads/bank login, concise value bullets, and `Unlock Lifetime - {price}` button text.
 - Added source-specific paywall messages for fifth import, external import, backup/restore, assistant, and payoff result.
+- Updated trial/import allowance wording away from quota-only copy:
+  - Active status uses `Trial active: {remaining} statement imports included` in shared status contexts.
+  - Sidebar `TrialBanner` uses compact copy like `Trial: 4 statement imports` to avoid truncation.
+  - Exhausted import gates use trial/lifetime wording and `Unlock Lifetime` CTAs.
+- Updated `PaywallView` to present at the large detent only so the Premium paywall opens full height.
 - No remote analytics were added.
 - Lifetime product ID, free import allowance, entitlement behavior, StoreKit configuration, backup/share/restore access, and price behavior were not changed.
 - Focused Xcode diagnostics passed for touched files.
 - Full Xcode builds passed after the changes.
-- User smoke tested diagnostics and paywall messaging successfully and committed the work.
+- User smoke tested and committed the work.
 
 ## Recent Smoke Test Results
-- Paywall impressions: fifthImport 2, settings 2, about 2, backupRestore 3, unknown 1; externalImport/payoffResult/assistant remained 0 in this pass.
-- Purchase taps: fifthImport 1, unknown 1; other sources 0.
-- Purchase outcomes: cancelled 2; success/pending/unverified/failed 0.
-- Product loads: success 2; empty/error 0.
-- Source attribution worked for tested fifth-import, Settings, About, and Backup & Restore entry points.
-- The existing `unknown` impression/tap path remains acceptable for diagnostics and can be assigned a concrete `PaywallSource` later.
+- Trial banner no longer truncates in the iPad sidebar after compact copy change.
+- Fifth-import Premium paywall opens full height after using only the large presentation detent.
+- Trial/exhausted messaging was exercised through the import/paywall flow.
+- Previous conversion diagnostics smoke pass showed source attribution working for fifth-import, Settings, About, and Backup & Restore entry points.
 
 ## Files Recently Touched
 - `DebtScope/Models/PaywallSource.swift`
 - `DebtScope/Models/PaywallView.swift`
 - `DebtScope/Models/PurchaseManager.swift`
+- `DebtScope/Models/ImportViewModel.swift`
+- `DebtScope/Parsers/QuickIngestHints.swift`
+- `DebtScope/Utils/TrialBanner.swift`
 - `DebtScope/Utils/SettingsView.swift`
 - `DebtScope/View/Import/ImportFlowView.swift`
 - `DebtScope/View/Import/ReviewImportView.swift`
@@ -49,14 +54,13 @@
 - Keep the current low lifetime price during this conversion-improvement pass.
 
 ## Suggested Next Step
-- Continue with trial language cleanup from `pricingStratigyPlan.md`.
-- Update `PurchaseManager.freeImportStatusText` and consuming UI surfaces away from quota-only wording like `free imports remaining`.
-- Suggested active copy: `Trial active: {remaining} statement imports included`.
-- Suggested exhausted copy where needed: `Trial imports used. Unlock Lifetime Premium for unlimited local planning.`
-- Keep the free import allowance, gating rules, StoreKit product ID, entitlement behavior, restore flow, and price behavior unchanged.
-- After trial language cleanup, consider improving Settings/About upgrade row context before opening the paywall.
+- Continue `pricingStratigyPlan.md` with Settings/About upgrade row context improvements.
+- Settings suggested row: `Lifetime Premium` with supporting text `Unlimited imports, backup/restore, payoff insights, and private local tools.`
+- About suggested context: `Unlock Lifetime Premium` with supporting text `Unlimited local planning with no subscription.`
+- Keep restore purchase access nearby and unchanged.
+- Keep free import allowance, gating rules, StoreKit product ID, entitlement behavior, restore flow, and price behavior unchanged.
 
 ## Notes / Risks
-- `PurchaseManager.freeImportStatusText` is likely consumed by multiple UI surfaces; update carefully and smoke test each visible location.
-- The debug summary still shows one `unknown` paywall impression/tap from a default-source path. This is acceptable for diagnostics, but can be cleaned up later by assigning a concrete `PaywallSource` where appropriate.
-- External import, payoff result, and assistant paywall source messages exist but were not exercised in the latest smoke pass.
+- The debug summary previously showed one `unknown` paywall impression/tap from a default-source path. This is acceptable for diagnostics, but can be cleaned up later by assigning a concrete `PaywallSource` where appropriate.
+- External import, payoff result, and assistant paywall source messages exist but have not all been exercised in the latest smoke passes.
+- Any future remote analytics would require explicit privacy/App Store messaging review first.
