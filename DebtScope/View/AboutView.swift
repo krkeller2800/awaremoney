@@ -97,7 +97,7 @@ struct AboutView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(isPresented: $showPaywall) {
-            PaywallView()
+            PaywallView(source: .about)
                 .environmentObject(purchases)
         }
     }

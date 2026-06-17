@@ -302,6 +302,7 @@ struct QuickStartView: View {
     @State private var showHelp = false
     @State private var showDebug = false
     @State private var showPaywall = false
+    @State private var paywallSource: PaywallSource = .unknown
     @State private var importReadyWarningMessage: String? = nil
     @State private var importProgressID: UUID? = nil
     @State private var showImportProgress = false
@@ -994,7 +995,7 @@ struct QuickStartView: View {
             SettingsView()
         }
         .sheet(isPresented: $showPaywall) {
-            PaywallView()
+            PaywallView(source: paywallSource)
                 .environmentObject(PurchaseManager.shared)
         }
         .sheet(isPresented: $showBackupRestore) {
@@ -1122,6 +1123,7 @@ struct QuickStartView: View {
                     )
 
                     TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                        paywallSource = .fifthImport
                         showPaywall = true
                     }
                     .padding(.horizontal, 8)
@@ -1168,6 +1170,7 @@ struct QuickStartView: View {
                     )
 
                     TrialBanner(horizontalPadding: 0, textLineLimit: 1) {
+                        paywallSource = .fifthImport
                         showPaywall = true
                     }
                     .padding(.horizontal, 12)

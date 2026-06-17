@@ -24,6 +24,7 @@ struct ImportFlowView: View {
     @State private var hasLoadedBatchesOnce: Bool = false
     @State private var suppressNextAutoNavigation: Bool = false
     @State private var showPaywall: Bool = false
+    @State private var paywallSource: PaywallSource = .unknown
     @State private var externalImportActive: Bool = false
     @State private var showImportError: Bool = false
 
@@ -63,9 +64,14 @@ struct ImportFlowView: View {
         _coordinator = State(initialValue: StatementImportCoordinator(vm: vm))
     }
 
+    private func presentPaywall(source: PaywallSource) {
+        paywallSource = source
+        showPaywall = true
+    }
+
     private func handlePendingURLWithIntake(_ url: URL) {
         guard purchases.isPremiumUnlocked else {
-            showPaywall = true
+            presentPaywall(source: .externalImport)
             importRouter.pendingURL = nil
             return
         }
@@ -114,7 +120,7 @@ struct ImportFlowView: View {
 
     private func applyExternal(kind: ExternalDocKind, url: URL) {
         guard purchases.isPremiumUnlocked else {
-            showPaywall = true
+            presentPaywall(source: .externalImport)
             return
         }
         switch kind {
@@ -685,7 +691,9 @@ struct ImportFlowView: View {
             .onAppear {
                 AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
                 isActive = true
-                showPaywall = !purchases.isPremiumUnlocked
+                if !purchases.isPremiumUnlocked {
+                    presentPaywall(source: .fifthImport)
+                }
             }
             .onDisappear {
                 isActive = false
@@ -736,7 +744,7 @@ struct ImportFlowView: View {
                     set: { showPaywall = $0 }
                 )
             ) {
-                PaywallView()
+                PaywallView(source: paywallSource)
                     .environmentObject(purchases)
             }
             .sheet(isPresented: $showDocKindSheet) {
@@ -1029,7 +1037,7 @@ struct ImportFlowView: View {
             AMLogging.log("ImportFlowView: modelContext id=\(ObjectIdentifier(modelContext))", component: "Import")
             let shouldShow = !purchases.isPremiumUnlocked
             if shouldShow && !externalImportActive && importRouter.pendingURL == nil && vm.staged == nil && vm.mappingSession == nil {
-                showPaywall = true
+                presentPaywall(source: .fifthImport)
             }
             isActive = true
         }
@@ -1107,7 +1115,7 @@ struct ImportFlowView: View {
                 set: { showPaywall = $0 }
             )
         ) {
-            PaywallView()
+            PaywallView(source: paywallSource)
                 .environmentObject(purchases)
         }
         .sheet(isPresented: $showDocKindSheet) {
@@ -1259,7 +1267,7 @@ struct ImportFlowView: View {
             case .success(let urls):
                 guard let url = urls.first else { return }
                 guard purchases.isPremiumUnlocked else {
-                    showPaywall = true
+                    presentPaywall(source: .fifthImport)
                     return
                 }
                 beginCoordinatorImport(url, hint: statementHint(from: vm.newAccountType), source: "fileImporter")

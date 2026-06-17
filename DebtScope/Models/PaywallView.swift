@@ -2,10 +2,16 @@ import SwiftUI
 import StoreKit
 
 struct PaywallView: View {
+    let source: PaywallSource
+
     @EnvironmentObject var purchases: PurchaseManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showLongPurchaseHint = false
+
+    init(source: PaywallSource = .unknown) {
+        self.source = source
+    }
     
     private var isActivelyLoading: Bool {
         // Only show the spinner during initial/active load when no product is available
@@ -174,17 +180,21 @@ extension View {
     ///   - isPresented: A binding you control to show the paywall.
     ///   - purchases: A purchase manager instance.
     /// - Returns: A view that conditionally overlays a paywall sheet.
-    func paywalled(isPresented: Binding<Bool>, purchases: PurchaseManager) -> some View {
+    func paywalled(
+        isPresented: Binding<Bool>,
+        purchases: PurchaseManager,
+        source: PaywallSource = .unknown
+    ) -> some View {
         self
             .sheet(isPresented: isPresented) {
-                PaywallView()
+                PaywallView(source: source)
                     .environmentObject(purchases)
             }
     }
 
     /// Convenience overload that uses the shared PurchaseManager. Kept @MainActor to safely access `.shared`.
     @MainActor
-    func paywalled(isPresented: Binding<Bool>) -> some View {
-        paywalled(isPresented: isPresented, purchases: PurchaseManager.shared)
+    func paywalled(isPresented: Binding<Bool>, source: PaywallSource = .unknown) -> some View {
+        paywalled(isPresented: isPresented, purchases: PurchaseManager.shared, source: source)
     }
 }

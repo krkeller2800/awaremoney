@@ -169,7 +169,7 @@ struct SettingsView: View {
                 }
             }
             .sheet(isPresented: $showPaywall) {
-                PaywallView()
+                PaywallView(source: .settings)
                     .environmentObject(PurchaseManager.shared)
             }
             .alert(

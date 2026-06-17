@@ -401,7 +401,7 @@ struct ReviewImportView: View {
             Text(importLimitMessage)
         }
         .sheet(isPresented: $showPaywall) {
-            PaywallView()
+            PaywallView(source: .fifthImport)
                 .environmentObject(PurchaseManager.shared)
         }
     }

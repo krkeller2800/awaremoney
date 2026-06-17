@@ -8,6 +8,9 @@ struct BackupRestoreView: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var backupCoordinator: BackupOpenCoordinator
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var purchases = PurchaseManager.shared
+
+    @State private var showPaywall = false
 
     // Export
     @State private var backupDoc: BackupPackageDocument? = nil
@@ -38,6 +41,8 @@ struct BackupRestoreView: View {
     var body: some View {
         NavigationStack {
             List {
+                premiumSupportSection
+
                 Section("Backup & Restore") {
                     Button {
                         do {
@@ -138,6 +143,33 @@ struct BackupRestoreView: View {
             }) { item in
                 ActivityView(activityItems: [item.url])
                     .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView(source: .backupRestore)
+                    .environmentObject(PurchaseManager.shared)
+            }
+        }
+    }
+
+    private var premiumSupportSection: some View {
+        Section("Premium") {
+            Label {
+                Text("Premium supports unlimited imports and long-term local data portability.")
+            } icon: {
+                Image(systemName: "star.circle.fill")
+                    .foregroundStyle(.yellow)
+            }
+
+            Text("Backup export, sharing, and restore remain available below.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if !purchases.hasPremiumAccess {
+                Button {
+                    showPaywall = true
+                } label: {
+                    Label("Upgrade to Premium", systemImage: "star.fill")
+                }
             }
         }
     }

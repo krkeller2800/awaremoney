@@ -40,6 +40,5 @@
 - If future refinements are needed, validate both compact iPhone and regular-width iPad QuickStart flows because the views are shared across size classes.
 
 ## Notes / Risks
-- The Payoff Plan two-column layout is gated by regular horizontal size class, so any non-iPad regular-width presentation will also receive the split layout.
+- The Payoff Plan two-column layout is gated by regular horizontal size class; current iPhone compact presentations remain single-column.
 - The assistant can still fall back to free-form FoundationModels answers for prompts outside deterministic intent coverage, but instructions now request the same structured format.
-- `DebtScope.xcodeproj/project.pbxproj` shows local changes in the worktree; review before committing to ensure they are expected project metadata updates.
