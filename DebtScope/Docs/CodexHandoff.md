@@ -1,44 +1,47 @@
 # Codex Handoff
 
 ## Current Focus
-- Assistant readability and QuickStart/iPad layout refinements are implemented, build verified, and smoke testing is complete per user report.
-- No immediate engineering follow-up is required unless a regression appears in normal use or TestFlight.
+- Pricing strategy implementation has started.
+- The first coding change, Paywall Model, is complete.
+- Backup & Restore soft Premium upsell is complete.
+- User reported smoke testing and git commit are complete.
 
 ## Completed / Verified Context
-- Assistant chat readability was improved: assistant/system messages now use a smaller callout-sized font with slightly increased line spacing; user messages keep body font.
-- Deterministic assistant responses now use a phone-readable structure: short takeaway first, compact labeled sections, bullets for numbers, and caveats under Notes.
-- FoundationModels assistant instructions now ask free-form local AI answers to follow the same readable structure.
-- The prompt `What if I add $100 avalanche?` now routes to the deterministic extra-payment simulation path instead of the free-form model path.
-- A regression expectation was added for that exact prompt in `DebtScopeAssistantServiceTests`.
-- iPad/regular-width Account Detail no longer shows the inconsistent top quick-look summary grid; it now opens directly into the edit/detail list.
-- QuickStart Payoff Plan now uses a two-column regular-width layout: left column contains Current Plan, Needs Attention, Source, and Manage Liability Accounts; right column contains Payoff Order.
-- Compact/iPhone Payoff Plan remains single-column.
-- Focused diagnostics passed for all touched Swift files during the work.
-- Full Xcode builds passed after each change set.
-- Focused assistant prompt intent test passed after the prompt-routing fix.
-- Smoke testing is complete per user report.
+- Added `PaywallSource` as a lightweight source model for Premium/paywall presentations.
+- Updated `PaywallView` to accept `source: PaywallSource = .unknown`.
+- Wired known paywall sources for import limit, external import, Settings, About, QuickStart trial banner, and Backup & Restore.
+- Added a soft Premium section to Backup & Restore explaining that Premium supports unlimited imports and long-term local data portability.
+- Backup & Restore clearly states that backup export, sharing, and restore remain available below.
+- Added an Upgrade to Premium button in Backup & Restore that opens `PaywallView(source: .backupRestore)`.
+- No backup, share, restore, StoreKit, price, entitlement, or free import rules were changed.
+- Focused Xcode diagnostics passed for touched files.
+- Full Xcode builds passed after the changes.
+- User completed smoke testing and committed the work.
 
 ## Files Touched
-- `DebtScope/Account/AccountDetailView.swift`
-- `DebtScope/Assistant/DebtScopeAssistantInstructions.swift`
-- `DebtScope/Assistant/DebtScopeAssistantPromptIntent.swift`
-- `DebtScope/Assistant/DebtScopeAssistantView.swift`
-- `DebtScope/Assistant/DebtScopeAssistantViewModel.swift`
-- `DebtScope/Debt/DebtPayoffPlanView.swift`
-- `DebtScope/Testing/DebtScopeAssistantServiceTests.swift`
+- `DebtScope/Models/PaywallSource.swift`
+- `DebtScope/Models/PaywallView.swift`
+- `DebtScope/View/Import/ImportFlowView.swift`
+- `DebtScope/View/Import/ReviewImportView.swift`
+- `DebtScope/View/QuickStartView.swift`
+- `DebtScope/Utils/SettingsView.swift`
+- `DebtScope/View/AboutView.swift`
+- `DebtScope/Backup/BackupRestoreView.swift`
 - `DebtScope/Docs/CodexHandoff.md`
 
 ## Important Product Decisions
-- Assistant answers should prioritize readability on phone screens over dense paragraph output.
-- Structured deterministic assistant answers should be preferred for known financial workflows so formatting and caveats remain predictable.
-- Account Detail should stay focused on editable account data; duplicate quick-look summary metrics at the top are removed.
-- iPad Payoff Plan should use the available width for comparison/scanning: setup and context on the left, payoff order on the right.
-- iPhone/compact layouts should remain conservative and single-column.
+- Backup and restore should remain available to all users for now.
+- Backup & Restore should be a soft Premium value message, not a blocker.
+- Paywall source tracking is currently behind-the-scenes only; it does not create visible debug counters or source-specific copy yet.
+- No remote analytics should be added for the pricing diagnostics pass.
 
 ## Suggested Next Step
-- Commit the completed assistant readability, Account Detail cleanup, and iPad Payoff Plan layout work.
-- If future refinements are needed, validate both compact iPhone and regular-width iPad QuickStart flows because the views are shared across size classes.
+- Continue with the next section in `pricingStratigyPlan.md`: update `PurchaseManager` responsibilities.
+- Keep the lifetime product ID and free import allowance unchanged.
+- Add local debug-only conversion counters for paywall impressions by source, purchase taps/outcomes, and product load outcomes.
+- Expose a concise debug summary for developer/debug settings.
 
 ## Notes / Risks
-- The Payoff Plan two-column layout is gated by regular horizontal size class; current iPhone compact presentations remain single-column.
-- The assistant can still fall back to free-form FoundationModels answers for prompts outside deterministic intent coverage, but instructions now request the same structured format.
+- `PaywallSource` is now available for diagnostics, but no counters consume it yet.
+- Backup/restore source can only be observed through the Upgrade button until `PurchaseManager` debug tracking is implemented.
+- Any next pass touching purchase flows should be careful not to alter entitlement behavior or StoreKit product configuration unless explicitly requested.

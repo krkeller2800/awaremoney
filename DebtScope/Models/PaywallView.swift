@@ -8,6 +8,7 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showLongPurchaseHint = false
+    @State private var didRecordImpression = false
 
     init(source: PaywallSource = .unknown) {
         self.source = source
@@ -34,6 +35,10 @@ struct PaywallView: View {
         .padding()
         .presentationDetents([.medium, .large])
         .task {
+            if !didRecordImpression {
+                didRecordImpression = true
+                purchases.recordPaywallImpression(source: source)
+            }
             if purchases.product == nil {
                 await purchases.reloadProducts()
             }
@@ -94,6 +99,7 @@ struct PaywallView: View {
         VStack(spacing: 8) {
             if let product = purchases.product {
                 Button {
+                    purchases.recordPurchaseButtonTap(source: source)
                     Task { await purchases.purchase() }
                 } label: {
                     HStack {

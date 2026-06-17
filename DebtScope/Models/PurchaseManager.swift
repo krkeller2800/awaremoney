@@ -100,11 +100,13 @@ final class PurchaseManager: ObservableObject {
     }
 
     private let debugPremiumOverrideKey = "DebugPremiumOverride"
+    private let debugConversionCounterPrefix = "DebugConversionCounter"
     @Published var debugPremiumOverride: DebugPremiumOverride = .useStoreKit {
         didSet {
             UserDefaults.standard.set(debugPremiumOverride.rawValue, forKey: debugPremiumOverrideKey)
         }
     }
+    @Published private(set) var debugConversionSummary: String = ""
     #endif
 
     /// The entitlement the rest of the app should honor. In debug builds this can be overridden for QA.
@@ -184,13 +186,17 @@ final class PurchaseManager: ObservableObject {
            let override = DebugPremiumOverride(rawValue: storedOverride) {
             debugPremiumOverride = override
         }
+        refreshDebugConversionSummary()
         #endif
         Task { await configure() }
     }
 
     // MARK: - Public API
     func purchase() async {
-        guard let product else { return }
+        guard let product else {
+            recordPurchaseOutcomeForDebug(.failed)
+            return
+        }
         isPurchasing = true
         defer { isPurchasing = false }
         do {
@@ -201,21 +207,39 @@ final class PurchaseManager: ObservableObject {
                 case .verified(let transaction):
                     // Non-consumable purchased successfully
                     isPurchased = true
+                    recordPurchaseOutcomeForDebug(.success)
                     await transaction.finish()
                 case .unverified(_, let error):
                     self.errorMessage = error.localizedDescription
+                    recordPurchaseOutcomeForDebug(.unverified)
                 }
             case .userCancelled:
+                recordPurchaseOutcomeForDebug(.cancelled)
                 break
             case .pending:
                 // Pending (SCA or parental approval). Keep UI as-is.
+                recordPurchaseOutcomeForDebug(.pending)
                 break
             @unknown default:
+                recordPurchaseOutcomeForDebug(.failed)
                 break
             }
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            recordPurchaseOutcomeForDebug(.failed)
         }
+    }
+
+    func recordPaywallImpression(source: PaywallSource) {
+        #if DEBUG
+        incrementDebugCounter("paywall.impression.\(source.rawValue)")
+        #endif
+    }
+
+    func recordPurchaseButtonTap(source: PaywallSource) {
+        #if DEBUG
+        incrementDebugCounter("purchase.tap.\(source.rawValue)")
+        #endif
     }
 
     func restorePurchases() async {
@@ -276,16 +300,19 @@ final class PurchaseManager: ObservableObject {
                     self.errorMessage = nil
                     let sf: String = await currentStorefrontID()
                     self.iapDiagnosticSummary = "IAP: ok • pid=\(productShortCode) • sf=\(sf)"
+                    recordProductLoadOutcomeForDebug(.success)
                     return
                 } else {
                     let sf: String = await currentStorefrontID()
                     self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
+                    recordProductLoadOutcomeForDebug(.empty)
                     // No products returned; will retry after a short delay
                 }
             } catch {
                 self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 let msg: String = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 self.iapDiagnosticSummary = "IAP: error • pid=\(productShortCode) • \(msg)"
+                recordProductLoadOutcomeForDebug(.error)
             }
             if attempt < maxAttempts {
                 let ns: UInt64 = UInt64(delay * 1_000_000_000.0)
@@ -350,4 +377,67 @@ final class PurchaseManager: ObservableObject {
             }
         }
     }
+
+    private enum DebugPurchaseOutcome: String, CaseIterable {
+        case success
+        case cancelled
+        case pending
+        case unverified
+        case failed
+    }
+
+    private enum DebugProductLoadOutcome: String, CaseIterable {
+        case success
+        case empty
+        case error
+    }
+
+    private func recordPurchaseOutcomeForDebug(_ outcome: DebugPurchaseOutcome) {
+        #if DEBUG
+        incrementDebugCounter("purchase.outcome.\(outcome.rawValue)")
+        #endif
+    }
+
+    private func recordProductLoadOutcomeForDebug(_ outcome: DebugProductLoadOutcome) {
+        #if DEBUG
+        incrementDebugCounter("product.load.\(outcome.rawValue)")
+        #endif
+    }
+
+    #if DEBUG
+    private func incrementDebugCounter(_ name: String) {
+        let key = "\(debugConversionCounterPrefix).\(name)"
+        UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
+        refreshDebugConversionSummary()
+    }
+
+    private func debugCounter(_ name: String) -> Int {
+        UserDefaults.standard.integer(forKey: "\(debugConversionCounterPrefix).\(name)")
+    }
+
+    private func refreshDebugConversionSummary() {
+        let impressionSummary = PaywallSource.allCases
+            .map { source in "\(source.rawValue): \(debugCounter("paywall.impression.\(source.rawValue)"))" }
+            .joined(separator: ", ")
+
+        let tapSummary = PaywallSource.allCases
+            .map { source in "\(source.rawValue): \(debugCounter("purchase.tap.\(source.rawValue)"))" }
+            .joined(separator: ", ")
+
+        let purchaseSummary = DebugPurchaseOutcome.allCases
+            .map { outcome in "\(outcome.rawValue): \(debugCounter("purchase.outcome.\(outcome.rawValue)"))" }
+            .joined(separator: ", ")
+
+        let productLoadSummary = DebugProductLoadOutcome.allCases
+            .map { outcome in "\(outcome.rawValue): \(debugCounter("product.load.\(outcome.rawValue)"))" }
+            .joined(separator: ", ")
+
+        debugConversionSummary = """
+        Paywall impressions: \(impressionSummary)
+        Purchase taps: \(tapSummary)
+        Purchase outcomes: \(purchaseSummary)
+        Product loads: \(productLoadSummary)
+        """
+    }
+    #endif
 }
