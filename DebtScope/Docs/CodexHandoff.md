@@ -1,67 +1,32 @@
-Continue pricingStratigyPlan implementation. The prior recommendation to remove diagnostics was wrong: the plan depends on local debug diagnostics to measure paywall discovery, purchase intent, cancellations, product-load failures, and source attribution.
+Continue pricingStratigyPlan implementation.
 
 Current committed state:
-- Paywall copy/value messaging is updated.
-- PaywallSource exists.
-- PaywallView now requires explicit PaywallSource.
-- Existing active PaywallView call sites pass concrete sources.
-- PurchaseManager still has no-op recording hooks:
-  - recordPaywallImpression(source:)
-  - recordPurchaseButtonTap(source:)
-  - private recordPurchaseOutcome(_:)
-  - private recordProductLoadOutcome(_:)
-- Local counters were reverted/removed; no partial diagnostics changes remain in PurchaseManager.swift.
-- Settings has an existing #if DEBUG Developer section with premium override and free import reset.
+- Last commit: 1e14f42 Add debug purchase conversion diagnostics.
+- Working tree was clean after the commit.
+- Paywall copy/value messaging has been updated.
+- PaywallSource exists and PaywallView requires an explicit PaywallSource.
+- Active PaywallView call sites pass concrete sources.
+- PurchaseManager now has DEBUG-only local conversion diagnostics:
+  - paywallImpressionsTotal
+  - paywallImpressionsBySource
+  - purchaseButtonTaps
+  - successfulPurchases
+  - cancelledPurchases
+  - productLoadFailures
+- Conversion diagnostics persist locally in UserDefaults only in DEBUG builds.
+- Existing recording hooks are wired in DEBUG and remain non-customer-facing.
+- SettingsView's DEBUG Developer section is the correct place for conversion diagnostics.
+- DebugSettingsView is only for debug category/tool controls and should not be used for conversion diagnostics.
+- Focused PurchaseConversionDiagnosticsTests were added and passed.
+- Validation completed before commit: live diagnostics clean, full Xcode build passed, focused tests passed, manual smoke test passed.
 
-Next implementation:
-Add debug-only local conversion diagnostics, not remote analytics and not customer-facing normal Settings UI.
-
-Recommended implementation shape:
-1. Add a #if DEBUG value type near PurchaseManager:
-   PurchaseConversionDiagnostics: Codable, Equatable
-   - paywallImpressionsTotal
-   - paywallImpressionsBySource: [PaywallSource: Int]
-   - purchaseButtonTaps
-   - successfulPurchases
-   - cancelledPurchases
-   - productLoadFailures
-
-2. In PurchaseManager under #if DEBUG:
-   - @Published private(set) var conversionDiagnostics
-   - load/save diagnostics from UserDefaults
-   - updateConversionDiagnostics helper
-   - resetConversionDiagnosticsForDebug()
-
-3. Wire existing hooks:
-   - recordPaywallImpression(source:) increments total and source count in DEBUG; remains no-op in release.
-   - recordPurchaseButtonTap(source:) increments taps in DEBUG; source can be ignored unless adding per-source taps.
-   - recordPurchaseOutcome(.success) increments successfulPurchases.
-   - recordPurchaseOutcome(.cancelled) increments cancelledPurchases.
-   - recordProductLoadOutcome(.empty/.error) increments productLoadFailures.
-   - Do not count product-load success as a failure.
-
-4. Surface only in SettingsView #if DEBUG Developer section:
-   - Paywall Impressions
-   - impressions by source, preferably only non-zero sources
-   - Purchase Button Taps
-   - Successful Purchases
-   - Cancelled Purchases
-   - Product Load Failures
-   - Reset Conversion Diagnostics button
-
-5. Add focused tests if time:
-   - diagnostic counter model increments source impressions correctly
-   - purchase taps/success/cancel/failure counters increment correctly
-   - reset returns zero state
-   If target access is hard, keep tests for the pure value type only.
-
-6. Validate:
-   - XcodeRefreshCodeIssuesInFile for PurchaseManager.swift and SettingsView.swift
-   - BuildProject
-   - Smoke test: DEBUG Settings developer section appears, paywall impression increments after opening paywall, purchase tap increments after tapping purchase, reset clears counters.
-
-Important constraints:
+Important context:
+- The plan document has older text that says not to store/expose local conversion counters. That guidance is obsolete for the current implementation; the accepted direction is DEBUG-only local diagnostics in SettingsView's Developer section.
 - Do not add remote analytics.
-- Do not expose conversion diagnostics in non-debug builds.
+- Do not expose conversion diagnostics in release builds or customer-facing normal Settings UI.
 - Do not change product ID, price, entitlement rules, StoreKit config, restore behavior, or free import allowance.
 - Backup/restore remains free with soft premium messaging only.
+
+Next suggested step:
+- Continue the pricing strategy pass by verifying StoreKit reliability from the plan checklist: product ID/App Store Connect status, agreements/tax/banking, product loading outside local debug/test assumptions, empty-product handling, and restore behavior.
+- If implementation work is preferred instead, inspect pricingStratigyPlan for the next incomplete coding item after diagnostics and proceed narrowly.
