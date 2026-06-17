@@ -135,6 +135,30 @@ struct SettingsView: View {
                     LabeledContent("StoreKit Purchase", value: purchases.isPurchased ? "Active" : "Inactive")
                     LabeledContent("Effective Premium", value: purchases.hasPremiumAccess ? "Active" : "Inactive")
                     LabeledContent("Free Imports Used", value: "\(purchases.freeImportsUsed) of \(purchases.freeImportLimit)")
+
+                    let diagnostics = purchases.conversionDiagnostics
+                    LabeledContent("Paywall Impressions", value: diagnostics.paywallImpressionsTotal.formatted())
+
+                    let sourceImpressions = PaywallSource.allCases
+                        .compactMap { source -> (PaywallSource, Int)? in
+                            let count = diagnostics.paywallImpressionsBySource[source, default: 0]
+                            return count > 0 ? (source, count) : nil
+                        }
+                    if !sourceImpressions.isEmpty {
+                        ForEach(sourceImpressions, id: \.0) { source, count in
+                            LabeledContent(source.settingsDebugTitle, value: count.formatted())
+                        }
+                    }
+
+                    LabeledContent("Purchase Button Taps", value: diagnostics.purchaseButtonTaps.formatted())
+                    LabeledContent("Successful Purchases", value: diagnostics.successfulPurchases.formatted())
+                    LabeledContent("Cancelled Purchases", value: diagnostics.cancelledPurchases.formatted())
+                    LabeledContent("Product Load Failures", value: diagnostics.productLoadFailures.formatted())
+
+                    Button("Reset Conversion Diagnostics", role: .destructive) {
+                        purchases.resetConversionDiagnosticsForDebug()
+                    }
+
                     Button("Reset Free Imports") {
                         purchases.resetFreeImportAllowanceForDebug()
                         resetResultMessage = "Free imports were reset. All \(purchases.freeImportLimit) free imports are available again."
@@ -275,6 +299,23 @@ struct SettingsView: View {
         }
     }
 }
+
+#if DEBUG
+private extension PaywallSource {
+    var settingsDebugTitle: String {
+        switch self {
+        case .fifthImport: return "Fifth Import"
+        case .externalImport: return "External Import"
+        case .settings: return "Settings"
+        case .about: return "About"
+        case .backupRestore: return "Backup Restore"
+        case .payoffResult: return "Payoff Result"
+        case .assistant: return "Assistant"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+#endif
 
 private extension Notification.Name {
     static let restorePurchasesRequested = Notification.Name("RestorePurchasesRequested")

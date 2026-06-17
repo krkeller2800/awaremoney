@@ -1,59 +1,67 @@
-# Codex Handoff
+Continue pricingStratigyPlan implementation. The prior recommendation to remove diagnostics was wrong: the plan depends on local debug diagnostics to measure paywall discovery, purchase intent, cancellations, product-load failures, and source attribution.
 
-## Current Focus
-- Pricing strategy implementation is in progress.
-- Recent work focused on making the lifetime paywall clearer, preserving free backup/restore access, and tightening Settings/About upgrade entry points.
-- Local debug conversion counters and visible Settings conversion diagnostics were removed after review; `PaywallSource` and no-op recording hooks remain so future remote analytics can be added without re-threading source attribution.
+Current committed state:
+- Paywall copy/value messaging is updated.
+- PaywallSource exists.
+- PaywallView now requires explicit PaywallSource.
+- Existing active PaywallView call sites pass concrete sources.
+- PurchaseManager still has no-op recording hooks:
+  - recordPaywallImpression(source:)
+  - recordPurchaseButtonTap(source:)
+  - private recordPurchaseOutcome(_:)
+  - private recordProductLoadOutcome(_:)
+- Local counters were reverted/removed; no partial diagnostics changes remain in PurchaseManager.swift.
+- Settings has an existing #if DEBUG Developer section with premium override and free import reset.
 
-## Completed / Verified Context
-- Added `PaywallSource` modeling and wired known paywall sources for import limit, external import, Settings, About, QuickStart trial banner, and Backup & Restore.
-- Updated `PaywallView` with lifetime messaging, concise value bullets, source-specific context messages, `Unlock Lifetime - {price}` CTA, and large-only presentation detent.
-- Removed local conversion counter storage and the Settings `Conversion Diagnostics` display.
-- Kept analytics-ready hook methods for paywall impressions, purchase taps, purchase outcomes, and product load outcomes, but they intentionally do nothing for now.
-- Added Backup & Restore soft Premium value messaging while preserving free backup export, sharing, and restore access.
-- Updated trial/import allowance wording away from quota-only copy.
-- Updated Settings purchase row to `Lifetime Premium` with supporting text: `Unlimited imports, backup/restore, payoff insights, and private local tools.`
-- Updated About upgrade CTA to `Unlock Lifetime Premium` with supporting text: `Unlimited local planning with no subscription.`
-- Fixed Settings list button handling so canceling restore purchases does not cause the next Lifetime Premium tap to re-present restore confirmation.
-- Focused Xcode diagnostics and full Xcode builds passed after the recent changes.
-- User smoke tested the Settings restore/paywall interaction fix and committed it.
+Next implementation:
+Add debug-only local conversion diagnostics, not remote analytics and not customer-facing normal Settings UI.
 
-## Important Product Decisions
-- Backup and restore remain available to all users for now.
-- Backup & Restore remains a soft Premium value message, not a blocker.
-- Do not add remote analytics in this pass. Future remote analytics require explicit privacy/App Store messaging review first.
-- Keep current lifetime product ID, free import allowance, entitlement behavior, StoreKit configuration, restore flow, and price behavior unchanged unless explicitly requested.
-- Keep the current low lifetime price during this conversion-improvement pass.
+Recommended implementation shape:
+1. Add a #if DEBUG value type near PurchaseManager:
+   PurchaseConversionDiagnostics: Codable, Equatable
+   - paywallImpressionsTotal
+   - paywallImpressionsBySource: [PaywallSource: Int]
+   - purchaseButtonTaps
+   - successfulPurchases
+   - cancelledPurchases
+   - productLoadFailures
 
-## Strong Next Steps
-1. Audit remaining paywall entry points against `PaywallSource`.
-   - Confirm external import, payoff result, assistant, and any default `.unknown` presentations either have a concrete source or are intentionally unknown.
-   - Search for `PaywallView(` and check every call site.
-   - Goal: no accidental `.unknown` source paths for normal user flows.
+2. In PurchaseManager under #if DEBUG:
+   - @Published private(set) var conversionDiagnostics
+   - load/save diagnostics from UserDefaults
+   - updateConversionDiagnostics helper
+   - resetConversionDiagnosticsForDebug()
 
-2. Smoke test source-specific paywall copy from real user paths.
-   - Fifth import/exhausted trial flow.
-   - External file import flow.
-   - Backup & Restore soft upgrade section.
-   - Settings and About upgrade rows.
-   - Assistant/payoff result paywall paths if those gates are currently reachable.
-   - Goal: each entry point opens the paywall at large height, has correct context copy, and does not block free flows incorrectly.
+3. Wire existing hooks:
+   - recordPaywallImpression(source:) increments total and source count in DEBUG; remains no-op in release.
+   - recordPurchaseButtonTap(source:) increments taps in DEBUG; source can be ignored unless adding per-source taps.
+   - recordPurchaseOutcome(.success) increments successfulPurchases.
+   - recordPurchaseOutcome(.cancelled) increments cancelledPurchases.
+   - recordProductLoadOutcome(.empty/.error) increments productLoadFailures.
+   - Do not count product-load success as a failure.
 
-3. Review `pricingStratigyPlan.md` for completed/stale items.
-   - Mark or rewrite the `PurchaseManager` diagnostics section to match the current no-local-counters decision.
-   - Identify the next actual implementation item instead of carrying old diagnostics tasks forward.
-   - Goal: plan reflects product decisions and current code, not earlier exploratory ideas.
+4. Surface only in SettingsView #if DEBUG Developer section:
+   - Paywall Impressions
+   - impressions by source, preferably only non-zero sources
+   - Purchase Button Taps
+   - Successful Purchases
+   - Cancelled Purchases
+   - Product Load Failures
+   - Reset Conversion Diagnostics button
 
-4. Tighten purchase/paywall error surfaces if needed.
-   - Review `iapDiagnosticSummary` visibility in `PaywallView`; it is still user-visible when StoreKit product loading fails.
-   - Decide whether that text should remain diagnostic-style or become friendlier release copy.
-   - Goal: StoreKit failure state is understandable to a normal user without exposing unnecessary technical details.
+5. Add focused tests if time:
+   - diagnostic counter model increments source impressions correctly
+   - purchase taps/success/cancel/failure counters increment correctly
+   - reset returns zero state
+   If target access is hard, keep tests for the pure value type only.
 
-5. Consider final pricing-pass polish only after the above.
-   - Ensure lifetime value copy is consistent across paywall, Settings, About, Backup & Restore, and exhausted import gates.
-   - Avoid changing entitlement rules, import allowance, product ID, restore behavior, or price.
+6. Validate:
+   - XcodeRefreshCodeIssuesInFile for PurchaseManager.swift and SettingsView.swift
+   - BuildProject
+   - Smoke test: DEBUG Settings developer section appears, paywall impression increments after opening paywall, purchase tap increments after tapping purchase, reset clears counters.
 
-## Notes / Risks
-- Some source-specific messages exist but may not have been exercised recently from their real flows: external import, payoff result, and assistant.
-- `.unknown` should be treated as acceptable only for truly generic/manual presentations; normal app entry points should prefer a concrete `PaywallSource`.
-- Any future remote analytics would require privacy/App Store messaging review before implementation.
+Important constraints:
+- Do not add remote analytics.
+- Do not expose conversion diagnostics in non-debug builds.
+- Do not change product ID, price, entitlement rules, StoreKit config, restore behavior, or free import allowance.
+- Backup/restore remains free with soft premium messaging only.

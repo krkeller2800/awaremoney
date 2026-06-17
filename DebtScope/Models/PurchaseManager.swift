@@ -55,6 +55,38 @@ private enum ImportAllowanceKeychain {
     }
 }
 
+#if DEBUG
+struct PurchaseConversionDiagnostics: Codable, Equatable {
+    var paywallImpressionsTotal: Int = 0
+    var paywallImpressionsBySource: [PaywallSource: Int] = [:]
+    var purchaseButtonTaps: Int = 0
+    var successfulPurchases: Int = 0
+    var cancelledPurchases: Int = 0
+    var productLoadFailures: Int = 0
+
+    mutating func recordPaywallImpression(source: PaywallSource) {
+        paywallImpressionsTotal += 1
+        paywallImpressionsBySource[source, default: 0] += 1
+    }
+
+    mutating func recordPurchaseButtonTap() {
+        purchaseButtonTaps += 1
+    }
+
+    mutating func recordPurchaseSuccess() {
+        successfulPurchases += 1
+    }
+
+    mutating func recordPurchaseCancellation() {
+        cancelledPurchases += 1
+    }
+
+    mutating func recordProductLoadFailure() {
+        productLoadFailures += 1
+    }
+}
+#endif
+
 @MainActor
 final class PurchaseManager: ObservableObject {
     // MARK: - Configuration
@@ -100,6 +132,11 @@ final class PurchaseManager: ObservableObject {
     }
 
     private let debugPremiumOverrideKey = "DebugPremiumOverride"
+    private let conversionDiagnosticsKey = "PurchaseConversionDiagnostics"
+    @Published private(set) var conversionDiagnostics = PurchaseConversionDiagnostics() {
+        didSet { saveConversionDiagnostics() }
+    }
+
     @Published var debugPremiumOverride: DebugPremiumOverride = .useStoreKit {
         didSet {
             UserDefaults.standard.set(debugPremiumOverride.rawValue, forKey: debugPremiumOverrideKey)
@@ -171,6 +208,21 @@ final class PurchaseManager: ObservableObject {
         ImportAllowanceKeychain.saveBool(true, account: freeImportMigrationKey)
     }
 
+    #if DEBUG
+    func resetConversionDiagnosticsForDebug() {
+        conversionDiagnostics = PurchaseConversionDiagnostics()
+    }
+
+    private func updateConversionDiagnostics(_ update: (inout PurchaseConversionDiagnostics) -> Void) {
+        update(&conversionDiagnostics)
+    }
+
+    private func saveConversionDiagnostics() {
+        guard let data = try? JSONEncoder().encode(conversionDiagnostics) else { return }
+        UserDefaults.standard.set(data, forKey: conversionDiagnosticsKey)
+    }
+    #endif
+
     private func setFreeImportsUsed(_ value: Int) {
         freeImportsUsed = max(0, min(value, freeImportLimit))
         ImportAllowanceKeychain.saveInt(freeImportsUsed, account: freeImportsUsedKey)
@@ -180,6 +232,10 @@ final class PurchaseManager: ObservableObject {
     init() {
         freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
         #if DEBUG
+        if let data = UserDefaults.standard.data(forKey: conversionDiagnosticsKey),
+           let diagnostics = try? JSONDecoder().decode(PurchaseConversionDiagnostics.self, from: data) {
+            conversionDiagnostics = diagnostics
+        }
         if let storedOverride = UserDefaults.standard.string(forKey: debugPremiumOverrideKey),
            let override = DebugPremiumOverride(rawValue: storedOverride) {
             debugPremiumOverride = override
@@ -228,13 +284,20 @@ final class PurchaseManager: ObservableObject {
     }
 
     func recordPaywallImpression(source: PaywallSource) {
+        #if DEBUG
+        updateConversionDiagnostics { $0.recordPaywallImpression(source: source) }
+        #else
         _ = source
-        // Future analytics hook. Intentionally no local conversion counters.
+        #endif
     }
 
     func recordPurchaseButtonTap(source: PaywallSource) {
+        #if DEBUG
         _ = source
-        // Future analytics hook. Intentionally no local conversion counters.
+        updateConversionDiagnostics { $0.recordPurchaseButtonTap() }
+        #else
+        _ = source
+        #endif
     }
 
     func restorePurchases() async {
@@ -388,12 +451,30 @@ final class PurchaseManager: ObservableObject {
     }
 
     private func recordPurchaseOutcome(_ outcome: PurchaseOutcome) {
+        #if DEBUG
+        switch outcome {
+        case .success:
+            updateConversionDiagnostics { $0.recordPurchaseSuccess() }
+        case .cancelled:
+            updateConversionDiagnostics { $0.recordPurchaseCancellation() }
+        case .pending, .unverified, .failed:
+            break
+        }
+        #else
         _ = outcome
-        // Future analytics hook. Intentionally no local conversion counters.
+        #endif
     }
 
     private func recordProductLoadOutcome(_ outcome: ProductLoadOutcome) {
+        #if DEBUG
+        switch outcome {
+        case .empty, .error:
+            updateConversionDiagnostics { $0.recordProductLoadFailure() }
+        case .success:
+            break
+        }
+        #else
         _ = outcome
-        // Future analytics hook. Intentionally no local conversion counters.
+        #endif
     }
 }
