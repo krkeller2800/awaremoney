@@ -146,9 +146,9 @@ final class PurchaseManager: ObservableObject {
         }
         let remaining = freeImportsRemaining
         if remaining > 0 {
-            return "\(remaining) free import\(remaining == 1 ? "" : "s") remaining"
+            return "Trial active: \(remaining) statement import\(remaining == 1 ? "" : "s") included"
         }
-        return "Free imports used"
+        return "Trial imports used. Unlock Lifetime Premium for unlimited local planning."
     }
 
     func synchronizeInitialFreeImportUsage(existingImportCount: Int) {

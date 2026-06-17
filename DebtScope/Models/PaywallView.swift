@@ -39,7 +39,7 @@ struct PaywallView: View {
             .frame(maxWidth: 520)
             .frame(maxWidth: .infinity)
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .task {
             if !didRecordImpression {
                 didRecordImpression = true
@@ -119,7 +119,7 @@ struct PaywallView: View {
                 Label(purchases.freeImportStatusText, systemImage: "tray.and.arrow.down")
                     .foregroundStyle(.blue)
             } else {
-                Label("Free imports used", systemImage: "exclamationmark.triangle.fill")
+                Label(purchases.freeImportStatusText, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
             }
         }

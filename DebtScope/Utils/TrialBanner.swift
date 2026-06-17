@@ -77,7 +77,8 @@ struct TrialBanner: View {
     }
 
     private var message: String {
-        purchases.freeImportStatusText
+        let remaining = purchases.freeImportsRemaining
+        return "Trial: \(remaining) statement import\(remaining == 1 ? "" : "s")"
     }
 }
 

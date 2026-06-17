@@ -67,7 +67,7 @@ public final class QuickIngestor: QuickIngesting {
             .count
         PurchaseManager.shared.synchronizeInitialFreeImportUsage(existingImportCount: existingCompletedImportCount)
         guard PurchaseManager.shared.isPremiumUnlocked else {
-            throw QuickIngestError.parsingFailed("You have used all 4 free imports. Purchase Lifetime to continue importing statements.")
+            throw QuickIngestError.parsingFailed("Trial imports used. Unlock Lifetime Premium to continue importing statements and building your local plan.")
         }
 
         // 1. Classification and Detection

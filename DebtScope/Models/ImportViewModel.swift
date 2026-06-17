@@ -1504,7 +1504,7 @@ final class ImportViewModel: ObservableObject {
                 .count
             PurchaseManager.shared.synchronizeInitialFreeImportUsage(existingImportCount: existingCompletedImportCount)
             guard PurchaseManager.shared.isPremiumUnlocked else {
-                let message = "You have used all 4 free imports. Purchase Lifetime to continue importing statements."
+                let message = "Trial imports used. Unlock Lifetime Premium to continue importing statements and building your local plan."
                 self.errorMessage = message
                 throw NSError(domain: "ImportViewModel", code: 402, userInfo: [NSLocalizedDescriptionKey: message])
             }

@@ -392,8 +392,8 @@ struct ReviewImportView: View {
             ReviewImportHelpView()
                 .presentationDetents([.medium])
         }
-        .alert("Free Imports Used", isPresented: $showImportLimitAlert) {
-            Button("Purchase Lifetime") {
+        .alert("Trial Imports Used", isPresented: $showImportLimitAlert) {
+            Button("Unlock Lifetime") {
                 showPaywall = true
             }
             Button("Cancel", role: .cancel) { }
@@ -868,11 +868,11 @@ struct ReviewImportView: View {
                             HStack(alignment: .top, spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle")
                                     .foregroundStyle(.orange)
-                                Text("You have used all 4 free imports. Purchase Lifetime to continue importing statements.")
+                                Text(importLimitMessage)
                                     .font(.footnote)
                                     .foregroundStyle(.primary)
                             }
-                            Button("Purchase Lifetime") {
+                            Button("Unlock Lifetime") {
                                 showPaywall = true
                             }
                             .buttonStyle(.borderedProminent)
@@ -954,7 +954,7 @@ struct ReviewImportView: View {
     }
 
     private var importLimitMessage: String {
-        "You have used all 4 free imports. Purchase Lifetime to continue importing statements."
+        "Trial imports used. Unlock Lifetime Premium to continue importing statements and building your local plan."
     }
 
     private func showFreeImportLimitMessage() {
