@@ -10,7 +10,7 @@ struct PaywallView: View {
     @State private var showLongPurchaseHint = false
     @State private var didRecordImpression = false
 
-    init(source: PaywallSource = .unknown) {
+    init(source: PaywallSource) {
         self.source = source
     }
     
@@ -246,15 +246,16 @@ private struct IdentifiedError: Identifiable { let id = UUID(); let message: Str
 
 // MARK: - Premium gating helper
 extension View {
-    /// Wrap premium-only content. Presents the paywall if the user is not entitled.
+    /// Wrap premium-only content. Presents the paywall with an explicitly attributed source.
     /// - Parameters:
     ///   - isPresented: A binding you control to show the paywall.
     ///   - purchases: A purchase manager instance.
+    ///   - source: The user path that triggered the paywall.
     /// - Returns: A view that conditionally overlays a paywall sheet.
     func paywalled(
         isPresented: Binding<Bool>,
         purchases: PurchaseManager,
-        source: PaywallSource = .unknown
+        source: PaywallSource
     ) -> some View {
         self
             .sheet(isPresented: isPresented) {
@@ -265,7 +266,7 @@ extension View {
 
     /// Convenience overload that uses the shared PurchaseManager. Kept @MainActor to safely access `.shared`.
     @MainActor
-    func paywalled(isPresented: Binding<Bool>, source: PaywallSource = .unknown) -> some View {
+    func paywalled(isPresented: Binding<Bool>, source: PaywallSource) -> some View {
         paywalled(isPresented: isPresented, purchases: PurchaseManager.shared, source: source)
     }
 }
