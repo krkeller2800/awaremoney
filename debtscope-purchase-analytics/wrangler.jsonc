@@ -20,6 +20,16 @@
 			"database_name": "debtscope_purchase_analytics",
 			"database_id": "efbad9a9-f79d-4b62-b797-fc009f7800a3"
 		}
+	],
+	"routes": [
+		{
+			"pattern": "komakode.com/api/debtscope/*",
+			"zone_name": "komakode.com"
+		},
+		{
+			"pattern": "komakode.com/debtscope/purchase-analytics",
+			"zone_name": "komakode.com"
+		}
 	]
 	/**
 	 * Smart Placement

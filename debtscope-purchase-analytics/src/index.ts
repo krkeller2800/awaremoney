@@ -57,6 +57,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname === "/debtscope/purchase-analytics") {
+      return handlePurchaseDashboard(request);
+    }
+
     if (url.pathname === "/api/debtscope/purchase-events") {
       return handlePurchaseEvent(request, env);
     }
@@ -68,6 +72,20 @@ export default {
     return json({ ok: false, error: "not_found" }, 404);
   },
 };
+
+function handlePurchaseDashboard(request: Request): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return json({ ok: false, error: "method_not_allowed" }, 405);
+  }
+
+  return new Response(request.method === "HEAD" ? null : dashboardHtml, {
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/html; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
 
 async function handlePurchaseEvent(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") {
@@ -174,6 +192,59 @@ async function handlePurchaseSummary(request: Request, env: Env): Promise<Respon
     .bind(`-${days} days`)
     .all();
 
+  const daily = await env.DB.prepare(
+    `SELECT
+      date(received_at) AS day,
+      SUM(CASE WHEN event_name = 'paywall_impression' THEN 1 ELSE 0 END) AS paywallImpressions,
+      SUM(CASE WHEN event_name = 'product_load_result' AND product_load_result = 'failed' THEN 1 ELSE 0 END) AS productLoadFailures
+    FROM purchase_events
+    WHERE received_at >= datetime('now', ?)
+    GROUP BY date(received_at)
+    ORDER BY day DESC`
+  )
+    .bind(`-${days} days`)
+    .all();
+
+  const purchaseResults = await env.DB.prepare(
+    `SELECT
+      COALESCE(purchase_result, 'unknown') AS result,
+      COUNT(*) AS count
+    FROM purchase_events
+    WHERE received_at >= datetime('now', ?)
+      AND event_name = 'purchase_result'
+    GROUP BY COALESCE(purchase_result, 'unknown')
+    ORDER BY count DESC`
+  )
+    .bind(`-${days} days`)
+    .all();
+
+  const productLoadByCountry = await env.DB.prepare(
+    `SELECT
+      COALESCE(storefront_country, 'unknown') AS storefrontCountry,
+      SUM(CASE WHEN product_load_result = 'empty' THEN 1 ELSE 0 END) AS emptyResponses,
+      SUM(CASE WHEN product_load_result = 'failed' THEN 1 ELSE 0 END) AS failures
+    FROM purchase_events
+    WHERE received_at >= datetime('now', ?)
+      AND event_name = 'product_load_result'
+    GROUP BY COALESCE(storefront_country, 'unknown')
+    ORDER BY emptyResponses DESC, failures DESC`
+  )
+    .bind(`-${days} days`)
+    .all();
+
+  const restoreResults = await env.DB.prepare(
+    `SELECT
+      COALESCE(purchase_result, 'tap') AS result,
+      COUNT(*) AS count
+    FROM purchase_events
+    WHERE received_at >= datetime('now', ?)
+      AND event_name IN ('restore_tap', 'restore_result')
+    GROUP BY COALESCE(purchase_result, 'tap')
+    ORDER BY count DESC`
+  )
+    .bind(`-${days} days`)
+    .all();
+
   return json({
     days,
     paywallImpressions: totals?.paywallImpressions ?? 0,
@@ -182,6 +253,10 @@ async function handlePurchaseSummary(request: Request, env: Env): Promise<Respon
     cancelledPurchases: totals?.cancelledPurchases ?? 0,
     productLoadFailures: totals?.productLoadFailures ?? 0,
     bySource: bySource.results,
+    daily: daily.results,
+    purchaseResults: purchaseResults.results,
+    productLoadByCountry: productLoadByCountry.results,
+    restoreResults: restoreResults.results,
   });
 }
 
@@ -223,3 +298,295 @@ function json(body: unknown, status = 200): Response {
     },
   });
 }
+
+const dashboardHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DebtScope Purchase Analytics</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+      background: #f7f8fa;
+      color: #1f2933;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    h1, h2 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 720;
+    }
+
+    h2 {
+      font-size: 16px;
+      font-weight: 680;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    input, select, button {
+      font: inherit;
+      border: 1px solid #c8d0d9;
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #ffffff;
+      color: #1f2933;
+    }
+
+    input {
+      width: min(360px, 100%);
+    }
+
+    button {
+      cursor: pointer;
+      background: #176b87;
+      border-color: #176b87;
+      color: #ffffff;
+      font-weight: 650;
+    }
+
+    .status {
+      min-height: 22px;
+      margin-bottom: 18px;
+      color: #52606d;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .metric, section {
+      background: #ffffff;
+      border: 1px solid #d9e2ec;
+      border-radius: 8px;
+    }
+
+    .metric {
+      padding: 14px;
+    }
+
+    .metric span {
+      display: block;
+      color: #52606d;
+      font-size: 13px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 28px;
+    }
+
+    .sections {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+    }
+
+    section {
+      overflow: hidden;
+    }
+
+    section h2 {
+      padding: 14px 14px 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 9px 14px;
+      border-top: 1px solid #e6edf3;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    th:first-child, td:first-child {
+      text-align: left;
+      white-space: normal;
+    }
+
+    th {
+      color: #52606d;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #101820;
+        color: #f5f7fa;
+      }
+
+      input, select, .metric, section {
+        background: #1d2730;
+        border-color: #344552;
+        color: #f5f7fa;
+      }
+
+      th, td {
+        border-top-color: #344552;
+      }
+
+      .status, .metric span, th {
+        color: #b8c4cf;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>DebtScope Purchase Analytics</h1>
+      </div>
+      <div class="controls">
+        <input id="token" type="password" autocomplete="current-password" placeholder="Dashboard token">
+        <select id="days" aria-label="Days">
+          <option value="7">7 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="90">90 days</option>
+          <option value="180">180 days</option>
+        </select>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <div id="status" class="status"></div>
+    <div id="metrics" class="metrics"></div>
+    <div id="sections" class="sections"></div>
+  </main>
+
+  <script>
+    const tokenInput = document.querySelector("#token");
+    const daysInput = document.querySelector("#days");
+    const refreshButton = document.querySelector("#refresh");
+    const statusElement = document.querySelector("#status");
+    const metricsElement = document.querySelector("#metrics");
+    const sectionsElement = document.querySelector("#sections");
+
+    tokenInput.value = localStorage.getItem("debtscopeDashboardToken") || "";
+
+    refreshButton.addEventListener("click", loadSummary);
+    tokenInput.addEventListener("change", () => {
+      localStorage.setItem("debtscopeDashboardToken", tokenInput.value);
+    });
+
+    async function loadSummary() {
+      const token = tokenInput.value.trim();
+      localStorage.setItem("debtscopeDashboardToken", token);
+
+      if (!token) {
+        setStatus("Enter the dashboard token.");
+        return;
+      }
+
+      setStatus("Loading...");
+      const response = await fetch("/api/debtscope/purchase-summary?days=" + encodeURIComponent(daysInput.value), {
+        headers: { "authorization": "Bearer " + token },
+      });
+
+      if (!response.ok) {
+        setStatus(response.status === 401 ? "Unauthorized." : "Request failed: " + response.status);
+        return;
+      }
+
+      const summary = await response.json();
+      renderSummary(summary);
+      setStatus("Updated for the last " + summary.days + " days.");
+    }
+
+    function renderSummary(summary) {
+      metricsElement.innerHTML = [
+        metric("Paywall impressions", summary.paywallImpressions),
+        metric("Purchase taps", summary.purchaseButtonTaps),
+        metric("Successful purchases", summary.successfulPurchases),
+        metric("Cancelled purchases", summary.cancelledPurchases),
+        metric("Product load failures", summary.productLoadFailures),
+      ].join("");
+
+      sectionsElement.innerHTML = [
+        tableSection("Daily activity", ["Day", "Impressions", "Load failures"], summary.daily, ["day", "paywallImpressions", "productLoadFailures"]),
+        tableSection("Paywall sources", ["Source", "Impressions", "Taps", "Purchases"], summary.bySource, ["source", "impressions", "purchaseButtonTaps", "successfulPurchases"]),
+        tableSection("Purchase results", ["Result", "Count"], summary.purchaseResults, ["result", "count"]),
+        tableSection("Product load by country", ["Country", "Empty", "Failures"], summary.productLoadByCountry, ["storefrontCountry", "emptyResponses", "failures"]),
+        tableSection("Restore outcomes", ["Result", "Count"], summary.restoreResults, ["result", "count"]),
+      ].join("");
+    }
+
+    function metric(label, value) {
+      return "<div class=\\"metric\\"><span>" + escapeHtml(label) + "</span><strong>" + number(value) + "</strong></div>";
+    }
+
+    function tableSection(title, headings, rows, keys) {
+      const safeRows = Array.isArray(rows) ? rows : [];
+      const body = safeRows.length
+        ? safeRows.map((row) => "<tr>" + keys.map((key) => "<td>" + escapeHtml(formatValue(row[key])) + "</td>").join("") + "</tr>").join("")
+        : "<tr><td colspan=\\"" + headings.length + "\\">No data</td></tr>";
+
+      return "<section><h2>" + escapeHtml(title) + "</h2><table><thead><tr>" +
+        headings.map((heading) => "<th>" + escapeHtml(heading) + "</th>").join("") +
+        "</tr></thead><tbody>" + body + "</tbody></table></section>";
+    }
+
+    function formatValue(value) {
+      return typeof value === "number" ? number(value) : value ?? "";
+    }
+
+    function number(value) {
+      return new Intl.NumberFormat().format(value || 0);
+    }
+
+    function setStatus(message) {
+      statusElement.textContent = message;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+  </script>
+</body>
+</html>`;
