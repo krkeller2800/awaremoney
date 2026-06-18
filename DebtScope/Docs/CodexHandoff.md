@@ -1,38 +1,29 @@
-Continue pricingStratigyPlan implementation.
+Continue purchase analytics rollout from PurchAnalyticsImpPlan.
 
 Current committed state:
-- Last commit: 97cde39 Improve StoreKit product diagnostics for paywall reliability.
+- Last commit: 618eeb4 Add Cloudflare purchase analytics worker.
 - Working tree was clean after the commit.
-- Paywall copy/value messaging has been updated.
-- PaywallSource exists and PaywallView requires an explicit PaywallSource.
-- Active PaywallView call sites pass concrete sources.
-- PurchaseManager has DEBUG-only local conversion diagnostics:
-  - paywallImpressionsTotal
-  - paywallImpressionsBySource
-  - purchaseButtonTaps
-  - successfulPurchases
-  - cancelledPurchases
-  - productLoadFailures
-- Conversion diagnostics persist locally in UserDefaults only in DEBUG builds.
-- Existing recording hooks are wired in DEBUG and remain non-customer-facing.
-- SettingsView's DEBUG Developer section is the correct place for conversion diagnostics.
-- DebugSettingsView is only for debug category/tool controls and should not be used for conversion diagnostics.
-- StoreKit reliability pass is implemented:
-  - PurchaseManager exposes explicit productLoadState: idle, loading, loaded, empty, failed.
-  - Manual StoreKit product reload clears stale product state before refetching.
-  - PaywallView uses productLoadState for loading, empty-product, and App Store error messaging.
-  - SettingsView Developer section shows StoreKit Product status, IAP Diagnostic, and Reload StoreKit Product.
-  - Product load failures are counted once per failed load cycle instead of once per retry.
-- Focused PurchaseConversionDiagnosticsTests include diagnostics counter coverage and productLoadState display-value coverage.
-- Validation completed before commit: full Xcode build passed, focused purchase diagnostics tests passed, manual smoke test passed.
+- Cloudflare Worker project lives at `debtscope-purchase-analytics/` in the repo.
+- Cloudflare D1 database `debtscope_purchase_analytics` exists with binding `DB`.
+- D1 migration `0001_create_purchase_events.sql` creates the append-only `purchase_events` table and indexes.
+- Worker endpoints implemented:
+  - `POST /api/debtscope/purchase-events`
+  - `GET /api/debtscope/purchase-summary?days=30`
+- Worker deployed at `https://debtscope-purchase-analytics.karl-003.workers.dev`.
+- Remote validation completed:
+  - Summary endpoint returned HTTP 200 with zero counts before insert.
+  - Remote `paywall_impression` insert returned `{"ok":true}`.
+  - Summary endpoint then returned `paywallImpressions: 1` and `bySource` contained `settings` impressions.
+- `DASHBOARD_TOKEN` was rotated after being pasted during testing.
+- Local `.dev.vars`, `.wrangler/`, `node_modules/`, and `.DS_Store` are ignored and were not committed.
 
 Important context:
-- The plan document has older text that says not to store/expose local conversion counters. That guidance is obsolete for the current implementation; the accepted direction is DEBUG-only local diagnostics in SettingsView's Developer section.
-- Do not add remote analytics.
-- Do not expose conversion diagnostics in release builds or customer-facing normal Settings UI.
-- Do not change product ID, price, entitlement rules, StoreKit config, restore behavior, or free import allowance.
-- Backup/restore remains free with soft premium messaging only.
-- Remaining StoreKit checklist items requiring App Store Connect/manual access: exact product ID match, product approval/availability for the current build state, Paid Apps agreement, tax, banking, and sandbox/TestFlight restore with purchased Apple IDs.
+- Rollout step 1 from PurchAnalyticsImpPlan is complete: Build Cloudflare D1 schema and Worker endpoints.
+- Production iOS app analytics are not wired yet.
+- Do not send financial data, account names, payees, balances, imported document names, direct identity, or assistant prompts/responses.
+- Keep analytics focused on purchase funnel and StoreKit reliability events only.
+- Protect reporting endpoints with the dashboard token or stronger private auth; ingestion remains public but strictly validated.
+- The current Worker is available on workers.dev. komakode.com routing/dashboard work is not done yet.
 
 Next suggested step:
-- Continue pricing strategy work from pricingStratigyPlan after the completed diagnostics/reliability pass. Likely options are manual App Store Connect/TestFlight verification or adding focused tests for paywall source copy and trial banner text if more implementation work is preferred.
+- Start rollout step 2: deploy private JSON reporting and a minimal HTML dashboard under `komakode.com`, or first configure the Worker route under `komakode.com/api/debtscope/*` and decide whether to disable the workers.dev route/preview URLs.
