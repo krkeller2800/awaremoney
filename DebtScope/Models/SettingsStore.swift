@@ -48,6 +48,11 @@ final class SettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(useReserveProcessingForBills, forKey: "use_reserve_processing_for_bills") }
     }
 
+    // Analytics
+    @Published var analyticsEnabled: Bool {
+        didSet { UserDefaults.standard.set(analyticsEnabled, forKey: "analytics_enabled") }
+    }
+
     // Assistant
     @Published var assistantEnabled: Bool {
         didSet {
@@ -143,6 +148,8 @@ final class SettingsStore: ObservableObject {
         self.showHintBars = UserDefaults.standard.object(forKey: "show_hint_bars") as? Bool ?? true
         self.hapticsEnabled = UserDefaults.standard.object(forKey: "haptics_enabled") as? Bool ?? true
         self.useReserveProcessingForBills = UserDefaults.standard.object(forKey: "use_reserve_processing_for_bills") as? Bool ?? true
+        // Analytics
+        self.analyticsEnabled = UserDefaults.standard.object(forKey: "analytics_enabled") as? Bool ?? false
         // Assistant
         self.assistantEnabled = UserDefaults.standard.object(forKey: "assistant_enabled") as? Bool ?? false
         self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false

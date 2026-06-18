@@ -292,6 +292,7 @@ struct SettingsView: View {
         settings.showHintBars = true
         settings.hapticsEnabled = true
         settings.useReserveProcessingForBills = true
+        settings.analyticsEnabled = false
         settings.assistantEnabled = false
         settings.assistantIncludeTransactions = false
         settings.assistantRetainConversationHistory = false

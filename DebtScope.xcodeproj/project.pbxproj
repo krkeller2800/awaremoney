@@ -50,6 +50,7 @@
 				Testing/DebtScopeAssistantServiceTests.swift,
 				Testing/DebtScopeFuzzySearchTests.swift,
 				Testing/IncomeSchedulerTests.swift,
+				Testing/PurchaseAnalyticsTests.swift,
 				Testing/PurchaseConversionDiagnosticsTests.swift,
 				Testing/ReservePlannerTests.swift,
 				Testing/ReserveUpdaterTests.swift,
