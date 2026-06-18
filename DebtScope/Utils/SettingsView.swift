@@ -68,7 +68,7 @@ struct SettingsView: View {
                     .disabled(purchases.hasPremiumAccess)
 
                     Button("Restore Purchases") {
-                        Task { await purchases.restorePurchases() }
+                        Task { await purchases.restorePurchases(source: .settings) }
                     }
                     .buttonStyle(.borderless)
                 }

@@ -125,7 +125,7 @@ struct PaywallView: View {
             if let product = purchases.product {
                 Button {
                     purchases.recordPurchaseButtonTap(source: source)
-                    Task { await purchases.purchase() }
+                    Task { await purchases.purchase(source: source) }
                 } label: {
                     HStack {
                         Spacer()
@@ -194,7 +194,7 @@ struct PaywallView: View {
 
     private var restoreSection: some View {
         Button("Restore Purchases") {
-            Task { await purchases.restorePurchases() }
+            Task { await purchases.restorePurchases(source: source) }
         }
         .buttonStyle(.bordered)
     }

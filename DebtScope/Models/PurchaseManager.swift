@@ -105,6 +105,9 @@ final class PurchaseManager: ObservableObject {
         return parts.last.map(String.init) ?? productID
     }
 
+    private let analyticsClient: PurchaseAnalyticsClient
+    private let analyticsSessionID = UUID().uuidString
+
     // MARK: - Published state
     @Published var product: Product?
     @Published private(set) var productLoadState: ProductLoadState = .idle
@@ -253,7 +256,12 @@ final class PurchaseManager: ObservableObject {
     }
 
     // MARK: - Init
-    init() {
+    init(analyticsClient: PurchaseAnalyticsClient? = nil) {
+        self.analyticsClient = analyticsClient ?? PurchaseAnalyticsClient(
+            isEnabled: {
+                UserDefaults.standard.object(forKey: SettingsStore.analyticsEnabledKey) as? Bool ?? false
+            }
+        )
         freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
         #if DEBUG
         if let data = UserDefaults.standard.data(forKey: conversionDiagnosticsKey),
@@ -269,9 +277,9 @@ final class PurchaseManager: ObservableObject {
     }
 
     // MARK: - Public API
-    func purchase() async {
+    func purchase(source: PaywallSource = .unknown) async {
         guard let product else {
-            recordPurchaseOutcome(.failed)
+            recordPurchaseOutcome(.failed, source: source)
             return
         }
         isPurchasing = true
@@ -284,57 +292,58 @@ final class PurchaseManager: ObservableObject {
                 case .verified(let transaction):
                     // Non-consumable purchased successfully
                     isPurchased = true
-                    recordPurchaseOutcome(.success)
+                    recordPurchaseOutcome(.success, source: source)
                     await transaction.finish()
                 case .unverified(_, let error):
                     self.errorMessage = error.localizedDescription
-                    recordPurchaseOutcome(.unverified)
+                    recordPurchaseOutcome(.unverified, source: source)
                 }
             case .userCancelled:
-                recordPurchaseOutcome(.cancelled)
+                recordPurchaseOutcome(.cancelled, source: source)
                 break
             case .pending:
                 // Pending (SCA or parental approval). Keep UI as-is.
-                recordPurchaseOutcome(.pending)
+                recordPurchaseOutcome(.pending, source: source)
                 break
             @unknown default:
-                recordPurchaseOutcome(.failed)
+                recordPurchaseOutcome(.failed, source: source)
                 break
             }
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            recordPurchaseOutcome(.failed)
+            recordPurchaseOutcome(.failed, source: source)
         }
     }
 
     func recordPaywallImpression(source: PaywallSource) {
         #if DEBUG
         updateConversionDiagnostics { $0.recordPaywallImpression(source: source) }
-        #else
-        _ = source
         #endif
+        trackPurchaseAnalyticsEvent(.paywallImpression, paywallSource: source, productLoadState: analyticsProductLoadState)
     }
 
     func recordPurchaseButtonTap(source: PaywallSource) {
         #if DEBUG
-        _ = source
         updateConversionDiagnostics { $0.recordPurchaseButtonTap() }
-        #else
-        _ = source
         #endif
+        trackPurchaseAnalyticsEvent(.purchaseButtonTap, paywallSource: source, productLoadState: analyticsProductLoadState)
     }
 
-    func restorePurchases() async {
+    func restorePurchases(source: PaywallSource = .unknown) async {
+        trackPurchaseAnalyticsEvent(.restoreTap, paywallSource: source)
         do {
             try await StoreKit.AppStore.sync()
             await updatePurchasedStatus()
             if isPurchased {
                 self.userMessage = "Your Premium purchase is already active on this device."
+                trackPurchaseAnalyticsEvent(.restoreResult, paywallSource: source, purchaseResult: .restored)
             } else {
                 self.userMessage = "No previous purchases were found for your Apple ID."
+                trackPurchaseAnalyticsEvent(.restoreResult, paywallSource: source, purchaseResult: .noneFound)
             }
         } catch {
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            trackPurchaseAnalyticsEvent(.restoreResult, paywallSource: source, purchaseResult: .failed)
         }
     }
 
@@ -387,7 +396,7 @@ final class PurchaseManager: ObservableObject {
                     self.errorMessage = nil
                     let sf: String = await currentStorefrontID()
                     self.iapDiagnosticSummary = "IAP: ok • pid=\(productShortCode) • sf=\(sf)"
-                    recordProductLoadOutcome(.success)
+                    recordProductLoadOutcome(.success, storefrontCountry: sf)
                     return
                 } else {
                     let sf: String = await currentStorefrontID()
@@ -410,20 +419,20 @@ final class PurchaseManager: ObservableObject {
             self.errorMessage = "We couldn’t load purchase information. Please try again."
         }
         if self.product == nil {
+            let sf: String = await currentStorefrontID()
             switch finalLoadOutcome {
             case .empty:
                 self.productLoadState = .empty
-                recordProductLoadOutcome(.empty)
+                recordProductLoadOutcome(.empty, storefrontCountry: sf)
             case .error:
                 self.productLoadState = .failed(self.errorMessage ?? "Unknown StoreKit error")
-                recordProductLoadOutcome(.error)
+                recordProductLoadOutcome(.error, storefrontCountry: sf)
             case .success:
                 self.productLoadState = .loaded
             case .none:
                 self.productLoadState = .empty
-                recordProductLoadOutcome(.empty)
+                recordProductLoadOutcome(.empty, storefrontCountry: sf)
             }
-            let sf: String = await currentStorefrontID()
             if self.iapDiagnosticSummary == nil || self.iapDiagnosticSummary?.isEmpty == true {
                 self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
             }
@@ -492,7 +501,7 @@ final class PurchaseManager: ObservableObject {
         case error
     }
 
-    private func recordPurchaseOutcome(_ outcome: PurchaseOutcome) {
+    private func recordPurchaseOutcome(_ outcome: PurchaseOutcome, source: PaywallSource) {
         #if DEBUG
         switch outcome {
         case .success:
@@ -502,12 +511,11 @@ final class PurchaseManager: ObservableObject {
         case .pending, .unverified, .failed:
             break
         }
-        #else
-        _ = outcome
         #endif
+        trackPurchaseAnalyticsEvent(.purchaseResult, paywallSource: source, purchaseResult: analyticsResult(for: outcome))
     }
 
-    private func recordProductLoadOutcome(_ outcome: ProductLoadOutcome) {
+    private func recordProductLoadOutcome(_ outcome: ProductLoadOutcome, storefrontCountry: String?) {
         #if DEBUG
         switch outcome {
         case .empty, .error:
@@ -515,8 +523,78 @@ final class PurchaseManager: ObservableObject {
         case .success:
             break
         }
-        #else
-        _ = outcome
         #endif
+        trackPurchaseAnalyticsEvent(
+            .productLoadResult,
+            productLoadResult: analyticsProductLoadResult(for: outcome),
+            productLoadState: analyticsProductLoadState,
+            storefrontCountry: storefrontCountry
+        )
+    }
+
+    private var analyticsProductLoadState: PurchaseAnalyticsProductLoadState {
+        switch productLoadState {
+        case .idle:
+            return .idle
+        case .loading:
+            return .loading
+        case .loaded:
+            return .loaded
+        case .empty:
+            return .empty
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func trackPurchaseAnalyticsEvent(
+        _ eventName: PurchaseAnalyticsEventName,
+        paywallSource: PaywallSource? = nil,
+        purchaseResult: PurchaseAnalyticsResult? = nil,
+        productLoadResult: PurchaseAnalyticsProductLoadResult? = nil,
+        productLoadState: PurchaseAnalyticsProductLoadState? = nil,
+        storefrontCountry: String? = nil
+    ) {
+        guard UserDefaults.standard.object(forKey: SettingsStore.analyticsEnabledKey) as? Bool ?? false else { return }
+
+        let event = PurchaseAnalyticsEvent(
+            installId: PurchaseAnalyticsInstallID.current(),
+            sessionId: analyticsSessionID,
+            eventName: eventName,
+            paywallSource: paywallSource,
+            purchaseResult: purchaseResult,
+            productLoadResult: productLoadResult,
+            productLoadState: productLoadState,
+            storefrontCountry: storefrontCountry == "-" ? nil : storefrontCountry
+        )
+        Task {
+            await analyticsClient.track(event)
+        }
+    }
+
+    private func analyticsResult(for outcome: PurchaseOutcome) -> PurchaseAnalyticsResult {
+        switch outcome {
+        case .success:
+            return .success
+        case .cancelled:
+            return .cancelled
+        case .pending:
+            return .pending
+        case .unverified:
+            return .unverified
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func analyticsProductLoadResult(for outcome: ProductLoadOutcome) -> PurchaseAnalyticsProductLoadResult {
+        switch outcome {
+        case .success:
+            return .loaded
+        case .empty:
+            return .empty
+        case .error:
+            return .failed
+        }
     }
 }

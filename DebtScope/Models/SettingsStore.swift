@@ -10,6 +10,8 @@ struct DebtScopeSpotlightIndexingOptions: Equatable {
 }
 
 final class SettingsStore: ObservableObject {
+    static let analyticsEnabledKey = "analytics_enabled"
+
     // Published currency code stored in UserDefaults; defaults to device locale or USD
     @Published var currencyCode: String {
         didSet {
@@ -50,7 +52,7 @@ final class SettingsStore: ObservableObject {
 
     // Analytics
     @Published var analyticsEnabled: Bool {
-        didSet { UserDefaults.standard.set(analyticsEnabled, forKey: "analytics_enabled") }
+        didSet { UserDefaults.standard.set(analyticsEnabled, forKey: Self.analyticsEnabledKey) }
     }
 
     // Assistant
@@ -149,7 +151,7 @@ final class SettingsStore: ObservableObject {
         self.hapticsEnabled = UserDefaults.standard.object(forKey: "haptics_enabled") as? Bool ?? true
         self.useReserveProcessingForBills = UserDefaults.standard.object(forKey: "use_reserve_processing_for_bills") as? Bool ?? true
         // Analytics
-        self.analyticsEnabled = UserDefaults.standard.object(forKey: "analytics_enabled") as? Bool ?? false
+        self.analyticsEnabled = UserDefaults.standard.object(forKey: Self.analyticsEnabledKey) as? Bool ?? false
         // Assistant
         self.assistantEnabled = UserDefaults.standard.object(forKey: "assistant_enabled") as? Bool ?? false
         self.assistantIncludeTransactions = UserDefaults.standard.object(forKey: "assistant_include_transactions") as? Bool ?? false
