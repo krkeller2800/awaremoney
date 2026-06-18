@@ -49,5 +49,13 @@ final class PurchaseConversionDiagnosticsTests: XCTestCase {
         XCTAssertEqual(diagnostics.cancelledPurchases, 0)
         XCTAssertEqual(diagnostics.productLoadFailures, 0)
     }
+
+    func testProductLoadStateDisplayValuesDescribeStoreKitStatus() {
+        XCTAssertEqual(PurchaseManager.ProductLoadState.idle.displayValue, "Not started")
+        XCTAssertEqual(PurchaseManager.ProductLoadState.loading.displayValue, "Loading")
+        XCTAssertEqual(PurchaseManager.ProductLoadState.loaded.displayValue, "Loaded")
+        XCTAssertEqual(PurchaseManager.ProductLoadState.empty.displayValue, "No product returned")
+        XCTAssertEqual(PurchaseManager.ProductLoadState.failed("Network unavailable").displayValue, "Failed")
+    }
 }
 #endif

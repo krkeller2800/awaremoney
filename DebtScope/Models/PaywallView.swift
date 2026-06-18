@@ -15,13 +15,7 @@ struct PaywallView: View {
     }
     
     private var isActivelyLoading: Bool {
-        // Only show the spinner during initial/active load when no product is available
-        // and there is no known error/empty diagnostic yet.
-        if purchases.product != nil { return false }
-        let diag = purchases.iapDiagnosticSummary?.lowercased() ?? ""
-        let hasKnownFailure = diag.contains("error") || diag.contains("empty")
-        let hasError = purchases.errorMessage != nil
-        return !(hasKnownFailure || hasError)
+        purchases.product == nil && purchases.productLoadState == .loading
     }
 
     var body: some View {
@@ -147,9 +141,9 @@ struct PaywallView: View {
                     if isActivelyLoading {
                         ProgressView("Contacting the App Store…")
                     } else {
-                        Label("We couldn’t load purchase information.", systemImage: "exclamationmark.triangle.fill")
+                        Label(productUnavailableTitle, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("You can try again or restore purchases if you previously bought Premium.")
+                        Text(productUnavailableMessage)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -174,6 +168,28 @@ struct PaywallView: View {
 
     private func purchaseButtonTitle(for product: Product) -> String {
         "Unlock Lifetime - \(product.displayPrice)"
+    }
+
+    private var productUnavailableTitle: String {
+        switch purchases.productLoadState {
+        case .empty:
+            return "Premium isn’t available from the App Store right now."
+        case .failed:
+            return "We couldn’t contact the App Store."
+        case .idle, .loading, .loaded:
+            return "We couldn’t load purchase information."
+        }
+    }
+
+    private var productUnavailableMessage: String {
+        switch purchases.productLoadState {
+        case .empty:
+            return "You can try again, or restore purchases if you previously bought Premium. If this persists in TestFlight or the App Store build, verify the product is available in App Store Connect."
+        case .failed(let message):
+            return "You can try again or restore purchases if you previously bought Premium. App Store error: \(message)"
+        case .idle, .loading, .loaded:
+            return "You can try again or restore purchases if you previously bought Premium."
+        }
     }
 
     private var restoreSection: some View {

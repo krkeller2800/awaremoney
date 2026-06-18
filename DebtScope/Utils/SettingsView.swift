@@ -134,6 +134,10 @@ struct SettingsView: View {
 
                     LabeledContent("StoreKit Purchase", value: purchases.isPurchased ? "Active" : "Inactive")
                     LabeledContent("Effective Premium", value: purchases.hasPremiumAccess ? "Active" : "Inactive")
+                    LabeledContent("StoreKit Product", value: purchases.productLoadState.displayValue)
+                    if let diagnostic = purchases.iapDiagnosticSummary {
+                        LabeledContent("IAP Diagnostic", value: diagnostic)
+                    }
                     LabeledContent("Free Imports Used", value: "\(purchases.freeImportsUsed) of \(purchases.freeImportLimit)")
 
                     let diagnostics = purchases.conversionDiagnostics
@@ -157,6 +161,10 @@ struct SettingsView: View {
 
                     Button("Reset Conversion Diagnostics", role: .destructive) {
                         purchases.resetConversionDiagnosticsForDebug()
+                    }
+
+                    Button("Reload StoreKit Product") {
+                        Task { await purchases.reloadProducts() }
                     }
 
                     Button("Reset Free Imports") {

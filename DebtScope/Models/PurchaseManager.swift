@@ -107,6 +107,7 @@ final class PurchaseManager: ObservableObject {
 
     // MARK: - Published state
     @Published var product: Product?
+    @Published private(set) var productLoadState: ProductLoadState = .idle
     @Published var isPurchased: Bool = false
     @Published var isPurchasing: Bool = false
     @Published var errorMessage: String?
@@ -158,6 +159,29 @@ final class PurchaseManager: ObservableObject {
         #else
         return isPurchased
         #endif
+    }
+
+    enum ProductLoadState: Equatable {
+        case idle
+        case loading
+        case loaded
+        case empty
+        case failed(String)
+
+        var displayValue: String {
+            switch self {
+            case .idle:
+                return "Not started"
+            case .loading:
+                return "Loading"
+            case .loaded:
+                return "Loaded"
+            case .empty:
+                return "No product returned"
+            case .failed:
+                return "Failed"
+            }
+        }
     }
 
     // Derived entitlement: premium access OR still has a free import available.
@@ -350,11 +374,16 @@ final class PurchaseManager: ObservableObject {
     
     private func loadProductWithRetry(maxAttempts: Int = 3, delay: TimeInterval = 1.5) async {
         self.iapDiagnosticSummary = "IAP: fetching • pid=\(productShortCode)"
+        self.productLoadState = .loading
+        self.product = nil
+        self.errorMessage = nil
+        var finalLoadOutcome: ProductLoadOutcome?
         for attempt in 1...maxAttempts {
             do {
                 let products = try await Product.products(for: [productID])
                 if let first = products.first {
                     self.product = first
+                    self.productLoadState = .loaded
                     self.errorMessage = nil
                     let sf: String = await currentStorefrontID()
                     self.iapDiagnosticSummary = "IAP: ok • pid=\(productShortCode) • sf=\(sf)"
@@ -363,14 +392,14 @@ final class PurchaseManager: ObservableObject {
                 } else {
                     let sf: String = await currentStorefrontID()
                     self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
-                    recordProductLoadOutcome(.empty)
+                    finalLoadOutcome = .empty
                     // No products returned; will retry after a short delay
                 }
             } catch {
-                self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 let msg: String = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.errorMessage = msg
                 self.iapDiagnosticSummary = "IAP: error • pid=\(productShortCode) • \(msg)"
-                recordProductLoadOutcome(.error)
+                finalLoadOutcome = .error
             }
             if attempt < maxAttempts {
                 let ns: UInt64 = UInt64(delay * 1_000_000_000.0)
@@ -381,6 +410,19 @@ final class PurchaseManager: ObservableObject {
             self.errorMessage = "We couldn’t load purchase information. Please try again."
         }
         if self.product == nil {
+            switch finalLoadOutcome {
+            case .empty:
+                self.productLoadState = .empty
+                recordProductLoadOutcome(.empty)
+            case .error:
+                self.productLoadState = .failed(self.errorMessage ?? "Unknown StoreKit error")
+                recordProductLoadOutcome(.error)
+            case .success:
+                self.productLoadState = .loaded
+            case .none:
+                self.productLoadState = .empty
+                recordProductLoadOutcome(.empty)
+            }
             let sf: String = await currentStorefrontID()
             if self.iapDiagnosticSummary == nil || self.iapDiagnosticSummary?.isEmpty == true {
                 self.iapDiagnosticSummary = "IAP: empty • pid=\(productShortCode) • sf=\(sf)"
