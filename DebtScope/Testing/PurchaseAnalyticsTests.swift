@@ -51,6 +51,30 @@ final class PurchaseAnalyticsTests: XCTestCase {
         XCTAssertEqual(first, second)
     }
 
+    func testDefaultAnalyticsEnabledOnlyForTestFlight() {
+        XCTAssertTrue(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .testflight))
+        XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .production))
+        XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .debug))
+        XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .sandbox))
+    }
+
+    func testStoredAnalyticsPreferenceOverridesDefault() throws {
+        let suiteName = "PurchaseAnalyticsPreferenceTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(
+            PurchaseAnalyticsAppInfo.analyticsEnabled(defaults: defaults),
+            PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled
+        )
+
+        defaults.set(false, forKey: PurchaseAnalyticsAppInfo.analyticsEnabledKey)
+        XCTAssertFalse(PurchaseAnalyticsAppInfo.analyticsEnabled(defaults: defaults))
+
+        defaults.set(true, forKey: PurchaseAnalyticsAppInfo.analyticsEnabledKey)
+        XCTAssertTrue(PurchaseAnalyticsAppInfo.analyticsEnabled(defaults: defaults))
+    }
+
     func testDisabledClientDropsEvents() async {
         let session = PurchaseAnalyticsStubSession()
         let client = PurchaseAnalyticsClient(

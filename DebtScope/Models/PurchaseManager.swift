@@ -259,7 +259,7 @@ final class PurchaseManager: ObservableObject {
     init(analyticsClient: PurchaseAnalyticsClient? = nil) {
         self.analyticsClient = analyticsClient ?? PurchaseAnalyticsClient(
             isEnabled: {
-                UserDefaults.standard.object(forKey: SettingsStore.analyticsEnabledKey) as? Bool ?? false
+                PurchaseAnalyticsAppInfo.analyticsEnabled()
             }
         )
         freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
@@ -555,7 +555,7 @@ final class PurchaseManager: ObservableObject {
         productLoadState: PurchaseAnalyticsProductLoadState? = nil,
         storefrontCountry: String? = nil
     ) {
-        guard UserDefaults.standard.object(forKey: SettingsStore.analyticsEnabledKey) as? Bool ?? false else { return }
+        guard PurchaseAnalyticsAppInfo.analyticsEnabled() else { return }
 
         let event = PurchaseAnalyticsEvent(
             installId: PurchaseAnalyticsInstallID.current(),

@@ -300,7 +300,7 @@ Manual TestFlight validation:
 2. Deploy private JSON reporting and HTML dashboard under `komakode.com`.
 3. Add iOS event model and disabled-by-default client.
 4. Wire purchase-funnel events behind the analytics setting.
-5. Update privacy policy and App Store disclosures.
+5. Update privacy policy and App Store disclosures. Complete in `PurchaseAnalyticsPrivacyDisclosures.md`, with the user-facing Settings disclosure/toggle added under Data & Privacy.
 6. Enable in TestFlight only.
 7. Verify dashboard data against manual smoke tests.
 8. Enable for production only after privacy review and TestFlight validation.

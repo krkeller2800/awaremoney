@@ -103,6 +103,8 @@ enum PurchaseAnalyticsInstallID {
 }
 
 enum PurchaseAnalyticsAppInfo {
+    nonisolated static let analyticsEnabledKey = "analytics_enabled"
+
     static var appVersion: String? {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     }
@@ -120,7 +122,7 @@ enum PurchaseAnalyticsAppInfo {
         return "\(version.majorVersion).\(version.minorVersion)"
     }
 
-    static var channel: PurchaseAnalyticsChannel {
+    nonisolated static var channel: PurchaseAnalyticsChannel {
         #if DEBUG
         return .debug
         #else
@@ -129,6 +131,21 @@ enum PurchaseAnalyticsAppInfo {
         }
         return .production
         #endif
+    }
+
+    nonisolated static var defaultAnalyticsEnabled: Bool {
+        defaultAnalyticsEnabled(for: channel)
+    }
+
+    nonisolated static func defaultAnalyticsEnabled(for channel: PurchaseAnalyticsChannel) -> Bool {
+        channel == .testflight
+    }
+
+    nonisolated static func analyticsEnabled(defaults: UserDefaults = .standard) -> Bool {
+        if let storedValue = defaults.object(forKey: analyticsEnabledKey) as? Bool {
+            return storedValue
+        }
+        return defaultAnalyticsEnabled
     }
 }
 

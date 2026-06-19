@@ -94,6 +94,11 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
+                    Toggle("Share purchase analytics", isOn: $settings.analyticsEnabled)
+                    Text("Sends purchase funnel and StoreKit reliability events only, using a random app install ID. DebtScope never sends financial data, account names, payees, balances, document names, assistant prompts, or responses for analytics.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     Button(role: .destructive) {
                         showResetAlert = true
                     } label: {
