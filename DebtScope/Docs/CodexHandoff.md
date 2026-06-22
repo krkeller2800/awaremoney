@@ -1,42 +1,32 @@
-Continue purchase analytics rollout from `PurchAnalyticsImpPlan`.
+Continue Fake PDF Generator rollout from `FakePDFGenImpPlan`.
 
 Current state:
-- Rollout steps 1 through 6 are complete.
-- Steps 1 and 2 delivered the Cloudflare D1 schema, Worker ingestion/reporting endpoints, and private dashboard under `komakode.com`.
-- Active deployed routes:
-  - `https://komakode.com/api/debtscope/*`
-  - `https://komakode.com/debtscope/purchase-analytics`
-- Steps 3 and 4 delivered the iOS purchase analytics model/client/queue and wired purchase-funnel events behind the analytics setting.
-- Step 5 is complete: DebtScope privacy policy, App Store Connect privacy disclosures, Settings disclosure/toggle, and disclosure docs are updated.
-- Step 6 is complete: analytics defaults on for TestFlight only, stays off by default for production/debug/sandbox, and explicit user opt-out/opt-in overrides the default.
-- User reported manual smoke testing complete, including dashboard/raw-row privacy spot checks.
-
-Files changed in this working tree:
-- `DebtScope/Utils/SettingsView.swift`
-- `DebtScope/Docs/PurchaseAnalyticsPrivacyDisclosures.md`
-- `DebtScope/Docs/PurchAnalyticsImpPlan.md`
-- `DebtScope/Docs/CodexHandoff.md`
-- `DebtScope/Models/PurchaseAnalytics.swift`
-- `DebtScope/Models/PurchaseManager.swift`
-- `DebtScope/Models/SettingsStore.swift`
-- `DebtScope/Testing/PurchaseAnalyticsTests.swift`
+- User asked to implement Step 1: create the standalone Swift CLI package under `Tools/FakePDFGen`.
+- Step 1 files have been added outside the app target:
+  - `Tools/FakePDFGen/Package.swift`
+  - `Tools/FakePDFGen/Sources/FakePDFGen/main.swift`
+- The CLI scaffold imports `Foundation`, `PDFKit`, and `AppKit`, prints help for expected arguments, lists planned commands (`inspect`, `build-recipes`, `render`, `verify`), and explicitly states that this step-one scaffold does not read backups, app data, or private folders.
+- Repo-level `.gitignore` was updated with required privacy/generated-output rules:
+  - `Tools/FakePDFGen/Inputs/`
+  - `Tools/FakePDFGen/Output/`
+  - `Tools/FakePDFGen/Recipes/generated/`
+  - `*.dsbackup`
 
 Validation status:
-- `XcodeRefreshCodeIssuesInFile` returned no issues for `PurchaseAnalytics.swift`, `PurchaseManager.swift`, `SettingsStore.swift`, and `PurchaseAnalyticsTests.swift` after step 6 changes.
-- Full Xcode build succeeded.
-- Focused `PurchaseAnalyticsTests` run passed: 8 passed, 0 failed.
-- Manual smoke test is complete per user.
+- Do not run `swift run`, `swift build`, or related SwiftPM commands from the Xcode-hosted Codex terminal unless the user explicitly asks.
+- Previous SwiftPM attempts from Codex hit sandbox/cache permission problems and then appeared to freeze/crash Xcode after retrying with redirected cache paths.
+- The issue is likely specific to the Xcode/Codex execution environment, not necessarily the package itself.
+- User can validate manually in a normal Terminal if desired with:
+  - `cd Tools/FakePDFGen`
+  - `swift run FakePDFGen --help`
 
 Important constraints:
-- Do not send financial data, account names, payees, balances, imported document names, direct identity, or assistant prompts/responses.
-- Keep analytics focused on purchase funnel and StoreKit reliability events only.
-- Reporting endpoints must remain protected by `DASHBOARD_TOKEN` or stronger private auth.
-- Ingestion remains public but strictly validated.
-- Production analytics remains disabled by default unless intentionally changed after TestFlight validation.
-- Local `.dev.vars`, `.wrangler/`, `node_modules/`, and `.DS_Store` are ignored and should not be committed.
-- Wrangler commands for the Worker repo should be run from `/Volumes/XcodeSSD/Users/karldev/Documents/DebtScope/debtscope-purchase-analytics` with `npx --no-install wrangler ...` because Wrangler is installed locally there.
-- A pre-existing `wrangler dev` process was observed on port 8787; do not stop it unless requested.
+- Keep FakePDFGen outside the shipping app target.
+- Never add private `.dsbackup` exports, original statements, raw generated working files, or generated output directories to the app bundle.
+- Do not parse or copy original PDFs in the first pass.
+- Generated recipes/PDFs must never contain real names, addresses, account numbers, institution names, payees, memo text, source filenames, original PDF pages/images/fonts/metadata/hidden text, check numbers, confirmation IDs, authorization codes, phone numbers, emails, or URLs from statements.
 
 Next suggested step:
-- Commit rollout steps 5 and 6 together.
-- After enough TestFlight data accumulates, review dashboard metrics before deciding whether to enable production analytics or revisit pricing.
+- Review Step 1 scaffold manually or validate from an external Terminal, not Codex.
+- Then proceed to Step 2: read `.dsbackup` package directories, locate/decode `manifest.json`, and list import batches/accounts/transaction counts/balance counts without touching the live app store or sandbox.
+- After reviewing the Step 1 changes, make a git commit before starting Step 2.

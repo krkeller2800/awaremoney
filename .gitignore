@@ -6,3 +6,7 @@ Volumes/
 xcuserdata/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
+Tools/FakePDFGen/Inputs/
+Tools/FakePDFGen/Output/
+Tools/FakePDFGen/Recipes/generated/
+*.dsbackup
