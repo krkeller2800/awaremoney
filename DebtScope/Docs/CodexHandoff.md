@@ -1,24 +1,28 @@
 Continue Fake PDF Generator rollout from `FakePDFGenImpPlan`.
 
 Current state:
-- User asked to implement Step 1: create the standalone Swift CLI package under `Tools/FakePDFGen`.
-- Step 1 files have been added outside the app target:
-  - `Tools/FakePDFGen/Package.swift`
-  - `Tools/FakePDFGen/Sources/FakePDFGen/main.swift`
-- The CLI scaffold imports `Foundation`, `PDFKit`, and `AppKit`, prints help for expected arguments, lists planned commands (`inspect`, `build-recipes`, `render`, `verify`), and explicitly states that this step-one scaffold does not read backups, app data, or private folders.
-- Repo-level `.gitignore` was updated with required privacy/generated-output rules:
-  - `Tools/FakePDFGen/Inputs/`
-  - `Tools/FakePDFGen/Output/`
-  - `Tools/FakePDFGen/Recipes/generated/`
-  - `*.dsbackup`
+- Step 1 was manually validated and committed before this handoff update.
+- Step 2 has been implemented in the standalone Swift CLI package under `Tools/FakePDFGen`, still outside the app target.
+- Added local manifest DTOs in `Tools/FakePDFGen/Sources/FakePDFGen/BackupManifestModels.swift`.
+- Added read-only `.dsbackup` package loading in `Tools/FakePDFGen/Sources/FakePDFGen/BackupPackageReader.swift`.
+- Wired `inspect --input /path/to/Backup.dsbackup` in `Tools/FakePDFGen/Sources/FakePDFGen/main.swift`.
+
+Step 2 behavior:
+- Requires a `.dsbackup` package directory with root `manifest.json`.
+- Decodes manifest version, generated date, accounts, import batches, transactions, and balance snapshots.
+- Lists total counts plus per-import-batch and per-account transaction/balance counts.
+- Optionally indexes `statements/<batchID>/*.pdf` by count only; it does not parse or copy statement PDFs.
+- Missing `statements` is valid.
+- Missing package, non-directory input, missing manifest, and invalid manifest fail with clear messages.
+- Inspect output avoids payees, memos, source filenames, account names, institution names, and last-four values.
 
 Validation status:
 - Do not run `swift run`, `swift build`, or related SwiftPM commands from the Xcode-hosted Codex terminal unless the user explicitly asks.
 - Previous SwiftPM attempts from Codex hit sandbox/cache permission problems and then appeared to freeze/crash Xcode after retrying with redirected cache paths.
-- The issue is likely specific to the Xcode/Codex execution environment, not necessarily the package itself.
-- User can validate manually in a normal Terminal if desired with:
-  - `cd Tools/FakePDFGen`
-  - `swift run FakePDFGen --help`
+- This Step 2 change was validated without SwiftPM using:
+  - `swiftc -parse Tools/FakePDFGen/Sources/FakePDFGen/BackupManifestModels.swift Tools/FakePDFGen/Sources/FakePDFGen/BackupPackageReader.swift Tools/FakePDFGen/Sources/FakePDFGen/main.swift`
+  - a temporary direct `swiftc` binary for `--help`
+  - a synthetic `.dsbackup` package in `/tmp` for `inspect --input`, confirming counts print and private fixture strings are not emitted
 
 Important constraints:
 - Keep FakePDFGen outside the shipping app target.
@@ -26,7 +30,12 @@ Important constraints:
 - Do not parse or copy original PDFs in the first pass.
 - Generated recipes/PDFs must never contain real names, addresses, account numbers, institution names, payees, memo text, source filenames, original PDF pages/images/fonts/metadata/hidden text, check numbers, confirmation IDs, authorization codes, phone numbers, emails, or URLs from statements.
 
+Working tree expected before commit:
+- `Tools/FakePDFGen/Sources/FakePDFGen/BackupManifestModels.swift` added
+- `Tools/FakePDFGen/Sources/FakePDFGen/BackupPackageReader.swift` added
+- `Tools/FakePDFGen/Sources/FakePDFGen/main.swift` modified
+- `DebtScope/Docs/CodexHandoff.md` modified by this handoff update
+
 Next suggested step:
-- Review Step 1 scaffold manually or validate from an external Terminal, not Codex.
-- Then proceed to Step 2: read `.dsbackup` package directories, locate/decode `manifest.json`, and list import batches/accounts/transaction counts/balance counts without touching the live app store or sandbox.
-- After reviewing the Step 1 changes, make a git commit before starting Step 2.
+- Review and commit Step 2.
+- Then proceed to Step 3: build sanitized recipe JSON from parsed manifest data, preserving only allowed pattern data and replacing all private source strings with deterministic fictional values.
