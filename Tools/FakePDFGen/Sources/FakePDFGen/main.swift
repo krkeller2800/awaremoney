@@ -74,7 +74,22 @@ struct FakePDFGenCLI {
             let builder = SampleRecipeBuilder()
             let recipes = try builder.buildRecipes(from: summary.manifest, seed: seed)
             let result = try builder.writeRecipes(recipes, to: recipesURL)
-            printRecipeBuildResult(result, seed: seed)
+            let validation = try PrivacyValidator().validateRecipes(
+                result.recipes,
+                in: recipesURL,
+                against: summary.manifest
+            )
+            printRecipeBuildResult(result, seed: seed, validation: validation)
+
+            if validation.hasFailures && !options.containsFlag("--allow-risky-output") {
+                throw PrivacyValidationError.validationFailed(reportURL: validation.reportURL)
+            }
+
+            if validation.hasFailures {
+                print("")
+                print("Risky output allowed by explicit --allow-risky-output flag.")
+            }
+
             return 0
         } catch {
             print("Error: \(error.localizedDescription)")
@@ -134,7 +149,11 @@ struct FakePDFGenCLI {
         print("Privacy note: inspect mode does not read live app data, parse statement PDFs, or print payees, memos, source filenames, account names, institutions, or last-four values.")
     }
 
-    private func printRecipeBuildResult(_ result: SampleRecipeBuildResult, seed: String) {
+    private func printRecipeBuildResult(
+        _ result: SampleRecipeBuildResult,
+        seed: String,
+        validation: PrivacyValidationResult
+    ) {
         print("FakePDFGen recipe build")
         print("Recipes directory: \(result.outputDirectory.path)")
         print("Seed: \(seed)")
@@ -144,6 +163,11 @@ struct FakePDFGenCLI {
             print("  \(recipe.fileName) | kind: \(recipe.recipe.statementKind.rawValue) | transactions: \(recipe.recipe.transactions.count)")
         }
 
+        print("")
+        print("Privacy validation: \(validation.hasFailures ? "failed" : "passed")")
+        print("Validation report: \(validation.reportURL.path)")
+        print("Denylist entries checked: \(validation.denylistCount)")
+        print("Findings: \(validation.findings.count)")
         print("")
         print("Privacy note: recipe mode writes deterministic fictional values only. It does not parse statement PDFs, copy source filenames, or copy source account, institution, payee, memo, or last-four strings.")
     }
@@ -166,6 +190,8 @@ struct FakePDFGenCLI {
           --output <path>    Directory for generated PDF files.
           --recipes <path>   Directory for generated recipe JSON files.
           --seed <value>     Deterministic seed used for fictionalization.
+          --allow-risky-output
+                            Continue after privacy validation failures.
           --help, -h         Show this help text.
 
         Inspect mode reads only the provided .dsbackup package directory. It does not touch the live app store or app sandbox.
@@ -192,15 +218,23 @@ enum CLIError: LocalizedError {
 
 struct CLIOptions {
     private let values: [String: String]
+    private let flags: Set<String>
 
     init(arguments: [String]) throws {
         var values: [String: String] = [:]
+        var flags: Set<String> = []
         var index = 0
 
         while index < arguments.count {
             let option = arguments[index]
             guard option.hasPrefix("--") else {
                 throw CLIError.unsupportedOption(option)
+            }
+
+            if option == "--allow-risky-output" {
+                flags.insert(option)
+                index += 1
+                continue
             }
 
             guard index + 1 < arguments.count else {
@@ -217,10 +251,15 @@ struct CLIOptions {
         }
 
         self.values = values
+        self.flags = flags
     }
 
     func value(for option: String) -> String? {
         values[option]
+    }
+
+    func containsFlag(_ option: String) -> Bool {
+        flags.contains(option)
     }
 }
 
