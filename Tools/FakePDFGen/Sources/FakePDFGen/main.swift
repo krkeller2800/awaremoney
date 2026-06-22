@@ -24,6 +24,10 @@ struct FakePDFGenCLI {
             return buildRecipes(arguments: Array(commandArguments.dropFirst()))
         }
 
+        if command == "render" {
+            return render(arguments: Array(commandArguments.dropFirst()))
+        }
+
         if supportedCommands.contains(command) {
             print("'\(command)' is planned for a later implementation step.")
             print("")
@@ -90,6 +94,30 @@ struct FakePDFGenCLI {
                 print("Risky output allowed by explicit --allow-risky-output flag.")
             }
 
+            return 0
+        } catch {
+            print("Error: \(error.localizedDescription)")
+            print("")
+            printHelp()
+            return 1
+        }
+    }
+
+    private func render(arguments: [String]) -> Int32 {
+        do {
+            let options = try CLIOptions(arguments: arguments)
+            guard let recipesPath = options.value(for: "--recipes") else {
+                throw CLIError.missingRequiredOption("--recipes")
+            }
+
+            guard let outputPath = options.value(for: "--output") else {
+                throw CLIError.missingRequiredOption("--output")
+            }
+
+            let recipesURL = URL(fileURLWithPath: recipesPath).standardizedFileURL
+            let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+            let result = try FakeStatementPDFRenderer().renderRecipes(from: recipesURL, to: outputURL)
+            printRenderResult(result)
             return 0
         } catch {
             print("Error: \(error.localizedDescription)")
@@ -170,6 +198,20 @@ struct FakePDFGenCLI {
         print("Findings: \(validation.findings.count)")
         print("")
         print("Privacy note: recipe mode writes deterministic fictional values only. It does not parse statement PDFs, copy source filenames, or copy source account, institution, payee, memo, or last-four strings.")
+    }
+
+    private func printRenderResult(_ result: FakeStatementPDFRenderResult) {
+        print("FakePDFGen PDF render")
+        print("Recipes directory: \(result.recipesDirectory.path)")
+        print("Output directory: \(result.outputDirectory.path)")
+        print("PDFs written: \(result.renderedPDFs.count)")
+
+        for pdf in result.renderedPDFs {
+            print("  \(pdf.pdfFileName) | source: \(pdf.recipeFileName) | pages: \(pdf.pageCount) | transactions: \(pdf.transactionCount)")
+        }
+
+        print("")
+        print("Privacy note: render mode creates brand-new text-based PDFs from sanitized recipe JSON. It does not open source statement PDFs or copy original PDF pages, images, fonts, or metadata.")
     }
 
     private func printHelp() {
