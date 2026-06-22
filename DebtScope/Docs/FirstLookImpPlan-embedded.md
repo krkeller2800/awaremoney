@@ -1,0 +1,288 @@
+# First Look Implementation Plan
+
+## Goal
+
+Make DebtScope's first launch explain what the app does, why importing matters, and what the user should do next. The first screen should guide a new user from an empty data set to a successful first import without requiring them to infer the workflow from the sidebar.
+
+## Current Problem
+
+`QuickStartView` currently opens directly into the normal app shell. On a clean install, users see section names such as `Payoff Plan`, `Liability Accounts`, `Compare Strategies`, `Net Worth`, and `Income & Bills`, plus a small hint that says to import a statement. That is useful after setup, but it does not clearly answer:
+
+- What does DebtScope do?
+- Why should I import a statement?
+- Which button should I tap first?
+- What happens after import?
+
+Primary file: `DebtScope/View/QuickStartView.swift`.
+
+## Distribution Export
+
+This source plan keeps mockups as linked SVG files so the document and assets remain easy to review and edit. To create a single self-contained markdown file for sharing, run:
+
+```sh
+sh DebtScope/Docs/export-first-look-plan.sh
+```
+
+The script writes both `DebtScope/Docs/FirstLookImpPlan-embedded.md` and `DebtScope/Docs/FirstLookImpPlan-embedded.html` with the SVG mockups embedded as base64 data-URI images. Open the HTML file in Safari to view the mockups inline. Treat both embedded files as generated send-out artifacts; make edits in this source document and the SVG files, then regenerate them.
+
+## Principles
+
+- Keep the first-launch path short. Do not add a long multi-screen onboarding flow for this pass.
+- Make `Import Statement` the obvious primary action in the main content, not only in the toolbar.
+- Explain that imports are local/on-device where appropriate, without turning the screen into a privacy policy.
+- Preserve existing import routing, statement review, and paywall behavior.
+- Avoid changing parser behavior, import limits, purchase logic, or backup behavior in this pass.
+
+## Step 1: Add First-Look State Helpers
+
+<img alt="Step 1 iPhone mockup showing clean-start state logic" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRTY29wZTwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMTE2IiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjEwOCIgcng9IjE4IiBmaWxsPSIjZGJlYWZlIiBzdHJva2U9IiMyNTYzZWIiIHN0cm9rZS13aWR0aD0iMiIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMTUwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzExMTgyNyI+Q2xlYW4tc3RhcnQgbG9naWM8L3RleHQ+CiAgPHRleHQgeD0iNzgiIHk9IjE3OCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiMzNzQxNTEiPk5vIGFjY291bnRzPC90ZXh0PgogIDx0ZXh0IHg9Ijc4IiB5PSIyMDAiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjMzc0MTUxIj5ObyByZXZpZXcgaXRlbXM8L3RleHQ+CiAgPHJlY3QgeD0iNTgiIHk9IjI1MiIgd2lkdGg9IjI3NCIgaGVpZ2h0PSI1OCIgcng9IjE0IiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSI3OCIgeT0iMjg3IiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iIzExMTgyNyI+U2hvdyBGaXJzdCBMb29rIEludHJvPC90ZXh0PgogIDxyZWN0IHg9IjU4IiB5PSIzMjgiIHdpZHRoPSIyNzQiIGhlaWdodD0iNTgiIHJ4PSIxNCIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjY2JkNWUxIi8+CiAgPHRleHQgeD0iNzgiIHk9IjM2MyIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTUiIGZvbnQtd2VpZ2h0PSI2MDAiIGZpbGw9IiMxMTE4MjciPkhpZGUgb2xkIHNtYWxsIGhpbnQ8L3RleHQ+CiAgPHJlY3QgeD0iNTgiIHk9IjQyNiIgd2lkdGg9IjI3NCIgaGVpZ2h0PSI4OCIgcng9IjE2IiBmaWxsPSIjZWNmZGY1IiBzdHJva2U9IiMxMGI5ODEiLz4KICA8dGV4dCB4PSI3OCIgeT0iNDYxIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzA2NWY0NiI+RXhwZWN0ZWQgcmVzdWx0PC90ZXh0PgogIDx0ZXh0IHg9Ijc4IiB5PSI0ODYiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjMDY1ZjQ2Ij5Pbmx5IG5ldyB1c2VycyBzZWUgb25ib2FyZGluZy48L3RleHQ+Cjwvc3ZnPgo=">
+
+Mockup role: conceptual only. Step 1 does not add a visible app screen like the mockup; it adds the state helpers that decide whether the Step 2 first-look intro should be shown. The first user-visible UI begins in Step 2.
+
+### Scope
+
+Add small computed properties in `QuickStartView` to describe the clean-start state.
+
+### Implementation
+
+- Add `private var hasImportedData: Bool` using the existing `accounts` query and `reviewItems` state.
+- Add `private var shouldShowFirstLookIntro: Bool` that is true when there are no accounts and no pending review items.
+- Keep the existing `shouldShowImportStartHint` temporarily if needed, but avoid showing both the small hint and the new intro at the same time.
+
+Suggested behavior:
+
+```swift
+private var hasImportedData: Bool {
+    !accounts.isEmpty || !reviewItems.isEmpty
+}
+
+private var shouldShowFirstLookIntro: Bool {
+    !hasImportedData
+}
+```
+
+### Acceptance Criteria
+
+- Clean install shows the new first-look intro.
+- Existing users with accounts do not see the intro.
+- Users with statements waiting in `Needs Review` do not see the generic intro; they should be guided to review instead.
+
+## Step 2: Build The First-Look Intro View
+
+<img alt="Step 2 iPhone mockup showing the first-look intro card" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRTY29wZTwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMTEyIiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjM1NiIgcng9IjIyIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjE1OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI4MDAiIGZpbGw9IiMxMTE4MjciPkJ1aWxkIHlvdXIgZGVidDwvdGV4dD4KICA8dGV4dCB4PSIxOTUiIHk9IjE4NCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI4MDAiIGZpbGw9IiMxMTE4MjciPmFuZCBjYXNoLWZsb3cgcGljdHVyZTwvdGV4dD4KICA8dGV4dCB4PSI3OCIgeT0iMjMwIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMyIgZmlsbD0iIzM3NDE1MSI+SW1wb3J0IGEgY3JlZGl0IGNhcmQsIGxvYW4sIGJhbmssPC90ZXh0PgogIDx0ZXh0IHg9Ijc4IiB5PSIyNTAiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjMzc0MTUxIj5vciBicm9rZXJhZ2Ugc3RhdGVtZW50LiBEZWJ0U2NvcGU8L3RleHQ+CiAgPHRleHQgeD0iNzgiIHk9IjI3MCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiMzNzQxNTEiPnJlYWRzIGl0IGxvY2FsbHkgYW5kIGNyZWF0ZXMgYWNjb3VudHMuPC90ZXh0PgogIDxyZWN0IHg9Ijc4IiB5PSIzMDYiIHdpZHRoPSIyMzQiIGhlaWdodD0iNDIiIHJ4PSIxMiIgZmlsbD0iIzI1NjNlYiIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMzMzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2ZmZmZmZiI+SW1wb3J0IFN0YXRlbWVudDwvdGV4dD4KICA8dGV4dCB4PSIxOTUiIHk9IjM3MSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI2MDAiIGZpbGw9IiMyNTYzZWIiPldhdGNoIEhvdyB0byBJbXBvcnQ8L3RleHQ+CiAgPHJlY3QgeD0iNzgiIHk9IjM5MCIgd2lkdGg9IjIzNCIgaGVpZ2h0PSIzOCIgcng9IjExIiBmaWxsPSIjZjhmYWZjIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjQxNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPlRyeSBTYW1wbGUgRGF0YTwvdGV4dD4KICA8dGV4dCB4PSI3OCIgeT0iNDU0IiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNjQ3NDhiIj5BZnRlciBpbXBvcnQgb3Igc2FtcGxlIGRhdGEsIERlYnRTY29wZTwvdGV4dD4KICA8dGV4dCB4PSI3OCIgeT0iNDY5IiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMC41IiBmaWxsPSIjNjQ3NDhiIj5yb3V0ZXMgeW91IHRvIHRoZSByaWdodCBzZWN0aW9uLjwvdGV4dD4KPC9zdmc+Cg==">
+
+### Scope
+
+Add a prominent inline intro view near the top of the QuickStart sidebar/home content.
+
+### Implementation
+
+- Add a `private var firstLookIntro: some View` in `QuickStartView`.
+- Place it above `quickStartGroupedTopicCard` in both `compactQuickStartLayout` and `regularQuickStartLayout`.
+- Use the existing import button behavior by setting `showImporter = true`.
+- Use `showHelp = true` for the secondary help action.
+- Add a tertiary `Try Sample Data` action that routes to the sample-data flow described in Step 7, bypassing statement import for users who want to evaluate the app first.
+
+Suggested copy:
+
+Title:
+
+`Build your debt and cash-flow picture`
+
+Body:
+
+`Import a credit card, loan, bank, or brokerage statement. DebtScope reads it locally, creates accounts, and helps you track payoff, cash flow, and net worth.`
+
+Primary action:
+
+`Import Statement`
+
+Secondary action:
+
+`Watch How to Import`
+
+Tertiary action:
+
+`Try Sample Data`
+
+Optional footnote:
+
+`After import, DebtScope routes you to review or the right section automatically.`
+
+### Design Notes
+
+- Make the primary button visually prominent and full-width on compact layouts.
+- The first-look intro is temporary. It should hide after an account exists or a statement is waiting in review, so users then see the normal app sections instead of the intro.
+- If the topic list remains visible beneath the intro, keep it visually secondary and avoid making any specific section look like the next required action.
+- Prefer standard SwiftUI controls and SF Symbols already used in the file.
+- Avoid decorative graphics for this pass.
+
+### Acceptance Criteria
+
+- The primary action opens the same file importer as the toolbar `Import` button.
+- The secondary action opens `HelpVideosView`.
+- The tertiary action starts the Step 7 sample-data flow without opening the file importer.
+- Text wraps cleanly on compact iPhone widths.
+- VoiceOver reads the intro in a useful order.
+
+## Step 3: Remove The Old Import Hint
+
+### Scope
+
+Remove the existing small import hint so the new first-look intro is the only empty-data starting guidance.
+
+This is not a separate user-facing screen. It is cleanup work in the same empty-data experience shown in Step 2.
+
+### Implementation
+
+- Remove `shouldShowImportStartHint` if it is no longer needed anywhere else.
+- Remove `importStartHint` from `QuickStartView` instead of keeping it as a secondary prompt.
+- Remove the `importStartHint` placements from both `compactQuickStartLayout` and `regularQuickStartLayout`.
+- Do not replace it with another generic hint. If a future edge case needs guidance, add targeted empty-state copy in that specific destination.
+
+### Acceptance Criteria
+
+- Clean install has one clear first action: `Import Statement` in the first-look intro.
+- The old small hint does not appear above or below the first-look intro.
+- Pending review and existing-account states route to their normal experiences without showing generic first-launch import guidance.
+
+## Step 4: Add A How DebtScope Works Checklist
+
+<img alt="Step 4 iPhone mockup showing how DebtScope works" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRTY29wZTwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMTEyIiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjM1NiIgcng9IjIyIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjE1MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI4MDAiIGZpbGw9IiMxMTE4MjciPkhvdyBEZWJ0U2NvcGUgV29ya3M8L3RleHQ+CiAgPGNpcmNsZSBjeD0iODgiIGN5PSIyMDQiIHI9IjE0IiBmaWxsPSIjMjU2M2ViIi8+PHRleHQgeD0iODgiIHk9IjIwOSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiNmZmZmZmYiPjE8L3RleHQ+CiAgPHRleHQgeD0iMTE0IiB5PSIyMDkiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjMTExODI3Ij5JbXBvcnQgYSBzdGF0ZW1lbnQ8L3RleHQ+CiAgPGxpbmUgeDE9Ijg4IiB5MT0iMjIyIiB4Mj0iODgiIHkyPSIyNjAiIHN0cm9rZT0iI2NiZDVlMSIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgPGNpcmNsZSBjeD0iODgiIGN5PSIyNzgiIHI9IjE0IiBmaWxsPSIjMjU2M2ViIi8+PHRleHQgeD0iODgiIHk9IjI4MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiNmZmZmZmYiPjI8L3RleHQ+CiAgPHRleHQgeD0iMTE0IiB5PSIyODMiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjMTExODI3Ij5SZXZpZXcgYWNjb3VudCBkZXRhaWxzPC90ZXh0PgogIDxsaW5lIHgxPSI4OCIgeTE9IjI5NiIgeDI9Ijg4IiB5Mj0iMzM0IiBzdHJva2U9IiNjYmQ1ZTEiIHN0cm9rZS13aWR0aD0iMiIvPgogIDxjaXJjbGUgY3g9Ijg4IiBjeT0iMzUyIiByPSIxNCIgZmlsbD0iIzI1NjNlYiIvPjx0ZXh0IHg9Ijg4IiB5PSIzNTciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmZmZmZmIj4zPC90ZXh0PgogIDx0ZXh0IHg9IjExNCIgeT0iMzQ5IiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzExMTgyNyI+U2VlIHBheW9mZiwgY2FzaCBmbG93LDwvdGV4dD4KICA8dGV4dCB4PSIxMTQiIHk9IjM3MSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTUiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPmFuZCBuZXQgd29ydGggdXBkYXRlPC90ZXh0PgogIDxyZWN0IHg9Ijc4IiB5PSI0MDYiIHdpZHRoPSIyMzQiIGhlaWdodD0iNDIiIHJ4PSIxMiIgZmlsbD0iIzI1NjNlYiIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iNDMzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2ZmZmZmZiI+SW1wb3J0IFN0YXRlbWVudDwvdGV4dD4KPC9zdmc+Cg==">
+
+### Scope
+
+Explain what happens after tapping import.
+
+### Implementation
+
+Add a compact `How DebtScope Works` checklist inside `firstLookIntro`:
+
+1. `Import a statement`
+2. `Review detected account details`
+3. `See payoff, cash flow, and net worth update`
+
+### Acceptance Criteria
+
+- A new user can understand the basic workflow without opening Help.
+- The checklist remains short enough to scan.
+- The checklist does not imply cloud aggregation or bank-login support.
+
+## Step 5: Make Empty Section Labels More Beginner-Friendly
+
+<img alt="Step 5 iPhone mockup showing beginner-friendly section labels" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRTY29wZTwvdGV4dD4KICA8dGV4dCB4PSI1OCIgeT0iMTI4IiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzY0NzQ4YiI+REVCVDwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMTQ0IiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjQ4IiByeD0iMTQiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIvPgogIDx0ZXh0IHg9Ijc4IiB5PSIxNzQiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjMTExODI3Ij5EZWJ0IFN1bW1hcnk8L3RleHQ+PHRleHQgeD0iMzA0IiB5PSIxNzQiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE2IiBmaWxsPSIjOTRhM2I4Ij7igLo8L3RleHQ+CiAgPHJlY3QgeD0iNTgiIHk9IjIwMCIgd2lkdGg9IjI3NCIgaGVpZ2h0PSI0OCIgcng9IjE0IiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSI3OCIgeT0iMjMwIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZmlsbD0iIzExMTgyNyI+RGVidHM8L3RleHQ+PHRleHQgeD0iMzA0IiB5PSIyMzAiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE2IiBmaWxsPSIjOTRhM2I4Ij7igLo8L3RleHQ+CiAgPHRleHQgeD0iNTgiIHk9IjI4NiIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiM2NDc0OGIiPkNBU0ggRkxPVzwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMzAyIiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjQ4IiByeD0iMTQiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIvPgogIDx0ZXh0IHg9Ijc4IiB5PSIzMzIiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjMTExODI3Ij5DYXNoIEFjY291bnRzPC90ZXh0Pjx0ZXh0IHg9IjMwNCIgeT0iMzMyIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNiIgZmlsbD0iIzk0YTNiOCI+4oC6PC90ZXh0PgogIDxyZWN0IHg9IjU4IiB5PSIzNTgiIHdpZHRoPSIyNzQiIGhlaWdodD0iNDgiIHJ4PSIxNCIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjY2JkNWUxIi8+CiAgPHRleHQgeD0iNzgiIHk9IjM4OCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTUiIGZpbGw9IiMxMTE4MjciPkFkZCBJbmNvbWUgJmFtcDsgQmlsbHM8L3RleHQ+PHRleHQgeD0iMzA0IiB5PSIzODgiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE2IiBmaWxsPSIjOTRhM2I4Ij7igLo8L3RleHQ+CiAgPHRleHQgeD0iNTgiIHk9IjQ0NCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiM2NDc0OGIiPldPUlRIPC90ZXh0PgogIDxyZWN0IHg9IjU4IiB5PSI0NjAiIHdpZHRoPSIyNzQiIGhlaWdodD0iNDgiIHJ4PSIxNCIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjY2JkNWUxIi8+CiAgPHRleHQgeD0iNzgiIHk9IjQ5MCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTUiIGZpbGw9IiMxMTE4MjciPk5ldCBXb3J0aDwvdGV4dD48dGV4dCB4PSIzMDQiIHk9IjQ5MCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTYiIGZpbGw9IiM5NGEzYjgiPuKAujwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iNTE2IiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjQ4IiByeD0iMTQiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIvPgogIDx0ZXh0IHg9Ijc4IiB5PSI1NDYiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE1IiBmaWxsPSIjMTExODI3Ij5Bc3NldHM8L3RleHQ+PHRleHQgeD0iMzA0IiB5PSI1NDYiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE2IiBmaWxsPSIjOTRhM2I4Ij7igLo8L3RleHQ+Cjwvc3ZnPgo=">
+
+### Scope
+
+Improve first-read comprehension of the main sections without changing app architecture.
+
+### Implementation Options
+
+Preferred small change:
+
+- Change `QuickStartTopic` raw values:
+  - `Liability Accounts` -> `Debts`
+  - `Asset Accounts` -> `Cash Accounts`
+  - `Compare Strategies` -> `Debt Summary`
+  - `Physical Assets` -> `Assets`
+  - `Income & Bills` -> `Add Income & Bills`
+
+Alternative if existing labels are important elsewhere:
+
+- Keep raw values stable and add a separate `displayTitle` property used only in the QuickStart sidebar.
+
+### Acceptance Criteria
+
+- Navigation destinations and routing still work because topic identity remains enum-based.
+- Users see simpler labels in the sidebar/home list.
+- No import routing behavior changes.
+
+## Step 6: Add Data-Aware Empty Guidance In Destination Views
+
+<img alt="Step 6 iPhone mockup showing data-aware empty guidance" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRzPC90ZXh0PgogIDxjaXJjbGUgY3g9IjE5NSIgY3k9IjE4OCIgcj0iNDIiIGZpbGw9IiNkYmVhZmUiLz4KICA8cmVjdCB4PSIxNzQiIHk9IjE3MiIgd2lkdGg9IjQyIiBoZWlnaHQ9IjMwIiByeD0iNiIgZmlsbD0iIzI1NjNlYiIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMjcyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIyMiIgZm9udC13ZWlnaHQ9IjgwMCIgZmlsbD0iIzExMTgyNyI+Tm8gZGVidHMgeWV0PC90ZXh0PgogIDx0ZXh0IHg9IjE5NSIgeT0iMzA2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzM3NDE1MSI+SW1wb3J0IGEgY3JlZGl0IGNhcmQgb3IgbG9hbjwvdGV4dD4KICA8dGV4dCB4PSIxOTUiIHk9IjMyOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiMzNzQxNTEiPnN0YXRlbWVudCB0byBzdGFydCBwYXlvZmYgdHJhY2tpbmcuPC90ZXh0PgogIDxyZWN0IHg9Ijc4IiB5PSIzNzAiIHdpZHRoPSIyMzQiIGhlaWdodD0iNDYiIHJ4PSIxMiIgZmlsbD0iIzI1NjNlYiIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMzk5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNSIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iI2ZmZmZmZiI+SW1wb3J0IFN0YXRlbWVudDwvdGV4dD4KICA8cmVjdCB4PSI3OCIgeT0iNDM0IiB3aWR0aD0iMjM0IiBoZWlnaHQ9IjQ0IiByeD0iMTIiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iNDYyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iIzI1NjNlYiI+V2F0Y2ggSG93IHRvIEltcG9ydDwvdGV4dD4KPC9zdmc+Cg==">
+
+### Scope
+
+When users tap a section that does not have enough data yet, the destination should point them to the next useful action instead of showing a generic blank view.
+
+The mockup above is one representative example only. Step 6 is a dynamic behavior rule: the screen changes based on which section the user taps and which categories of data already exist.
+
+### Dynamic Behavior Examples
+
+| User taps | If this data is missing | Show | Primary action |
+|---|---|---|---|
+| `Net Worth` | assets, property, or investments | `Add assets to see net worth` | `Add Asset` |
+| `Cash Accounts` | bank/cash accounts | `Add cash accounts to track cash flow` | `Import Bank Statement` |
+| `Debts` | credit-card or loan accounts | `Add debts to build a payoff plan` | `Import Credit Card or Loan Statement` |
+| `Add Income & Bills` | income and bills | `Add income and bills` | `Add Income` / `Add Bill` |
+
+Example: if the first import is a credit card and the user taps `Net Worth`, do not open an empty net worth dashboard. Show an empty state explaining that net worth needs assets too, with actions to add a manual asset or import a brokerage statement.
+
+### Implementation
+
+Review these destinations from `topicContent`:
+
+- `DebtPayoffPlanView`
+- `DebtPayoffDetailView`
+- `DebtSummaryView`
+- `CashFlowDetailView`
+- `NetWorthView`
+- `IncomeAndBillsView`
+- `QuickStartAssetsDetailView`
+
+For any destination that currently shows a generic empty state, make sure it includes either:
+
+- An `Import Statement` action when import is the right first step.
+- An `Add Asset` action for physical/manual assets.
+- A short description of what data is needed.
+
+Keep these as focused empty-state improvements. Do not redesign each destination.
+
+### Acceptance Criteria
+
+- Tapping any first-look section does not lead to a dead end.
+- Empty states use the same import path where practical.
+- Manual asset flow remains separate from statement import.
+
+## Step 7: Add A Sample Data Path
+
+<img alt="Step 7 iPhone mockup showing an optional sample data action" width="260" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTAiIGhlaWdodD0iODQ0IiB2aWV3Qm94PSIwIDAgMzkwIDg0NCI+CiAgPHJlY3Qgd2lkdGg9IjM5MCIgaGVpZ2h0PSI4NDQiIGZpbGw9IiNlZWYyZjciLz4KICA8cmVjdCB4PSIyNCIgeT0iMjAiIHdpZHRoPSIzNDIiIGhlaWdodD0iODA0IiByeD0iNDIiIGZpbGw9IiMxMTE4MjciLz4KICA8cmVjdCB4PSIzNiIgeT0iNDQiIHdpZHRoPSIzMTgiIGhlaWdodD0iNzU2IiByeD0iMzIiIGZpbGw9IiNmOGZhZmMiLz4KICA8cmVjdCB4PSIxNTAiIHk9IjMyIiB3aWR0aD0iOTAiIGhlaWdodD0iMTgiIHJ4PSI5IiBmaWxsPSIjMTExODI3Ii8+CiAgPHRleHQgeD0iMTk1IiB5PSI4NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTgiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPkRlYnRTY29wZTwvdGV4dD4KICA8cmVjdCB4PSI1OCIgeT0iMTE4IiB3aWR0aD0iMjc0IiBoZWlnaHQ9IjMzMCIgcng9IjIyIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNjYmQ1ZTEiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjE1OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI4MDAiIGZpbGw9IiMxMTE4MjciPlNlZSBEZWJ0U2NvcGU8L3RleHQ+CiAgPHRleHQgeD0iMTk1IiB5PSIxODQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjIwIiBmb250LXdlaWdodD0iODAwIiBmaWxsPSIjMTExODI3Ij5pbiBhY3Rpb248L3RleHQ+CiAgPHRleHQgeD0iNzgiIHk9IjIyNCIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTMiIGZpbGw9IiMzNzQxNTEiPlVzZSBsb2NhbCBzYW1wbGUgZGF0YSB0byBwcmV2aWV3PC90ZXh0PgogIDx0ZXh0IHg9Ijc4IiB5PSIyNDQiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEzIiBmaWxsPSIjMzc0MTUxIj5kZWJ0cywgY2FzaCBmbG93LCBhbmQgbmV0IHdvcnRoLjwvdGV4dD4KICA8cmVjdCB4PSI3OCIgeT0iMjg2IiB3aWR0aD0iMjM0IiBoZWlnaHQ9IjQ2IiByeD0iMTIiIGZpbGw9IiNmNTllMGIiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjMxNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ii1hcHBsZS1zeXN0ZW0sQmxpbmtNYWNTeXN0ZW1Gb250LFNlZ29lIFVJLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTUiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMxMTE4MjciPlRyeSBTYW1wbGUgRGF0YTwvdGV4dD4KICA8cmVjdCB4PSI3OCIgeT0iMzQ4IiB3aWR0aD0iMjM0IiBoZWlnaHQ9IjQyIiByeD0iMTIiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2NiZDVlMSIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMzc1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LWZhbWlseT0iLWFwcGxlLXN5c3RlbSxCbGlua01hY1N5c3RlbUZvbnQsU2Vnb2UgVUksc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjYwMCIgZmlsbD0iIzI1NjNlYiI+SW1wb3J0IFN0YXRlbWVudCBJbnN0ZWFkPC90ZXh0PgogIDx0ZXh0IHg9Ijc4IiB5PSI0MjYiIGZvbnQtZmFtaWx5PSItYXBwbGUtc3lzdGVtLEJsaW5rTWFjU3lzdGVtRm9udCxTZWdvZSBVSSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmaWxsPSIjNjQ3NDhiIj5TYW1wbGUgZGF0YSBjYW4gYmUgcmVtb3ZlZCBsYXRlci48L3RleHQ+Cjwvc3ZnPgo=">
+
+### Scope
+
+Let users see DebtScope in action using sample data, even before they import their own statement. Step 2 exposes this through `Try Sample Data`, which bypasses the file importer and starts this flow.
+
+### Flow
+
+1. User launches with no data and sees the Step 2 first-look intro.
+2. User taps `Try Sample Data` instead of `Import Statement`.
+3. DebtScope explains that sample data will create demo accounts, balances, transactions, income, and bills.
+4. User confirms.
+5. The app inserts clearly labeled sample data using existing SwiftData models.
+6. The first-look intro hides because data now exists.
+7. The user lands in the normal app with populated debt, cash-flow, and net-worth sections.
+8. Settings or the sample-data banner provides a clear `Remove Sample Data` action.
+
+### Implementation
+
+- Add a clearly labeled `Try Sample Data` action from the first-look intro.
+- Keep sample data local and deterministic; do not call the parser pipeline or consume import limits.
+- Create sample records through the same SwiftData model types the app already uses.
+- Mark sample-created records so they can be removed without touching user-created data.
+- Add a clear reset/delete path before shipping broadly.
+
+### Acceptance Criteria
+
+- Sample data is clearly labeled as sample data.
+- It does not count against real import limits.
+- It does not require file access, network access, or a bank statement.
+- Users can remove it without deleting real user-entered data.
+
+## End-User Outcome Criteria
+
+- Clean first launch clearly explains DebtScope's purpose.
+- `Import Statement` is the dominant first action.
+- `Try Sample Data` lets users see DebtScope in action without having a statement ready.
+- Users understand the import -> review -> dashboard workflow.
+- Empty sections guide users to the right next action instead of showing blank dashboards.
+- Existing users do not receive unnecessary onboarding.

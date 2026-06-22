@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+  <rect width="390" height="844" fill="#eef2f7"/>
+  <rect x="24" y="20" width="342" height="804" rx="42" fill="#111827"/>
+  <rect x="36" y="44" width="318" height="756" rx="32" fill="#f8fafc"/>
+  <rect x="150" y="32" width="90" height="18" rx="9" fill="#111827"/>
+  <text x="195" y="86" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="18" font-weight="700" fill="#111827">DebtScope</text>
+  <rect x="58" y="112" width="274" height="356" rx="22" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="195" y="152" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="20" font-weight="800" fill="#111827">How DebtScope Works</text>
+  <circle cx="88" cy="204" r="14" fill="#2563eb"/><text x="88" y="209" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#ffffff">1</text>
+  <text x="114" y="209" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#111827">Import a statement</text>
+  <line x1="88" y1="222" x2="88" y2="260" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="88" cy="278" r="14" fill="#2563eb"/><text x="88" y="283" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#ffffff">2</text>
+  <text x="114" y="283" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#111827">Review account details</text>
+  <line x1="88" y1="296" x2="88" y2="334" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="88" cy="352" r="14" fill="#2563eb"/><text x="88" y="357" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#ffffff">3</text>
+  <text x="114" y="349" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#111827">See payoff, cash flow,</text>
+  <text x="114" y="371" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#111827">and net worth update</text>
+  <rect x="78" y="406" width="234" height="42" rx="12" fill="#2563eb"/>
+  <text x="195" y="433" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="14" font-weight="700" fill="#ffffff">Import Statement</text>
+</svg>
