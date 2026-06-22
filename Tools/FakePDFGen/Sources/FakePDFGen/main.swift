@@ -20,6 +20,10 @@ struct FakePDFGenCLI {
             return inspect(arguments: Array(commandArguments.dropFirst()))
         }
 
+        if command == "build-recipes" {
+            return buildRecipes(arguments: Array(commandArguments.dropFirst()))
+        }
+
         if supportedCommands.contains(command) {
             print("'\(command)' is planned for a later implementation step.")
             print("")
@@ -43,6 +47,34 @@ struct FakePDFGenCLI {
             let inputURL = URL(fileURLWithPath: inputPath).standardizedFileURL
             let summary = try BackupPackageReader().readPackage(at: inputURL)
             printInspection(summary)
+            return 0
+        } catch {
+            print("Error: \(error.localizedDescription)")
+            print("")
+            printHelp()
+            return 1
+        }
+    }
+
+    private func buildRecipes(arguments: [String]) -> Int32 {
+        do {
+            let options = try CLIOptions(arguments: arguments)
+            guard let inputPath = options.value(for: "--input") else {
+                throw CLIError.missingRequiredOption("--input")
+            }
+
+            guard let recipesPath = options.value(for: "--recipes") else {
+                throw CLIError.missingRequiredOption("--recipes")
+            }
+
+            let seed = options.value(for: "--seed") ?? "debtscope-first-look-v1"
+            let inputURL = URL(fileURLWithPath: inputPath).standardizedFileURL
+            let recipesURL = URL(fileURLWithPath: recipesPath).standardizedFileURL
+            let summary = try BackupPackageReader().readPackage(at: inputURL)
+            let builder = SampleRecipeBuilder()
+            let recipes = try builder.buildRecipes(from: summary.manifest, seed: seed)
+            let result = try builder.writeRecipes(recipes, to: recipesURL)
+            printRecipeBuildResult(result, seed: seed)
             return 0
         } catch {
             print("Error: \(error.localizedDescription)")
@@ -100,6 +132,20 @@ struct FakePDFGenCLI {
 
         print("")
         print("Privacy note: inspect mode does not read live app data, parse statement PDFs, or print payees, memos, source filenames, account names, institutions, or last-four values.")
+    }
+
+    private func printRecipeBuildResult(_ result: SampleRecipeBuildResult, seed: String) {
+        print("FakePDFGen recipe build")
+        print("Recipes directory: \(result.outputDirectory.path)")
+        print("Seed: \(seed)")
+        print("Recipes written: \(result.recipes.count)")
+
+        for recipe in result.recipes {
+            print("  \(recipe.fileName) | kind: \(recipe.recipe.statementKind.rawValue) | transactions: \(recipe.recipe.transactions.count)")
+        }
+
+        print("")
+        print("Privacy note: recipe mode writes deterministic fictional values only. It does not parse statement PDFs, copy source filenames, or copy source account, institution, payee, memo, or last-four strings.")
     }
 
     private func printHelp() {
