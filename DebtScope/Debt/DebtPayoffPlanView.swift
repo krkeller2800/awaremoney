@@ -231,5 +231,5 @@ struct DebtPayoffPlanView: View {
         DebtPayoffPlanView()
             .environmentObject(SettingsStore())
     }
-    .modelContainer(for: DebtScopeSchemaV4.models, inMemory: true)
+    .modelContainer(for: DebtScopeSchemaV5.models, inMemory: true)
 }

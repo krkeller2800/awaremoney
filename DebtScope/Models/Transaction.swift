@@ -52,6 +52,7 @@ final class Transaction {
     // Optional originals for audit when edits occur
     var originalAmount: Decimal?
     var originalDate: Date?
+    var dataSetRaw: String = "user"
 
     init(
         id: UUID = UUID(),
@@ -74,7 +75,8 @@ final class Transaction {
         isUserModified: Bool = false,
         importHashKey: String? = nil,
         originalAmount: Decimal? = nil,
-        originalDate: Date? = nil
+        originalDate: Date? = nil,
+        dataSetRaw: String = "user"
     ) {
         self.id = id
         self.datePosted = datePosted
@@ -98,6 +100,6 @@ final class Transaction {
         self.importHashKey = importHashKey
         self.originalAmount = originalAmount
         self.originalDate = originalDate
+        self.dataSetRaw = dataSetRaw
     }
 }
-

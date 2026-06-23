@@ -282,12 +282,140 @@ private enum QuickStartReviewStorage {
     }
 }
 
+private enum SampleStatementResource: String, CaseIterable {
+    case loanOne = "001-genericLoan.pdf"
+    case checkingOne = "002-checking.pdf"
+    case creditCardOne = "003-creditCard.pdf"
+    case checkingTwo = "004-checking.pdf"
+    case checkingThree = "005-checking.pdf"
+    case creditCardTwo = "006-creditCard.pdf"
+    case creditCardThree = "007-creditCard.pdf"
+    case creditCardFour = "008-creditCard.pdf"
+    case creditCardFive = "009-creditCard.pdf"
+    case loanTwo = "010-genericLoan.pdf"
+    case loanThree = "011-genericLoan.pdf"
+
+    static var availableURLs: [URL] {
+        allCases.compactMap(\.url)
+    }
+
+    static var availableResources: [(resource: SampleStatementResource, url: URL)] {
+        allCases.compactMap { resource in
+            resource.url.map { (resource, $0) }
+        }
+    }
+
+    var statementType: StatementType {
+        switch self {
+        case .loanOne, .loanTwo, .loanThree:
+            return .loan
+        case .creditCardOne, .creditCardTwo, .creditCardThree, .creditCardFour, .creditCardFive:
+            return .creditCard
+        case .checkingOne, .checkingTwo, .checkingThree:
+            return .bank
+        }
+    }
+
+    var accountType: Account.AccountType {
+        statementType.defaultAccountType
+    }
+
+    private var url: URL? {
+        let name = URL(fileURLWithPath: rawValue).deletingPathExtension().lastPathComponent
+        return Bundle.main.url(forResource: name, withExtension: "pdf", subdirectory: "SampleData")
+            ?? Bundle.main.url(forResource: name, withExtension: "pdf", subdirectory: "Resources/SampleData")
+            ?? Bundle.main.url(forResource: name, withExtension: "pdf")
+    }
+}
+
+private struct SampleCashFlowItem {
+    let kind: CashFlowItem.Kind
+    let name: String
+    let amount: Decimal
+    let frequency: PaymentFrequency
+    let dayOfMonth: Int
+    let notes: String
+
+    static let defaults: [SampleCashFlowItem] = [
+        SampleCashFlowItem(
+            kind: .income,
+            name: "Monthly Paycheck",
+            amount: Decimal(4850),
+            frequency: .monthly,
+            dayOfMonth: 1,
+            notes: "Sample take-home pay"
+        ),
+        SampleCashFlowItem(
+            kind: .bill,
+            name: "Utility Bill",
+            amount: Decimal(string: "148.75") ?? 0,
+            frequency: .monthly,
+            dayOfMonth: 12,
+            notes: "Sample electricity and water bill"
+        ),
+        SampleCashFlowItem(
+            kind: .bill,
+            name: "Insurance Bill",
+            amount: Decimal(string: "186.40") ?? 0,
+            frequency: .monthly,
+            dayOfMonth: 20,
+            notes: "Sample auto and renters insurance"
+        )
+    ]
+}
+
+private enum SampleDataIdentity {
+    nonisolated static let statementFileNames = Set(SampleStatementResource.allCases.map(\.rawValue))
+    nonisolated static let institutionNames: Set<String> = Set([
+        "Harborview Bank",
+        "Summit Trail Finance",
+        "Crescent Valley Lending",
+        "Northstar Credit Union"
+    ].map(normalizedText))
+
+    nonisolated static func isSampleInstitution(_ institution: String?) -> Bool {
+        guard let institution else { return false }
+        return institutionNames.contains(normalizedText(institution))
+    }
+
+    nonisolated static func isSampleReviewItem(_ item: QuickStartReviewItem) -> Bool {
+        let fileName = item.url.lastPathComponent
+        let managedFileName = item.managedFileName ?? ""
+
+        if statementFileNames.contains(where: { sampleFileName in
+            fileName == sampleFileName
+                || fileName.hasSuffix("-\(sampleFileName)")
+                || managedFileName == sampleFileName
+                || managedFileName.hasSuffix("-\(sampleFileName)")
+        }) {
+            return true
+        }
+
+        if let institution = item.institution,
+           institutionNames.contains(normalizedText(institution)) {
+            return true
+        }
+
+        return false
+    }
+
+    nonisolated private static func normalizedText(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined()
+    }
+}
+
 struct QuickStartView: View {
     @StateObject private var vm: ImportViewModel
     @State private var coordinator: StatementImportCoordinator
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var importRouter: ImportOpenRouter
+    @EnvironmentObject private var dataModeController: DebtScopeDataModeController
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
@@ -307,6 +435,7 @@ struct QuickStartView: View {
     @State private var importProgressID: UUID? = nil
     @State private var showImportProgress = false
     @State private var importIsTakingLonger = false
+    @State private var isLoadingSampleStatements = false
     @State private var quickStartPending: QuickStartPendingImport? = nil
     @State private var reviewItems: [QuickStartReviewItem] = []
     @State private var selectedReviewItemID: UUID? = nil
@@ -592,6 +721,330 @@ struct QuickStartView: View {
         }
     }
 
+    private func seedSampleCashFlowItemsIfNeeded() {
+        var didInsert = false
+
+        for sample in SampleCashFlowItem.defaults {
+            let alreadyExists = cashFlowItems.contains { item in
+                item.kind == sample.kind
+                    && item.name.localizedCaseInsensitiveCompare(sample.name) == .orderedSame
+            }
+
+            guard !alreadyExists else { continue }
+
+            let item = CashFlowItem(
+                kind: sample.kind,
+                name: sample.name,
+                amount: sample.amount,
+                frequency: sample.frequency,
+                dayOfMonth: sample.dayOfMonth,
+                notes: sample.notes,
+                dataSetRaw: "sample"
+            )
+            modelContext.insert(item)
+            didInsert = true
+        }
+
+        guard didInsert else { return }
+
+        do {
+            try modelContext.save()
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+        } catch {
+            AMLogging.error("Failed to seed sample cash flow items: \(error.localizedDescription)", component: "QuickStartView")
+        }
+    }
+
+    private func configureSamplePayoffBudgetDefaults() {
+        let defaults = UserDefaults.standard
+        defaults.set("recurringNet", forKey: "baselineBudgetSourceRaw")
+        defaults.set(false, forKey: "useFixedDebtBudget")
+        defaults.set(0.0, forKey: "debtBudgetOverrideAmount")
+        defaults.set(true, forKey: "includeNonMonthlyIncomeSpreads")
+        defaults.set(1.0, forKey: "debtPaymentReinvestmentRate")
+        defaults.synchronize()
+    }
+
+    private func hasImportedSampleStatement(named fileName: String) -> Bool {
+        let descriptor = FetchDescriptor<ImportBatch>()
+        let batches = (try? modelContext.fetch(descriptor)) ?? []
+        return batches.contains { batch in
+            batch.sourceFileName == fileName
+                || ((batch.parserId?.hasPrefix("sample.") == true) && batch.sourceFileName == fileName)
+        }
+    }
+
+    private func resetImportedSampleStatements() {
+        let sampleFileNames = SampleDataIdentity.statementFileNames
+        let batches = (try? modelContext.fetch(FetchDescriptor<ImportBatch>())) ?? []
+        let sampleBatches = batches.filter { batch in
+            batch.dataSetRaw == "sample"
+                || sampleFileNames.contains(batch.sourceFileName)
+                || (batch.parserId?.hasPrefix("sample.") == true)
+        }
+
+        let accounts = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+        let sampleAccounts = accounts.filter { account in
+            account.dataSetRaw == "sample"
+                || SampleDataIdentity.isSampleInstitution(account.institutionName)
+                || SampleDataIdentity.isSampleInstitution(account.name)
+        }
+
+        guard !sampleBatches.isEmpty || !sampleAccounts.isEmpty else { return }
+
+        for batch in sampleBatches {
+            modelContext.delete(batch)
+        }
+
+        for account in sampleAccounts {
+            modelContext.delete(account)
+        }
+
+        do {
+            try modelContext.save()
+            NotificationCenter.default.post(name: .accountsDidChange, object: nil)
+            AMLogging.log(
+                "Reset sample imports before reload batches=\(sampleBatches.count) accounts=\(sampleAccounts.count)",
+                component: "QuickStartView"
+            )
+        } catch {
+            AMLogging.error("Failed to reset sample imports: \(error.localizedDescription)", component: "QuickStartView")
+        }
+    }
+
+    private func removeStagedSampleStatementsFromReview() {
+        var currentState = QuickStartReviewStorage.loadState() ?? QuickStartReviewState(
+            items: reviewItems,
+            selectedItemID: selectedReviewItemID
+        )
+        let stalePersistedItems = currentState.items.filter(SampleDataIdentity.isSampleReviewItem)
+
+        if !stalePersistedItems.isEmpty {
+            for item in stalePersistedItems {
+                QuickStartReviewStorage.removeManagedFile(item.url)
+            }
+
+            currentState.items.removeAll(where: SampleDataIdentity.isSampleReviewItem)
+            if let selectedItemID = currentState.selectedItemID,
+               !currentState.items.contains(where: { $0.id == selectedItemID }) {
+                currentState.selectedItemID = currentState.items.first?.id
+            }
+            QuickStartReviewStorage.saveState(currentState)
+        }
+
+        let staleLoadedItems = reviewItems.filter(SampleDataIdentity.isSampleReviewItem)
+        if !staleLoadedItems.isEmpty {
+            for item in staleLoadedItems {
+                QuickStartReviewStorage.removeManagedFile(item.url)
+            }
+
+            reviewItems.removeAll(where: SampleDataIdentity.isSampleReviewItem)
+        }
+
+        if let selectedReviewItemID,
+           !reviewItems.contains(where: { $0.id == selectedReviewItemID }) {
+            self.selectedReviewItemID = reviewItems.first?.id
+        }
+    }
+
+    private func repairSampleLiabilityTerms(
+        accountID: UUID?,
+        staged: StagedImport,
+        resource: SampleStatementResource
+    ) {
+        guard resource.accountType == .loan || resource.accountType == .creditCard else { return }
+
+        let account = sampleAccount(id: accountID, accountType: resource.accountType, staged: staged)
+        guard let account else {
+            AMLogging.error("Could not find sample liability account to repair for \(staged.sourceFileName)", component: "QuickStartView")
+            return
+        }
+
+        var terms = account.loanTerms ?? LoanTerms()
+        if let balance = preferredSampleLiabilityBalance(from: staged) {
+            if let apr = balance.interestRateAPR {
+                terms.apr = normalizedSampleAPR(apr)
+                terms.aprScale = balance.interestRateScale
+            } else if let apr = terms.apr {
+                terms.apr = normalizedSampleAPR(apr)
+            }
+
+            terms.paymentAmount = sampleAmortizingPayment(
+                for: balance.balance,
+                apr: balance.interestRateAPR ?? terms.apr,
+                proposedPayment: balance.typicalPaymentAmount ?? terms.paymentAmount
+            )
+
+            if terms.paymentDayOfMonth == nil {
+                let day = Calendar(identifier: .gregorian).component(.day, from: balance.asOfDate)
+                terms.paymentDayOfMonth = min(max(day, 1), 28)
+            }
+        } else if let snapshot = latestSampleSnapshot(for: account) {
+            if let apr = snapshot.interestRateAPR {
+                terms.apr = normalizedSampleAPR(apr)
+                terms.aprScale = snapshot.interestRateScale
+            } else if let apr = terms.apr {
+                terms.apr = normalizedSampleAPR(apr)
+            }
+
+            terms.paymentAmount = sampleAmortizingPayment(
+                for: snapshot.balance,
+                apr: snapshot.interestRateAPR ?? terms.apr,
+                proposedPayment: terms.paymentAmount
+            )
+
+            if terms.paymentDayOfMonth == nil {
+                let day = Calendar(identifier: .gregorian).component(.day, from: snapshot.asOfDate)
+                terms.paymentDayOfMonth = min(max(day, 1), 28)
+            }
+        }
+
+        account.loanTerms = terms
+
+        do {
+            try modelContext.save()
+        } catch {
+            AMLogging.error("Failed to repair sample liability terms for \(account.name): \(error.localizedDescription)", component: "QuickStartView")
+        }
+    }
+
+    private func repairExistingSampleLiabilityTerms() {
+        let accounts = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+        var didUpdate = false
+
+        for account in accounts where account.type == .loan || account.type == .creditCard {
+            let isSampleAccount = account.dataSetRaw == "sample"
+                || SampleDataIdentity.isSampleInstitution(account.institutionName)
+                || SampleDataIdentity.isSampleInstitution(account.name)
+            guard isSampleAccount, let latestBalance = latestSampleSnapshot(for: account) else { continue }
+
+            var terms = account.loanTerms ?? LoanTerms()
+            if let apr = latestBalance.interestRateAPR {
+                let normalizedAPR = normalizedSampleAPR(apr)
+                if terms.apr != normalizedAPR {
+                    terms.apr = normalizedAPR
+                    didUpdate = true
+                }
+                terms.aprScale = latestBalance.interestRateScale
+            } else if let apr = terms.apr {
+                let normalizedAPR = normalizedSampleAPR(apr)
+                if terms.apr != normalizedAPR {
+                    terms.apr = normalizedAPR
+                    didUpdate = true
+                }
+            }
+
+            let repairedPayment = sampleAmortizingPayment(
+                for: latestBalance.balance,
+                apr: latestBalance.interestRateAPR ?? terms.apr,
+                proposedPayment: terms.paymentAmount
+            )
+            if terms.paymentAmount != repairedPayment {
+                terms.paymentAmount = repairedPayment
+                didUpdate = true
+            }
+
+            if terms.paymentDayOfMonth == nil {
+                let day = Calendar(identifier: .gregorian).component(.day, from: latestBalance.asOfDate)
+                terms.paymentDayOfMonth = min(max(day, 1), 28)
+                didUpdate = true
+            }
+            account.loanTerms = terms
+        }
+
+        guard didUpdate else { return }
+
+        do {
+            try modelContext.save()
+        } catch {
+            AMLogging.error("Failed to repair existing sample liability terms: \(error.localizedDescription)", component: "QuickStartView")
+        }
+    }
+
+    private func sampleAccount(id: UUID?, accountType: Account.AccountType, staged: StagedImport) -> Account? {
+        let accounts = (try? modelContext.fetch(FetchDescriptor<Account>())) ?? []
+
+        if let id, let account = accounts.first(where: { $0.id == id && $0.type == accountType }) {
+            return account
+        }
+
+        let institution = staged.inferredInstitutionName
+        return accounts
+            .filter { account in
+                account.type == accountType
+                    && (account.dataSetRaw == "sample"
+                        || SampleDataIdentity.isSampleInstitution(account.institutionName)
+                        || SampleDataIdentity.isSampleInstitution(account.name)
+                        || normalizedSampleText(account.institutionName ?? account.name) == normalizedSampleText(institution ?? ""))
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+    }
+
+    private func preferredSampleLiabilityBalance(from staged: StagedImport) -> StagedBalance? {
+        let includedBalances = staged.balances.filter(\.include)
+        return includedBalances
+            .filter { ($0.typicalPaymentAmount ?? 0) > 0 }
+            .sorted { $0.asOfDate > $1.asOfDate }
+            .first
+            ?? includedBalances
+                .sorted { $0.asOfDate > $1.asOfDate }
+                .first
+    }
+
+    private func latestSampleSnapshot(for account: Account) -> BalanceSnapshot? {
+        account.balanceSnapshots
+            .filter { !$0.isExcluded }
+            .sorted { $0.asOfDate > $1.asOfDate }
+            .first
+    }
+
+    private func roundedCurrency(_ value: Decimal) -> Decimal {
+        var value = value
+        var result = Decimal()
+        NSDecimalRound(&result, &value, 2, .plain)
+        return result
+    }
+
+    private func fallbackSamplePayment(for balance: Decimal) -> Decimal {
+        roundedCurrency(absDecimal(balance) * (Decimal(string: "0.025") ?? Decimal(0.025)))
+    }
+
+    private func normalizedSampleAPR(_ apr: Decimal) -> Decimal {
+        apr > 1 ? apr / Decimal(100) : apr
+    }
+
+    private func sampleAmortizingPayment(
+        for balance: Decimal,
+        apr: Decimal?,
+        proposedPayment: Decimal?
+    ) -> Decimal {
+        let absoluteBalance = absDecimal(balance)
+        let proposed = proposedPayment.flatMap { $0 > 0 ? $0 : nil } ?? fallbackSamplePayment(for: balance)
+        let balanceFloor = roundedCurrency(absoluteBalance * (Decimal(string: "0.08") ?? Decimal(0.08)))
+
+        let interestFloor: Decimal = {
+            guard let apr, apr > 0 else { return .zero }
+            let monthlyInterest = absoluteBalance * apr / Decimal(12)
+            return roundedCurrency(monthlyInterest + Decimal(75))
+        }()
+
+        return max(proposed, balanceFloor, interestFloor)
+    }
+
+    private func absDecimal(_ value: Decimal) -> Decimal {
+        value < 0 ? -value : value
+    }
+
+    private func normalizedSampleText(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined()
+    }
+
     private func loadPersistedReviewStateIfNeeded() {
         guard !didLoadPersistedReviewState else { return }
         didLoadPersistedReviewState = true
@@ -774,6 +1227,83 @@ struct QuickStartView: View {
         }
     }
 
+    private func loadSampleData() {
+        guard dataModeController.mode == .sample else {
+            dataModeController.switchTo(.sample)
+            return
+        }
+
+        guard !isLoadingSampleStatements else { return }
+
+        let sampleResources = SampleStatementResource.availableResources
+        isLoadingSampleStatements = true
+        beginImportProgress()
+        seedSampleCashFlowItemsIfNeeded()
+        configureSamplePayoffBudgetDefaults()
+        removeStagedSampleStatementsFromReview()
+        resetImportedSampleStatements()
+
+        guard !sampleResources.isEmpty else {
+            isLoadingSampleStatements = false
+            endImportProgress()
+            routeToTopic(.incomeBills)
+            importReadyWarningMessage = "Sample statements are not available in this build. Sample income and bills were added."
+            return
+        }
+
+        Task {
+            for (resource, url) in sampleResources {
+                let fileName = url.lastPathComponent
+                vm.selectedAccountID = nil
+                vm.newAccountType = resource.accountType
+
+                let resolved = await StatementIntakeResolver.resolve(
+                    url: url,
+                    providedType: resource.statementType,
+                    providedInstitution: nil,
+                    source: "QuickStart.loadSampleData"
+                )
+
+                let statementType = resolved.detection.type ?? resource.statementType
+
+                await coordinator.importURL(
+                    resolved.stagedURL,
+                    hint: statementType,
+                    modelContext: modelContext,
+                    settings: settings
+                )
+
+                guard var staged = vm.staged else {
+                    AMLogging.error("Sample statement produced no staged import for \(fileName)", component: "QuickStartView")
+                    continue
+                }
+
+                staged.parserId = "sample.\(staged.parserId)"
+                vm.staged = staged
+                vm.userInstitutionName = resolved.detection.institution ?? staged.inferredInstitutionName ?? ""
+
+                do {
+                    try vm.approveAndSave(context: modelContext)
+                    repairSampleLiabilityTerms(
+                        accountID: vm.selectedAccountID,
+                        staged: staged,
+                        resource: resource
+                    )
+                } catch {
+                    AMLogging.error("Failed to save sample statement \(fileName): \(error.localizedDescription)", component: "QuickStartView")
+                }
+                vm.selectedAccountID = nil
+            }
+
+            await MainActor.run {
+                repairExistingSampleLiabilityTerms()
+                isLoadingSampleStatements = false
+                endImportProgress()
+                routeToTopic(.compareStrategies)
+            }
+        }
+    }
+
     private var isCompactLayout: Bool {
         horizontalSizeClass == .compact
     }
@@ -922,7 +1452,7 @@ struct QuickStartView: View {
     }
 
     private var importStartHint: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             Label("Import a statement to begin", systemImage: "doc.badge.plus")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -933,9 +1463,32 @@ struct QuickStartView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                loadSampleData()
+            } label: {
+                Label(
+                    sampleDataButtonTitle,
+                    systemImage: "doc.on.doc"
+                )
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isLoadingSampleStatements)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Import a statement to begin. You can also share statement files from your bank or credit card app to DebtScope. Example in Help.")
+        .accessibilityLabel("Import a statement to begin. You can also share statement files from your bank or credit card app to DebtScope. Example in Help. Try Sample Data.")
+    }
+
+    private var sampleDataButtonTitle: String {
+        if isLoadingSampleStatements {
+            return "Loading Samples"
+        }
+
+        return dataModeController.mode == .sample ? "Try Sample Data" : "Switch to Sample Data"
     }
 
     private var importProgressOverlay: some View {
@@ -1091,6 +1644,10 @@ struct QuickStartView: View {
         .onChange(of: settings.spotlightIndexingOptions) { _, _ in
             refreshSpotlightIndexWithAccounts()
         }
+        .onChange(of: dataModeController.sampleDataLoadRequestID, initial: true) { _, requestID in
+            guard requestID != nil, dataModeController.mode == .sample else { return }
+            loadSampleData()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
             refreshSpotlightIndexWithAccounts()
         }
@@ -1103,6 +1660,8 @@ struct QuickStartView: View {
         NavigationStack(path: $compactPath) {
             ScrollView {
                 VStack(spacing: 12) {
+                    sampleDataModeBanner
+
                     if shouldShowImportStartHint {
                         importStartHint
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1137,7 +1696,10 @@ struct QuickStartView: View {
                 importStatusOverlay
             }
             .navigationDestination(for: QuickStartTopic.self) { topic in
-                topicContent(topic, compact: true)
+                VStack(spacing: 0) {
+                    sampleDataModeBanner
+                    topicContent(topic, compact: true)
+                }
                     .onAppear {
                         selection = topic
                     }
@@ -1151,6 +1713,8 @@ struct QuickStartView: View {
         NavigationSplitView {
             ScrollView {
                 VStack(spacing: 12) {
+                    sampleDataModeBanner
+
                     if shouldShowImportStartHint {
                         importStartHint
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1180,13 +1744,46 @@ struct QuickStartView: View {
             .navigationTitle("DebtScope")
             .toolbar { importToolbarContent }
         } detail: {
-            detailContent
-                .padding(.horizontal, 10)
+            VStack(spacing: 0) {
+                sampleDataModeBanner
+                detailContent
+                    .padding(.horizontal, 10)
+            }
                 .overlay(alignment: .bottom) {
                     importStatusOverlay
                 }
                 .navigationTitle(selection == .assets ? "" : (selection?.title ?? "DebtScope"))
                 .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    @ViewBuilder
+    private var sampleDataModeBanner: some View {
+        if dataModeController.mode == .sample {
+            HStack(spacing: 10) {
+                Label("Viewing Sample Data", systemImage: "doc.on.doc")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+
+                Button("Use My Data") {
+                    dataModeController.switchTo(.user)
+                }
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.10), radius: 10, y: 3)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Viewing Sample Data. Use My Data.")
         }
     }
 
@@ -2115,6 +2712,7 @@ private struct StatementReviewDetailView: View {
     @State private var showImportReviewSheet = false
     @State private var showTransactionPreview = false
     @State private var showDiscardConfirmation = false
+    @State private var parsedReviewItemID: UUID? = nil
     
     private var isImportSheetPresented: Binding<Bool> {
         Binding(
@@ -2506,10 +3104,111 @@ private struct StatementReviewDetailView: View {
         selectedType = selectedItem.type
         editedInstitution = selectedItem.institution ?? ""
         bankSubtype = nil
+        monthlyPaymentInput = ""
+        aprPercentInput = ""
+        balanceInput = ""
+        balanceDate = Date()
         saveMessage = nil
         saveMessageIsError = false
         savedAccountID = nil
         selectedExistingAccountID = nil
+        prefillSelectedReviewItemIfNeeded(selectedItem)
+    }
+
+    private func prefillSelectedReviewItemIfNeeded(_ item: QuickStartReviewItem) {
+        guard reviewFileExtension == "pdf", let type = item.type else { return }
+        guard parsedReviewItemID != item.id else { return }
+        parsedReviewItemID = item.id
+
+        Task {
+            await coordinator.importURL(
+                item.url,
+                hint: type,
+                modelContext: modelContext,
+                settings: settings
+            )
+
+            await MainActor.run {
+                guard selectedReviewItemID == item.id else { return }
+                prefillManualFields(from: vm.staged, statementType: type)
+            }
+        }
+    }
+
+    private func prefillManualFields(from staged: StagedImport?, statementType: StatementType) {
+        guard let staged else { return }
+
+        if editedInstitution.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let inferredInstitution = staged.inferredInstitutionName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !inferredInstitution.isEmpty {
+            editedInstitution = inferredInstitution
+        }
+
+        guard let balance = preferredBalance(from: staged, statementType: statementType) else { return }
+
+        if balanceInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            balanceInput = formatMoneyForManualInput(balance.balance.magnitude)
+            balanceDate = balance.asOfDate
+        }
+
+        if monthlyPaymentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let payment = balance.typicalPaymentAmount,
+           payment != .zero {
+            monthlyPaymentInput = formatMoneyForManualInput(payment.magnitude)
+        }
+
+        if aprPercentInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let apr = balance.interestRateAPR {
+            aprPercentInput = formatAPRForManualInput(apr, scale: balance.interestRateScale)
+        }
+    }
+
+    private func preferredBalance(from staged: StagedImport, statementType: StatementType) -> StagedBalance? {
+        let included = staged.balances.filter(\.include)
+        let candidates = included.isEmpty ? staged.balances : included
+        guard !candidates.isEmpty else { return nil }
+
+        let accountType = toAccountType(statementType, bankSubtype: bankSubtype)
+        let matching = candidates.filter { balance in
+            let label = (balance.sourceAccountLabel ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+
+            switch accountType {
+            case .creditCard:
+                return label.contains("credit") || label.isEmpty
+            case .loan:
+                return label.contains("loan") || label.isEmpty
+            case .checking:
+                return label.contains("checking") || label.isEmpty
+            case .savings:
+                return label.contains("savings") || label.isEmpty
+            default:
+                return true
+            }
+        }
+
+        return (matching.isEmpty ? candidates : matching).max { lhs, rhs in
+            lhs.asOfDate < rhs.asOfDate
+        }
+    }
+
+    private func formatMoneyForManualInput(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = settings.currencyCode
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "\(value)"
+    }
+
+    private func formatAPRForManualInput(_ value: Decimal, scale: Int?) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = max(scale ?? 2, 2)
+        formatter.minimumFractionDigits = min(scale ?? 2, 2)
+        let percent = value * 100
+        return (formatter.string(from: NSDecimalNumber(decimal: percent)) ?? "\(percent)") + "%"
     }
 
     private func updateSelectedReviewItem(type: StatementType?, institution: String?) {
@@ -2550,6 +3249,10 @@ private struct StatementReviewDetailView: View {
         selectedType = nil
         editedInstitution = ""
         bankSubtype = nil
+        monthlyPaymentInput = ""
+        aprPercentInput = ""
+        balanceInput = ""
+        balanceDate = Date()
         savedAccountID = nil
         selectedExistingAccountID = nil
         showPDFPreview = false
@@ -2848,6 +3551,15 @@ private struct StatementReviewDetailView: View {
         if fraction > 1 { fraction /= 100 }
         return (fraction, scale)
     }
+
+    private func normalizedManualBalance(_ balance: Decimal, for type: Account.AccountType) -> Decimal {
+        switch type {
+        case .creditCard, .loan:
+            return balance > .zero ? -balance : balance
+        default:
+            return balance < .zero ? -balance : balance
+        }
+    }
     
     private func saveUnknownStatementAccount() {
         let type = toAccountType(selectedType, bankSubtype: bankSubtype)
@@ -2876,9 +3588,10 @@ private struct StatementReviewDetailView: View {
         }
 
         if let bal = parseDecimal(balanceInput) {
+            let normalizedBalance = normalizedManualBalance(bal, for: type)
             let snap = BalanceSnapshot(
                 asOfDate: balanceDate,
-                balance: bal,
+                balance: normalizedBalance,
                 interestRateAPR: acct.loanTerms?.apr,
                 interestRateScale: acct.loanTerms?.aprScale,
                 account: acct,

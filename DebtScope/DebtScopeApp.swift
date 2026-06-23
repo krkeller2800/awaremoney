@@ -6,21 +6,92 @@
 //
 
 import SwiftUI
+import Combine
 import SwiftData
 import UIKit
 import UniformTypeIdentifiers
 
+enum DebtScopeDataMode: String, CaseIterable, Identifiable {
+    case user
+    case sample
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .user: return "My Data"
+        case .sample: return "Sample Data"
+        }
+    }
+
+    var storeFileName: String {
+        switch self {
+        case .user: return "DebtScope.sqlite"
+        case .sample: return "DebtScopeSample.sqlite"
+        }
+    }
+}
+
+@MainActor
+final class DebtScopeDataModeController: ObservableObject {
+    private static let defaultsKey = "debtScopeDataModeRaw"
+
+    let userContainer: ModelContainer
+    let sampleContainer: ModelContainer
+
+    @Published private(set) var mode: DebtScopeDataMode {
+        didSet {
+            UserDefaults.standard.set(mode.rawValue, forKey: Self.defaultsKey)
+        }
+    }
+    @Published private(set) var sampleDataLoadRequestID: UUID?
+
+    var activeContainer: ModelContainer {
+        switch mode {
+        case .user:
+            return userContainer
+        case .sample:
+            return sampleContainer
+        }
+    }
+
+    init(schema: Schema, appSupportURL: URL) {
+        let userURL = appSupportURL.appendingPathComponent(DebtScopeDataMode.user.storeFileName)
+        let sampleURL = appSupportURL.appendingPathComponent(DebtScopeDataMode.sample.storeFileName)
+        DebtScopeApp.verifyStoreLocationWritable(storeURL: userURL)
+        DebtScopeApp.verifyStoreLocationWritable(storeURL: sampleURL)
+        userContainer = DebtScopeApp.buildModelContainer(schema: schema, storeURL: userURL)
+        sampleContainer = DebtScopeApp.buildModelContainer(schema: schema, storeURL: sampleURL)
+
+        let storedRaw = UserDefaults.standard.string(forKey: Self.defaultsKey)
+        mode = DebtScopeDataMode(rawValue: storedRaw ?? "") ?? .user
+        AMLogging.log("SwiftData user store URL: \(userURL.path)", component: "App")
+        AMLogging.log("SwiftData sample store URL: \(sampleURL.path)", component: "App")
+    }
+
+    func switchTo(_ mode: DebtScopeDataMode) {
+        guard self.mode != mode else { return }
+        self.mode = mode
+        AMLogging.log("Switched data mode to \(mode.rawValue)", component: "App")
+    }
+
+    func requestSampleData() {
+        switchTo(.sample)
+        sampleDataLoadRequestID = UUID()
+    }
+}
+
 @main
 struct DebtScopeApp: App {
-    let container: ModelContainer
     let settings = SettingsStore()
     let importRouter = ImportOpenRouter()
+    @StateObject private var dataModeController: DebtScopeDataModeController
     @StateObject private var backupCoordinator = BackupOpenCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
     @MainActor
     private func runReserveUpdate(asOf date: Date = Date()) {
-        let context = ModelContext(container)
+        let context = ModelContext(dataModeController.activeContainer)
         let service = ReserveUpdateService(context: context, settings: settings)
         service.updateReserves(asOf: date)
     }
@@ -61,7 +132,7 @@ struct DebtScopeApp: App {
     }
 
     init() {
-        let schema = Schema(DebtScopeSchemaV4.models)
+        let schema = Schema(DebtScopeSchemaV5.models)
 
         // Ensure Application Support directory exists and build a file URL for the store
         let fm = FileManager.default
@@ -75,20 +146,17 @@ struct DebtScopeApp: App {
         if let documents = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
             AMLogging.always("Documents directory path: \(documents.path)", component: "App")
         }
-        let storeURL = appSupport.appendingPathComponent("DebtScope.sqlite")
-        Self.verifyStoreLocationWritable(storeURL: storeURL)
+        let controller = DebtScopeDataModeController(schema: schema, appSupportURL: appSupport)
+        _dataModeController = StateObject(wrappedValue: controller)
 
-        container = Self.buildModelContainer(schema: schema, storeURL: storeURL)
-        AMLogging.log("SwiftData store URL: \(storeURL.path)", component: "App")
-
-        let ctx = container.mainContext
+        let ctx = controller.userContainer.mainContext
         Task { @MainActor in
             DebtScopeApp.repairAccountIDsIfNeeded(context: ctx)
         }
 
         runInstitutionMigrationIfNeeded()
-        ReserveMigrationService.initializeReserveAnchorsIfNeeded(container: container, settings: settings)
-        BillFundingAllocationMigrationService.migrateLegacyFundingIfNeeded(container: container, settings: settings)
+        ReserveMigrationService.initializeReserveAnchorsIfNeeded(container: controller.userContainer, settings: settings)
+        BillFundingAllocationMigrationService.migrateLegacyFundingIfNeeded(container: controller.userContainer, settings: settings)
     }
 
     var body: some Scene {
@@ -97,7 +165,9 @@ struct DebtScopeApp: App {
                 .environmentObject(PurchaseManager.shared)
                 .environmentObject(settings)
                 .environmentObject(importRouter)
+                .environmentObject(dataModeController)
                 .environmentObject(backupCoordinator)
+                .id(dataModeController.mode.rawValue)
                 .onAppear {
                     // Kick off a reserve update at app launch; guarded internally to once per month
                     Task { @MainActor in
@@ -109,7 +179,7 @@ struct DebtScopeApp: App {
                     if let rv = try? url.resourceValues(forKeys: [.contentTypeKey]),
                        let type = rv.contentType,
                        type.conforms(to: .debtScopeBackup) || type.conforms(to: .debtScopeBackupPackage) {
-                        Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
+                        Task { await backupCoordinator.handleOpen(url: url, context: dataModeController.activeContainer.mainContext, settings: settings) }
                         AMLogging.log("App opened with backup (UTType): \(url.lastPathComponent)", component: "App")
                         return
                     }
@@ -117,7 +187,7 @@ struct DebtScopeApp: App {
                     // Fallback: extension checks (accept legacy too)
                     let ext = url.pathExtension.lowercased()
                     if UTType.debtScopeBackupExtensions.contains(ext) || ext == "json" {
-                        Task { await backupCoordinator.handleOpen(url: url, context: container.mainContext, settings: settings) }
+                        Task { await backupCoordinator.handleOpen(url: url, context: dataModeController.activeContainer.mainContext, settings: settings) }
                         AMLogging.log("App opened with backup (ext): \(url.lastPathComponent)", component: "App")
                     } else {
                         importRouter.pendingURL = url
@@ -133,13 +203,13 @@ struct DebtScopeApp: App {
                     }
                 }
         }
-        .modelContainer(container)
+        .modelContainer(dataModeController.activeContainer)
     }
 
     // Build the SwiftData container without ever deleting the user's store on failure.
     // Existing released stores were created before the app adopted a SchemaMigrationPlan,
     // so the live startup path must remain compatible with that legacy unversioned store.
-    private static func buildModelContainer(schema: Schema, storeURL: URL) -> ModelContainer {
+    fileprivate static func buildModelContainer(schema: Schema, storeURL: URL) -> ModelContainer {
         do {
             let configuration = ModelConfiguration(url: storeURL)
             return try ModelContainer(for: schema, configurations: configuration)
@@ -152,7 +222,7 @@ struct DebtScopeApp: App {
     }
 
     // Verify the parent directory for the store is writable; logs detailed diagnostics
-    private static func verifyStoreLocationWritable(storeURL: URL) {
+    fileprivate static func verifyStoreLocationWritable(storeURL: URL) {
         let fm = FileManager.default
         let dir = storeURL.deletingLastPathComponent()
         var isDir: ObjCBool = false
@@ -276,7 +346,7 @@ struct DebtScopeApp: App {
         }
         AMLogging.log("Running institution migration V1", component: "App")
 
-        let context = ModelContext(container)
+        let context = ModelContext(dataModeController.userContainer)
         do {
             // Fetch accounts missing institutionName
             let predicate = #Predicate<Account> { acct in

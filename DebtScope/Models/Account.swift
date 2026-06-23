@@ -90,6 +90,7 @@ final class Account {
     var currencyCode: String // e.g., "USD"
     var last4: String?
     var createdAt: Date
+    var dataSetRaw: String = "user"
 
     var loanTermsJSON: Data?
     var creditCardPaymentModeRaw: String?
@@ -107,7 +108,8 @@ final class Account {
         institutionName: String? = nil,
         currencyCode: String = "USD",
         last4: String? = nil,
-        createdAt: Date = Date.now
+        createdAt: Date = Date.now,
+        dataSetRaw: String = "user"
     ) {
         self.id = id
         self.name = name
@@ -117,6 +119,7 @@ final class Account {
         self.currencyCode = currencyCode
         self.last4 = last4
         self.createdAt = createdAt
+        self.dataSetRaw = dataSetRaw
     }
 }
 
@@ -184,4 +187,3 @@ extension Account.AssetCategory {
         }
     }
 }
-

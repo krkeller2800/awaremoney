@@ -17,6 +17,7 @@ final class ImportBatch {
     var parserId: String?
     // Local file system path to a copied original source (e.g., PDF) for preview
     var sourceFileLocalPath: String?
+    var dataSetRaw: String = "user"
 
     // Relationships (cascade delete will remove related records when a batch is deleted)
     @Relationship(deleteRule: .cascade, inverse: \HoldingSnapshot.importBatch)
@@ -34,7 +35,8 @@ final class ImportBatch {
         label: String,
         sourceFileName: String,
         parserId: String? = nil,
-        sourceFileLocalPath: String? = nil
+        sourceFileLocalPath: String? = nil,
+        dataSetRaw: String = "user"
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -42,5 +44,6 @@ final class ImportBatch {
         self.sourceFileName = sourceFileName
         self.parserId = parserId
         self.sourceFileLocalPath = sourceFileLocalPath
+        self.dataSetRaw = dataSetRaw
     }
 }

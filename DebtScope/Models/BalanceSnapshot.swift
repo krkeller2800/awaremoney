@@ -21,6 +21,7 @@ final class BalanceSnapshot {
     var isUserCreated: Bool = false
     var isExcluded: Bool = false
     var isUserModified: Bool = false
+    var dataSetRaw: String = "user"
 
     // Relationships
     @Relationship(inverse: \Account.balanceSnapshots) var account: Account?
@@ -36,7 +37,8 @@ final class BalanceSnapshot {
         importBatch: ImportBatch? = nil,
         isUserCreated: Bool = false,
         isExcluded: Bool = false,
-        isUserModified: Bool = false
+        isUserModified: Bool = false,
+        dataSetRaw: String = "user"
     ) {
         self.id = id
         self.asOfDate = asOfDate
@@ -49,6 +51,6 @@ final class BalanceSnapshot {
         self.isUserCreated = isUserCreated
         self.isExcluded = isExcluded
         self.isUserModified = isUserModified
+        self.dataSetRaw = dataSetRaw
     }
 }
-

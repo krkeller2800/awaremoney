@@ -1497,7 +1497,9 @@ final class ImportViewModel: ObservableObject {
 
     func approveAndSave(context: ModelContext) throws {
         guard let staged else { return }
+        let importDataSetRaw = staged.parserId.hasPrefix("sample.") ? "sample" : "user"
         let shouldConsumeFreeImportAllowance = staged.parserId != "manual.user"
+            && !staged.parserId.hasPrefix("sample.")
         if shouldConsumeFreeImportAllowance {
             let existingCompletedImportCount = ((try? context.fetch(FetchDescriptor<ImportBatch>())) ?? [])
                 .filter { !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty }
@@ -1515,7 +1517,8 @@ final class ImportViewModel: ObservableObject {
         let batch = ImportBatch(
             label: staged.sourceFileName,
             sourceFileName: staged.sourceFileName,
-            parserId: staged.parserId
+            parserId: staged.parserId,
+            dataSetRaw: importDataSetRaw
         )
         context.insert(batch)
         
@@ -1610,6 +1613,7 @@ final class ImportViewModel: ObservableObject {
                         if let current = existing.institutionName, !current.isEmpty, normalizeInstitutionName(current) != normalizeInstitutionName(inst) {
                             if let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
                                 AMLogging.log("Switching to existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                                found.dataSetRaw = importDataSetRaw
                                 return found
                             } else {
                                 AMLogging.log("Creating new account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
@@ -1617,7 +1621,8 @@ final class ImportViewModel: ObservableObject {
                                     name: inst,
                                     type: resolvedType,
                                     institutionName: inst,
-                                    currencyCode: "USD"
+                                    currencyCode: "USD",
+                                    dataSetRaw: importDataSetRaw
                                 )
                                 context.insert(acct)
                                 return acct
@@ -1629,12 +1634,14 @@ final class ImportViewModel: ObservableObject {
                             }
                         }
                     }
+                    existing.dataSetRaw = importDataSetRaw
                     return existing
                 }
             }
             // No suitable existing: find by institution, else create
             if let inst = institutionName, let found = findAccount(ofType: resolvedType, institutionName: inst, context: context) {
                 AMLogging.log("Reusing existing account for institution: \(inst) and type: \(resolvedType.rawValue)", component: "ImportViewModel")
+                found.dataSetRaw = importDataSetRaw
                 return found
             } else {
                 let name = institutionName ?? ""
@@ -1642,7 +1649,8 @@ final class ImportViewModel: ObservableObject {
                     name: name,
                     type: resolvedType,
                     institutionName: institutionName,
-                    currencyCode: "USD"
+                    currencyCode: "USD",
+                    dataSetRaw: importDataSetRaw
                 )
                 AMLogging.log("Creating new account with institution: \(institutionName ?? "(nil)") and type: \(resolvedType.rawValue)", component: "ImportViewModel")
                 context.insert(acct)
@@ -1885,7 +1893,8 @@ final class ImportViewModel: ObservableObject {
                     fees: t.fees,
                     account: account,
                     importBatch: batch,
-                    importHashKey: saveKey
+                    importHashKey: saveKey,
+                    dataSetRaw: importDataSetRaw
                 )
                 context.insert(tx)
                 insertedTxCount += 1
@@ -1918,7 +1927,8 @@ final class ImportViewModel: ObservableObject {
                 marketValue: h.marketValue,
                 account: targetAccount,
                 security: security,
-                importBatch: batch
+                importBatch: batch,
+                dataSetRaw: importDataSetRaw
             )
             context.insert(hs)
             batch.holdings.append(hs)
@@ -1946,7 +1956,8 @@ final class ImportViewModel: ObservableObject {
                         asOfDate: date,
                         balance: equity,
                         account: firstAccountForAssets,
-                        importBatch: batch
+                        importBatch: batch,
+                        dataSetRaw: importDataSetRaw
                     )
                     context.insert(bs)
                     batch.balances.append(bs)
@@ -1986,7 +1997,8 @@ final class ImportViewModel: ObservableObject {
                 interestRateAPR: b.interestRateAPR,
                 interestRateScale: b.interestRateScale,
                 account: account,
-                importBatch: batch
+                importBatch: batch,
+                dataSetRaw: importDataSetRaw
             )
             // Promote APR to account terms if provided on staged balance (loan/credit card only)
             if (account.type == .loan || account.type == .creditCard), let apr = b.interestRateAPR {

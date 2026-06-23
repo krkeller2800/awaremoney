@@ -5,6 +5,7 @@ import SwiftData
 
 struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject private var dataModeController: DebtScopeDataModeController
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var purchases = PurchaseManager.shared
@@ -28,6 +29,30 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Picker("Data Set", selection: Binding(
+                        get: { dataModeController.mode },
+                        set: { mode in
+                            switch mode {
+                            case .sample:
+                                dataModeController.requestSampleData()
+                            case .user:
+                                dataModeController.switchTo(.user)
+                            }
+                            dismiss()
+                        }
+                    )) {
+                        ForEach(DebtScopeDataMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Sample Data")
+                } footer: {
+                    Text(dataModeController.mode == .sample ? "You are viewing the separate sample data set. Use My Data returns to your private store." : "Open a separate demo data set without changing your own accounts or imports.")
+                }
+
                 Section("General") {
                     Picker("Currency", selection: $settings.currencyCode) {
                         ForEach(supportedCurrencies, id: \.code) { c in

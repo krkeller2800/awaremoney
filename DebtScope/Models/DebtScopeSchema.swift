@@ -43,16 +43,31 @@ enum DebtScopeSchemaV4: VersionedSchema {
     }
 }
 
+enum DebtScopeSchemaV5: VersionedSchema {
+    static var versionIdentifier = Schema.Version(5, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        DebtScopeSchemaV4.models
+    }
+}
+
 enum DebtScopeMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [DebtScopeSchemaV1.self, DebtScopeSchemaV2.self, DebtScopeSchemaV3.self, DebtScopeSchemaV4.self]
+        [
+            DebtScopeSchemaV1.self,
+            DebtScopeSchemaV2.self,
+            DebtScopeSchemaV3.self,
+            DebtScopeSchemaV4.self,
+            DebtScopeSchemaV5.self
+        ]
     }
 
     static var stages: [MigrationStage] {
         [
             .lightweight(fromVersion: DebtScopeSchemaV1.self, toVersion: DebtScopeSchemaV2.self),
             .lightweight(fromVersion: DebtScopeSchemaV2.self, toVersion: DebtScopeSchemaV3.self),
-            .lightweight(fromVersion: DebtScopeSchemaV3.self, toVersion: DebtScopeSchemaV4.self)
+            .lightweight(fromVersion: DebtScopeSchemaV3.self, toVersion: DebtScopeSchemaV4.self),
+            .lightweight(fromVersion: DebtScopeSchemaV4.self, toVersion: DebtScopeSchemaV5.self)
         ]
     }
 }
