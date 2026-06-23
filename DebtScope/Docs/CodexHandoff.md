@@ -1,39 +1,37 @@
 Continue Fake PDF Generator rollout from `FakePDFGenImpPlan`.
 
 Current state:
-- Steps 1, 2, 3, and 4 have been reviewed and committed.
-- Step 5 has been implemented in the standalone Swift CLI package under `Tools/FakePDFGen`, still outside the app target.
-- Added `Tools/FakePDFGen/Sources/FakePDFGen/FakeStatementPDFRenderer.swift`.
-- Updated `Tools/FakePDFGen/Sources/FakePDFGen/main.swift` so `render --recipes <dir> --output <dir>` renders PDFs instead of printing the placeholder.
+- Steps 1, 2, 3, 4, and 5 have been reviewed and committed.
+- Step 6 tool work is implemented and manually validated through the app path.
+- The generated PDF set was built from `/Users/karlkeller/Downloads/DebtScope-Backup-2026-06-09_113052.ambackup` using FakePDFGen recipe generation, render, and verify commands.
+- Manual app-path imports made it through all generated statements after the FakePDFGen fixes.
 
-Step 5 behavior:
-- Reads sanitized recipe JSON files from the recipes directory, excluding `privacy-validation-report.json`.
-- Writes brand-new text-based PDFs to the output directory using generic statement templates.
-- Includes selectable text, account summary sections, and transaction tables with `Date`, `Description`, `Amount`, and `Balance` headers.
-- Supports checking, credit card, auto loan, mortgage, and generic loan recipe kinds.
-- Paginates transaction tables and prints rendered PDF name, source recipe, page count, and transaction count.
-- Does not open source statement PDFs or copy original PDF pages, images, fonts, or metadata.
+Important Step 6 fixes:
+- `FakeStatementPDFRenderer.swift` now paginates from actual table position so transaction rows do not fall under the footer or overlap summary content.
+- Header rendering was adjusted so issuer name and `Statement` extract on the same logical line.
+- Fake issuer domain URLs such as `www.northstar-credit-union.com` are rendered in the header so the app's existing `StatementIntakeClassifier` can infer fictional institutions without app parser changes.
+- `SampleRecipeBuilder.swift` now normalizes liability statement signs, deduplicates same-date/description/amount identities, and raises generated checking opening balances when needed so statements avoid overdraft endings that the app misreads.
+- `PrivacyTransformer.swift` uses parser-safe fictional transaction labels, including `Courtesy Credit` instead of `Interest Credit` and payment-style credit card credit labels.
+- `TextExtractionVerifier.swift` verifies rendered PDF text against recipes and checks transaction presence, balance reconciliation, summary ending balance, and duplicate import identities.
+- `BackupPackageReader.swift` supports flat `.ambackup` input as well as `.dsbackup` packages.
+- Swift 6 concurrency issues in FakePDFGen were fixed by avoiding shared non-Sendable formatter/attributed-string statics.
+- Generated recipes/PDF outputs remain ignored and must not be bundled yet.
+
+Important correction:
+- Temporary app-target parser changes were backed out. Do not modify `StatementImportCoordinator.swift` for this fake statement naming issue. The root cause was FakePDFGen header/extraction shape, and the accepted fix is tool-only.
 
 Validation status:
-- Do not run `swift run`, `swift build`, or related SwiftPM commands from the Xcode-hosted Codex terminal unless the user explicitly asks.
-- Step 5 was validated without SwiftPM using:
-  - `swiftc -parse` across all FakePDFGen source files.
-  - `swiftc -typecheck` across all FakePDFGen source files.
-  - a temporary direct `swiftc` binary for `render`.
-  - a synthetic recipe under `/private/tmp/fakepdfgen-render-test/recipes`, confirming `render` exits 0 and writes `001-checking.pdf`.
-  - PDFKit text extraction with a redirected module cache, confirming the generated PDF contains expected text including `Transaction Activity`, `Payroll Deposit`, `Date`, and `Amount`.
+- FakePDFGen `build-recipes`, `render`, and `verify` passed from Terminal with 11 generated PDFs and privacy findings 0.
+- Manual import through the app path passed for all generated statements after rerendering and copying PDFs into the simulator container.
+- If rerunning from Terminal:
+  - `cd /Volumes/XcodeSSD/Users/karldev/Documents/DebtScope/Tools/FakePDFGen`
+  - `swift run FakePDFGen build-recipes --input /Users/karlkeller/Downloads/DebtScope-Backup-2026-06-09_113052.ambackup --recipes Recipes/generated --seed debtscope-first-look-v1`
+  - `swift run FakePDFGen render --recipes Recipes/generated --output Output/PDFs`
+  - `swift run FakePDFGen verify --output Output/PDFs --recipes Recipes/generated`
+  - `APP_CONTAINER=$(xcrun simctl get_app_container booted com.komakode.awaremoney data)`
+  - `mkdir -p "$APP_CONTAINER/Documents/FakePDFs"`
+  - `cp Output/PDFs/*.pdf "$APP_CONTAINER/Documents/FakePDFs/"`
 
-Important constraints:
-- Keep FakePDFGen outside the shipping app target.
-- Never add private `.dsbackup` exports, original statements, raw generated working files, or generated output directories to the app bundle.
-- Do not parse or copy original PDFs in the first pass.
-- Generated recipes/PDFs must never contain real names, addresses, account numbers, institution names, payees, memo text, source filenames, original PDF pages/images/fonts/metadata/hidden text, check numbers, confirmation IDs, authorization codes, phone numbers, emails, or URLs from statements.
-
-Working tree expected before commit:
-- `Tools/FakePDFGen/Sources/FakePDFGen/FakeStatementPDFRenderer.swift` added.
-- `Tools/FakePDFGen/Sources/FakePDFGen/main.swift` modified.
-- `DebtScope/Docs/CodexHandoff.md` modified by this handoff update.
-
-Next suggested step:
-- Review and commit Step 5.
-- Then proceed to Step 6: verify generated PDFs against DebtScope extraction/import behavior, starting with PDF text extraction and then manual import through the app path.
+Current next step:
+- Commit the Step 6 FakePDFGen changes.
+- Then proceed to Step 7: bundle only approved sanitized sample PDFs into DebtScope sample data resources.

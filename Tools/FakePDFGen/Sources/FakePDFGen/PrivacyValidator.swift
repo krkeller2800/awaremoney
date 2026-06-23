@@ -215,7 +215,7 @@ struct PrivacyValidator {
         }
 
         return denylist.compactMap { entry in
-            guard normalizedValue.contains(entry.normalizedValue) else {
+            guard containsDenylistedValue(entry.normalizedValue, in: normalizedValue) else {
                 return nil
             }
 
@@ -225,6 +225,43 @@ struct PrivacyValidator {
                 matchedSourceKind: entry.sourceKind,
                 matchedValue: entry.originalValue
             )
+        }
+    }
+
+    private func containsDenylistedValue(_ needle: String, in haystack: String) -> Bool {
+        var searchStart = haystack.startIndex
+
+        while let range = haystack.range(of: needle, range: searchStart..<haystack.endIndex) {
+            if hasTokenBoundary(before: range.lowerBound, in: haystack)
+                && hasTokenBoundary(after: range.upperBound, in: haystack) {
+                return true
+            }
+
+            searchStart = range.upperBound
+        }
+
+        return false
+    }
+
+    private func hasTokenBoundary(before index: String.Index, in value: String) -> Bool {
+        guard index > value.startIndex else {
+            return true
+        }
+
+        return isBoundaryCharacter(value[value.index(before: index)])
+    }
+
+    private func hasTokenBoundary(after index: String.Index, in value: String) -> Bool {
+        guard index < value.endIndex else {
+            return true
+        }
+
+        return isBoundaryCharacter(value[index])
+    }
+
+    private func isBoundaryCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy {
+            !CharacterSet.alphanumerics.contains($0)
         }
     }
 

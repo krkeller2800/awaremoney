@@ -163,33 +163,38 @@ struct SampleRecipeBuilder {
         let fictionalStart = fictionalStatementStart(for: index)
         let sourceSpan = calendar.dateComponents([.day], from: startOfDay(sourceStart), to: startOfDay(sourceEnd)).day ?? 0
         let fictionalEnd = calendar.date(byAdding: .day, value: max(sourceSpan, 0), to: fictionalStart) ?? fictionalStart
-        let openingBalance = transformer.openingBalance(for: kind, index: index)
         let amountScale = transformer.amountScale(for: index)
-        var runningBalance = openingBalance
-
-        let recipeTransactions = transactions.enumerated().map { offset, transaction in
+        let generatedTransactions = transactions.enumerated().map { offset, transaction in
             let dayOffset = calendar.dateComponents(
                 [.day],
                 from: startOfDay(sourceStart),
                 to: startOfDay(transaction.datePosted)
             ).day ?? 0
             let shiftedDate = calendar.date(byAdding: .day, value: max(dayOffset, 0), to: fictionalStart) ?? fictionalStart
-            let amount = rounded(transaction.amount.doubleValue * amountScale)
-            runningBalance = rounded(runningBalance + amount)
+            let amount = statementAmount(for: transaction, kind: kind, scale: amountScale)
 
-            return SampleStatementTransaction(
+            return GeneratedTransactionSeed(
                 date: dateFormatter.string(from: shiftedDate),
                 description: transformer.description(for: transaction, kind: kind, index: index + offset),
                 amount: amount,
-                balance: runningBalance,
                 category: category(for: transaction, kind: kind)
             )
         }
+        let openingBalance = adjustedOpeningBalance(
+            transformer.openingBalance(for: kind, index: index),
+            for: kind,
+            seeds: generatedTransactions
+        )
+        let recipeTransactions = buildDeduplicatedTransactions(
+            from: generatedTransactions,
+            openingBalance: openingBalance
+        )
+        let endingBalance = recipeTransactions.last?.balance ?? openingBalance
 
         let summary = buildSummary(
             kind: kind,
             account: account,
-            endingBalance: runningBalance,
+            endingBalance: endingBalance,
             statementEnd: fictionalEnd
         )
 
@@ -243,6 +248,74 @@ struct SampleRecipeBuilder {
         }
     }
 
+    private func buildDeduplicatedTransactions(
+        from seeds: [GeneratedTransactionSeed],
+        openingBalance: Double
+    ) -> [SampleStatementTransaction] {
+        var identityCounts: [TransactionIdentity: Int] = [:]
+        var dateDescriptionCounts: [DateDescriptionIdentity: Int] = [:]
+        var runningBalance = openingBalance
+        var output: [SampleStatementTransaction] = []
+
+        for seed in seeds {
+            let baseIdentity = TransactionIdentity(
+                date: seed.date,
+                amount: seed.amount,
+                description: seed.description
+            )
+            let seenCount = identityCounts[baseIdentity, default: 0]
+            identityCounts[baseIdentity] = seenCount + 1
+            let dateDescriptionIdentity = DateDescriptionIdentity(
+                date: seed.date,
+                description: seed.description
+            )
+            let dateDescriptionSeenCount = dateDescriptionCounts[dateDescriptionIdentity, default: 0]
+            dateDescriptionCounts[dateDescriptionIdentity] = dateDescriptionSeenCount + 1
+
+            let duplicateOrdinal = max(seenCount, dateDescriptionSeenCount)
+            let description = duplicateOrdinal == 0
+                ? seed.description
+                : "\(seed.description) - Entry \(duplicateOrdinal + 1)"
+            runningBalance = rounded(runningBalance + seed.amount)
+
+            output.append(SampleStatementTransaction(
+                date: seed.date,
+                description: description,
+                amount: seed.amount,
+                balance: runningBalance,
+                category: seed.category
+            ))
+        }
+
+        return output
+    }
+
+    private func adjustedOpeningBalance(
+        _ openingBalance: Double,
+        for kind: StatementKind,
+        seeds: [GeneratedTransactionSeed]
+    ) -> Double {
+        guard kind == .checking else {
+            return openingBalance
+        }
+
+        let minimumAllowedBalance = 25.0
+        var runningDelta = 0.0
+        var lowestDelta = 0.0
+
+        for seed in seeds {
+            runningDelta = rounded(runningDelta + seed.amount)
+            lowestDelta = min(lowestDelta, runningDelta)
+        }
+
+        let lowestBalance = rounded(openingBalance + lowestDelta)
+        guard lowestBalance < minimumAllowedBalance else {
+            return openingBalance
+        }
+
+        return rounded(openingBalance + minimumAllowedBalance - lowestBalance)
+    }
+
     private func statementKind(for account: BackupAccount?) -> StatementKind {
         guard let account else {
             return .checking
@@ -292,6 +365,50 @@ struct SampleRecipeBuilder {
         }
     }
 
+    private func statementAmount(for transaction: BackupTransaction, kind: StatementKind, scale: Double) -> Double {
+        let scaledMagnitude = rounded(abs(transaction.amount.doubleValue) * scale)
+        let appSignedAmount = rounded(transaction.amount.doubleValue * scale)
+
+        switch kind {
+        case .checking:
+            return appSignedAmount
+        case .creditCard:
+            return liabilityStatementAmount(
+                for: transaction,
+                paymentIsNegative: true,
+                chargeIsPositive: true,
+                scaledMagnitude: scaledMagnitude
+            )
+        case .autoLoan, .mortgage, .genericLoan:
+            return liabilityStatementAmount(
+                for: transaction,
+                paymentIsNegative: true,
+                chargeIsPositive: true,
+                scaledMagnitude: scaledMagnitude
+            )
+        }
+    }
+
+    private func liabilityStatementAmount(
+        for transaction: BackupTransaction,
+        paymentIsNegative: Bool,
+        chargeIsPositive: Bool,
+        scaledMagnitude: Double
+    ) -> Double {
+        if let kindRaw = transaction.kindRaw?.lowercased(), !kindRaw.isEmpty {
+            switch kindRaw {
+            case "income", "deposit", "payment":
+                return paymentIsNegative ? -scaledMagnitude : scaledMagnitude
+            case "fee", "fees", "interest", "purchase", "spending", "withdrawal", "charge":
+                return chargeIsPositive ? scaledMagnitude : -scaledMagnitude
+            default:
+                break
+            }
+        }
+
+        return transaction.amount.doubleValue >= 0 ? -scaledMagnitude : scaledMagnitude
+    }
+
     private func aprPercent(for account: BackupAccount?) -> Double? {
         guard let terms = account?.loanTerms, let apr = terms.apr else {
             return nil
@@ -336,4 +453,28 @@ private struct TransactionGroup {
     var sortKey: String {
         "\(key.batchID?.uuidString ?? "no-batch")-\(key.accountID?.uuidString ?? "no-account")"
     }
+}
+
+private struct GeneratedTransactionSeed {
+    let date: String
+    let description: String
+    let amount: Double
+    let category: String
+}
+
+private struct TransactionIdentity: Hashable {
+    let date: String
+    let amountCents: Int
+    let description: String
+
+    init(date: String, amount: Double, description: String) {
+        self.date = date
+        self.amountCents = Int((amount * 100.0).rounded())
+        self.description = description
+    }
+}
+
+private struct DateDescriptionIdentity: Hashable {
+    let date: String
+    let description: String
 }

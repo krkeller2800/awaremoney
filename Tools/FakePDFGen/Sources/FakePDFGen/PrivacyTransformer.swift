@@ -5,21 +5,25 @@ struct PrivacyTransformer {
     private let personas: [SamplePersona] = [
         SamplePersona(
             issuerName: "Northstar Credit Union",
+            shortIssuerName: "Northstar",
             customerName: "Jordan Morgan",
             customerAddress: ["1842 Cedar Ridge Ave", "Springfield, OH 45502"]
         ),
         SamplePersona(
             issuerName: "Harborview Bank",
+            shortIssuerName: "Harbor",
             customerName: "Taylor Reed",
             customerAddress: ["731 Maple Harbor Dr", "Columbus, OH 43215"]
         ),
         SamplePersona(
             issuerName: "Summit Trail Finance",
+            shortIssuerName: "Summit",
             customerName: "Casey Bennett",
             customerAddress: ["5086 Linden Park Way", "Dayton, OH 45402"]
         ),
         SamplePersona(
             issuerName: "Crescent Valley Lending",
+            shortIssuerName: "Crescent",
             customerName: "Avery Collins",
             customerAddress: ["269 Willow Creek Ln", "Cincinnati, OH 45202"]
         )
@@ -30,7 +34,7 @@ struct PrivacyTransformer {
         "Mobile Deposit",
         "Online Transfer Credit",
         "Refund Credit",
-        "Interest Credit"
+        "Courtesy Credit"
     ]
 
     private let checkingDebitDescriptions = [
@@ -45,9 +49,9 @@ struct PrivacyTransformer {
 
     private let creditCardCreditDescriptions = [
         "Card Payment Received",
-        "Statement Credit",
-        "Returned Purchase Credit",
-        "Rewards Credit"
+        "Online Payment Received",
+        "Autopay Payment Received",
+        "Customer Payment Received"
     ]
 
     private let creditCardDebitDescriptions = [
@@ -85,17 +89,24 @@ struct PrivacyTransformer {
     }
 
     func accountName(for kind: StatementKind, index: Int) -> String {
+        let brand = persona(for: index).shortIssuerName
+
         switch kind {
         case .checking:
-            return ["Everyday Checking", "Household Checking", "Reserve Checking"][stableIndex("checking-\(index)", count: 3)]
+            let role = ["Checking", "Bills", "Reserve"][stableIndex("checking-\(index)", count: 3)]
+            return "\(brand) \(role)"
         case .creditCard:
-            return ["Rewards Credit Card", "Travel Credit Card", "Cash Back Credit Card"][stableIndex("card-\(index)", count: 3)]
+            let role = ["Card", "Travel", "Rewards"][stableIndex("card-\(index)", count: 3)]
+            return "\(brand) \(role)"
         case .autoLoan:
-            return ["Auto Loan", "Vehicle Loan", "Transportation Loan"][stableIndex("auto-\(index)", count: 3)]
+            let role = ["Auto", "Vehicle", "Car Loan"][stableIndex("auto-\(index)", count: 3)]
+            return "\(brand) \(role)"
         case .mortgage:
-            return ["Home Loan", "Mortgage Loan", "Residential Mortgage"][stableIndex("mortgage-\(index)", count: 3)]
+            let role = ["Home", "Mortgage", "House Loan"][stableIndex("mortgage-\(index)", count: 3)]
+            return "\(brand) \(role)"
         case .genericLoan:
-            return ["Personal Loan", "Installment Loan", "Consumer Loan"][stableIndex("loan-\(index)", count: 3)]
+            let role = ["Loan", "Installment", "Personal"][stableIndex("loan-\(index)", count: 3)]
+            return "\(brand) \(role)"
         }
     }
 
@@ -155,6 +166,7 @@ struct PrivacyTransformer {
 
 struct SamplePersona {
     let issuerName: String
+    let shortIssuerName: String
     let customerName: String
     let customerAddress: [String]
 }

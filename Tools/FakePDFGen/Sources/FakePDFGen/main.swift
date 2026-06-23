@@ -14,7 +14,6 @@ struct FakePDFGenCLI {
         }
 
         let command = commandArguments.first ?? ""
-        let supportedCommands = Set(["inspect", "build-recipes", "render", "verify"])
 
         if command == "inspect" {
             return inspect(arguments: Array(commandArguments.dropFirst()))
@@ -28,11 +27,8 @@ struct FakePDFGenCLI {
             return render(arguments: Array(commandArguments.dropFirst()))
         }
 
-        if supportedCommands.contains(command) {
-            print("'\(command)' is planned for a later implementation step.")
-            print("")
-            printHelp()
-            return 2
+        if command == "verify" {
+            return verify(arguments: Array(commandArguments.dropFirst()))
         }
 
         print("Unsupported argument: \(command)")
@@ -52,6 +48,31 @@ struct FakePDFGenCLI {
             let summary = try BackupPackageReader().readPackage(at: inputURL)
             printInspection(summary)
             return 0
+        } catch {
+            print("Error: \(error.localizedDescription)")
+            print("")
+            printHelp()
+            return 1
+        }
+    }
+
+    private func verify(arguments: [String]) -> Int32 {
+        do {
+            let options = try CLIOptions(arguments: arguments)
+            guard let outputPath = options.value(for: "--output") else {
+                throw CLIError.missingRequiredOption("--output")
+            }
+
+            let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+            let recipesURL = options.value(for: "--recipes").map {
+                URL(fileURLWithPath: $0).standardizedFileURL
+            }
+            let result = try TextExtractionVerifier().verify(
+                outputDirectory: outputURL,
+                recipesDirectory: recipesURL
+            )
+            printVerificationResult(result)
+            return result.hasFailures ? 1 : 0
         } catch {
             print("Error: \(error.localizedDescription)")
             print("")
@@ -137,7 +158,7 @@ struct FakePDFGenCLI {
         print("FakePDFGen backup inspection")
         print("Input: \(summary.packageURL.path)")
         print("Manifest version: \(manifest.version)")
-        print("Generated at: \(DateFormatter.inspect.string(from: manifest.generatedAt))")
+        print("Generated at: \(DateFormatter.fakePDFGenInspect().string(from: manifest.generatedAt))")
         print("")
         print("Totals")
         print("  Accounts: \(manifest.accounts.count)")
@@ -156,7 +177,7 @@ struct FakePDFGenCLI {
                 let transactionCount = transactionsByBatch[batch.id, default: 0]
                 let balanceCount = balancesByBatch[batch.id, default: 0]
                 let pdfCount = summary.statementPDFCountsByBatchID[batch.id, default: 0]
-                print("  \(id) | \(DateFormatter.inspect.string(from: batch.createdAt)) | parser: \(parser) | transactions: \(transactionCount) | balances: \(balanceCount) | statement PDFs indexed: \(pdfCount)")
+                print("  \(id) | \(DateFormatter.fakePDFGenInspect().string(from: batch.createdAt)) | parser: \(parser) | transactions: \(transactionCount) | balances: \(balanceCount) | statement PDFs indexed: \(pdfCount)")
             }
         }
 
@@ -214,6 +235,34 @@ struct FakePDFGenCLI {
         print("Privacy note: render mode creates brand-new text-based PDFs from sanitized recipe JSON. It does not open source statement PDFs or copy original PDF pages, images, fonts, or metadata.")
     }
 
+    private func printVerificationResult(_ result: TextExtractionVerificationResult) {
+        print("FakePDFGen PDF verification")
+        print("Output directory: \(result.outputDirectory.path)")
+        if let recipesDirectory = result.recipesDirectory {
+            print("Recipes directory: \(recipesDirectory.path)")
+        } else {
+            print("Recipes directory: not provided; running text-only checks")
+        }
+        print("PDFs checked: \(result.verifiedPDFs.count)")
+
+        for pdf in result.verifiedPDFs {
+            let recipe = pdf.recipeFileName ?? "no recipe"
+            let expectedTransactions = pdf.expectedTransactionCount.map(String.init) ?? "not checked"
+            print("  \(pdf.pdfFileName) | recipe: \(recipe) | pages: \(pdf.pageCount) | extracted chars: \(pdf.extractedCharacterCount) | expected transactions: \(expectedTransactions)")
+        }
+
+        print("")
+        print("Verification: \(result.hasFailures ? "failed" : "passed")")
+        print("Findings: \(result.findings.count)")
+
+        for finding in result.findings {
+            print("  \(finding.pdfFileName): \(finding.message)")
+        }
+
+        print("")
+        print("Privacy note: verify mode reads only generated PDFs and optional sanitized recipes. It does not open source statement PDFs or the live app store.")
+    }
+
     private func printHelp() {
         print("""
         FakePDFGen
@@ -222,13 +271,13 @@ struct FakePDFGenCLI {
 
         Usage:
           \(executableName) --help
-          \(executableName) inspect --input /path/to/Backup.dsbackup
-          \(executableName) build-recipes --input /path/to/Backup.dsbackup --recipes Tools/FakePDFGen/Recipes/generated --seed debtscope-first-look-v1
+          \(executableName) inspect --input /path/to/Backup.ambackup
+          \(executableName) build-recipes --input /path/to/Backup.ambackup --recipes Tools/FakePDFGen/Recipes/generated --seed debtscope-first-look-v1
           \(executableName) render --recipes Tools/FakePDFGen/Recipes/generated --output Tools/FakePDFGen/Output/PDFs
-          \(executableName) verify --output Tools/FakePDFGen/Output/PDFs
+          \(executableName) verify --output Tools/FakePDFGen/Output/PDFs --recipes Tools/FakePDFGen/Recipes/generated
 
         Options:
-          --input <path>     DebtScope .dsbackup package directory.
+          --input <path>     DebtScope .ambackup flat backup file or .dsbackup package directory.
           --output <path>    Directory for generated PDF files.
           --recipes <path>   Directory for generated recipe JSON files.
           --seed <value>     Deterministic seed used for fictionalization.
@@ -236,7 +285,7 @@ struct FakePDFGenCLI {
                             Continue after privacy validation failures.
           --help, -h         Show this help text.
 
-        Inspect mode reads only the provided .dsbackup package directory. It does not touch the live app store or app sandbox.
+        Inspect mode reads only the provided backup file or package directory. It does not touch the live app store or app sandbox.
         """)
     }
 }
@@ -306,14 +355,14 @@ struct CLIOptions {
 }
 
 private extension DateFormatter {
-    static let inspect: DateFormatter = {
+    static func fakePDFGenInspect() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss 'UTC'"
         return formatter
-    }()
+    }
 }
 
 let cli = FakePDFGenCLI(executableName: URL(fileURLWithPath: CommandLine.arguments.first ?? "FakePDFGen").lastPathComponent)

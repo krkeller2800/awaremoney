@@ -8,7 +8,6 @@ struct BackupPackageSummary {
 
 enum BackupPackageReaderError: LocalizedError {
     case inputMissing(String)
-    case inputIsNotDirectory(String)
     case manifestMissing(String)
     case manifestInvalid(String)
 
@@ -16,8 +15,6 @@ enum BackupPackageReaderError: LocalizedError {
         switch self {
         case .inputMissing(let path):
             return "Input package does not exist: \(path)"
-        case .inputIsNotDirectory(let path):
-            return "Input must be a .dsbackup package directory: \(path)"
         case .manifestMissing(let path):
             return "Could not find manifest.json in backup package: \(path)"
         case .manifestInvalid(let detail):
@@ -35,8 +32,15 @@ struct BackupPackageReader {
             throw BackupPackageReaderError.inputMissing(inputURL.path)
         }
 
-        guard isDirectory.boolValue else {
-            throw BackupPackageReaderError.inputIsNotDirectory(inputURL.path)
+        if !isDirectory.boolValue {
+            let manifestData = try Data(contentsOf: inputURL)
+            let manifest = try decodeManifest(from: manifestData)
+
+            return BackupPackageSummary(
+                packageURL: inputURL,
+                manifest: manifest,
+                statementPDFCountsByBatchID: [:]
+            )
         }
 
         let manifestURL = inputURL.appendingPathComponent("manifest.json", isDirectory: false)
@@ -45,23 +49,26 @@ struct BackupPackageReader {
         }
 
         let manifestData = try Data(contentsOf: manifestURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            try Self.decodeDate(decoder: decoder)
-        }
-
-        let manifest: BackupManifest
-        do {
-            manifest = try decoder.decode(BackupManifest.self, from: manifestData)
-        } catch {
-            throw BackupPackageReaderError.manifestInvalid(error.localizedDescription)
-        }
+        let manifest = try decodeManifest(from: manifestData)
 
         return BackupPackageSummary(
             packageURL: inputURL,
             manifest: manifest,
             statementPDFCountsByBatchID: indexStatementPDFs(in: inputURL)
         )
+    }
+
+    private func decodeManifest(from manifestData: Data) throws -> BackupManifest {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            try Self.decodeDate(decoder: decoder)
+        }
+
+        do {
+            return try decoder.decode(BackupManifest.self, from: manifestData)
+        } catch {
+            throw BackupPackageReaderError.manifestInvalid(error.localizedDescription)
+        }
     }
 
     private func indexStatementPDFs(in packageURL: URL) -> [UUID: Int] {
@@ -100,11 +107,11 @@ struct BackupPackageReader {
         let container = try decoder.singleValueContainer()
         let value = try container.decode(String.self)
 
-        if let date = ISO8601DateFormatter.standard.date(from: value) {
+        if let date = ISO8601DateFormatter.fakePDFGenStandard().date(from: value) {
             return date
         }
 
-        if let date = ISO8601DateFormatter.fractionalSeconds.date(from: value) {
+        if let date = ISO8601DateFormatter.fakePDFGenFractionalSeconds().date(from: value) {
             return date
         }
 
@@ -116,15 +123,15 @@ struct BackupPackageReader {
 }
 
 private extension ISO8601DateFormatter {
-    static let standard: ISO8601DateFormatter = {
+    static func fakePDFGenStandard() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
-    }()
+    }
 
-    static let fractionalSeconds: ISO8601DateFormatter = {
+    static func fakePDFGenFractionalSeconds() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
-    }()
+    }
 }

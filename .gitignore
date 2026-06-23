@@ -7,6 +7,8 @@ xcuserdata/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 Tools/FakePDFGen/Inputs/
+Tools/FakePDFGen/.build/
 Tools/FakePDFGen/Output/
 Tools/FakePDFGen/Recipes/generated/
 *.dsbackup
+*.ambackup
