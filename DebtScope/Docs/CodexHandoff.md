@@ -1,18 +1,16 @@
-Continue from the sample-data / first-look preparation work.
-
 Current state:
-- The "First Look" implementation plan has been fully realized in `QuickStartView.swift`.
-- The `firstLookIntro` UI exactly mirrors the provided mockup with a custom timeline stepper card ("How DebtScope Works"), matched typography (`.title2.weight(.bold)` for the intro, `.subheadline.weight(.semibold)` for the steps), and perfectly spaced, uniform-width primary and secondary action buttons below the card.
-- Empty states in `IncomeAndBillsView`, `QuickStartView` (Assets), and `DebtSummaryView` have been properly configured using `ContentUnavailableView` to smoothly guide users toward adding data.
-- The routing hint text ("After import, DebtScope routes you...") has been correctly moved out of the intro section to just above the `DEBT` heading in the sidebar.
-- All layout spacings and paddings were tightened up, completely removing double-padding scenarios (e.g., between the 'Viewing Sample Data' banner and the intro content).
-- The `Keep for Spending` strategy-switch behavior has been completely resolved. The UI flags were removed in favor of a cleaner state property, correctly handling Minimums vs Snowball strategies without state persistence errors.
+- The "First Look" screen and sample data onboarding flows are fully implemented and refined in `QuickStartView.swift`.
+- First Launch Experience: Addressed confusion around the app skipping the "First Look" intro by verifying that the iOS Simulator was preserving `.sample` mode state in `UserDefaults`. A true fresh install correctly defaults to `.user` mode and displays the "How DebtScope Works" stepper.
+- "See Sample Data" Navigation: Tapping the button now correctly uses `UserDefaults` to memorize the `autoNavigate` intent across the `.sample` mode environment-switch (which recreates the view), reliably routing the user straight into the `Debt Summary` screen.
+- Background Auto-Load: Fallback logic correctly ensures `.sample` mode is never left empty if accessed manually or on background app restarts.
+- Import Safety: The `fileImporter` now proactively forces the app into `.user` mode before processing imports, safeguarding sample data integrity.
+- All layout spacings have been adjusted and the UI identically matches the mockup specifications.
 - The app compiles cleanly on the iOS Simulator without errors.
 
 Validation status:
-- All layout elements compile and visually align to the design mockups.
-- `QuickStartView` effectively orchestrates the onboarding experience.
+- "See Sample Data" button properly routes to the "Debt Summary" screen.
+- Fresh installs correctly show the "First Look" intro.
 - Xcode build completed successfully.
 
 Recommended next step:
-- Check for any final review items on the First Look implementation or determine the next major feature/bug fix to begin work on.
+- Move on to the next major feature or bug fix.

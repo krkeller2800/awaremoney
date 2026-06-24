@@ -1246,7 +1246,7 @@ struct QuickStartView: View {
         }
     }
 
-    private func loadSampleData() {
+    private func loadSampleData(autoNavigate: Bool = false) {
         guard dataModeController.mode == .sample else {
             dataModeController.switchTo(.sample)
             return
@@ -1265,7 +1265,9 @@ struct QuickStartView: View {
         guard !sampleResources.isEmpty else {
             isLoadingSampleStatements = false
             endImportProgress()
-            routeToTopic(.incomeBills)
+            if autoNavigate {
+                routeToTopic(.incomeBills)
+            }
             importReadyWarningMessage = "Sample statements are not available in this build. Sample income and bills were added."
             return
         }
@@ -1319,7 +1321,9 @@ struct QuickStartView: View {
                 markCurrentSampleDataLoaded()
                 isLoadingSampleStatements = false
                 endImportProgress()
-                routeToTopic(.compareStrategies)
+                if autoNavigate {
+                    routeToTopic(.compareStrategies)
+                }
             }
         }
     }
@@ -1328,8 +1332,10 @@ struct QuickStartView: View {
         guard dataModeController.mode == .sample else { return }
         guard !isLoadingSampleStatements else { return }
         let loadedVersion = UserDefaults.standard.string(forKey: SampleDataIdentity.dataVersionDefaultsKey)
-        guard loadedVersion != SampleDataIdentity.currentDataVersion else { return }
-        loadSampleData()
+        let isVersionStale = loadedVersion != SampleDataIdentity.currentDataVersion
+        if isVersionStale || !hasImportedData {
+            loadSampleData(autoNavigate: false)
+        }
     }
 
     private func markCurrentSampleDataLoaded() {
@@ -1574,9 +1580,10 @@ struct QuickStartView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 
                 Button {
-                    loadSampleData()
+                    UserDefaults.standard.set(true, forKey: "pendingSampleDataAutoNavigate")
+                    dataModeController.switchTo(.sample)
                 } label: {
-                    Text(isLoadingSampleStatements ? "Loading Samples" : "Try Sample Data")
+                    Text(isLoadingSampleStatements ? "Loading Samples" : "See Sample Data")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderless)
@@ -1693,6 +1700,10 @@ struct QuickStartView: View {
                 )
 
                 if let firstURL = urls.first {
+                    if dataModeController.mode == .sample {
+                        dataModeController.switchTo(.user)
+                    }
+                    
                     queueImportAfterImporterDismissal(url: firstURL, type: nil, institution: nil)
                     for url in urls.dropFirst() {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -1730,7 +1741,13 @@ struct QuickStartView: View {
         }
         .onAppear {
             loadPersistedReviewStateIfNeeded()
-            loadSampleDataIfVersionChanged()
+            let shouldNavigate = UserDefaults.standard.bool(forKey: "pendingSampleDataAutoNavigate")
+            if shouldNavigate {
+                UserDefaults.standard.set(false, forKey: "pendingSampleDataAutoNavigate")
+                loadSampleData(autoNavigate: true)
+            } else {
+                loadSampleDataIfVersionChanged()
+            }
             if let pendingRoute = DebtScopeAppSectionRequestStore.consumePendingRoute() {
                 routeToAppSection(pendingRoute.section, accountID: pendingRoute.accountID, focus: pendingRoute.focus)
             }
@@ -1893,18 +1910,20 @@ struct QuickStartView: View {
     private var sampleDataModeBanner: some View {
         if dataModeController.mode == .sample {
             HStack(spacing: 10) {
-                Label("Viewing Sample Data", systemImage: "doc.on.doc")
+                Label(hasImportedData ? "Viewing Sample Data" : "No Sample Data Loaded", systemImage: "doc.on.doc")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
 
-                Button("Use My Data") {
-                    dataModeController.switchTo(.user)
+                if hasImportedData {
+                    Button("Use My Data") {
+                        dataModeController.switchTo(.user)
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
-                .font(.footnote.weight(.semibold))
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
