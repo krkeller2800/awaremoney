@@ -33,12 +33,7 @@ struct SettingsView: View {
                     Picker("Data Set", selection: Binding(
                         get: { dataModeController.mode },
                         set: { mode in
-                            switch mode {
-                            case .sample:
-                                dataModeController.requestSampleData()
-                            case .user:
-                                dataModeController.switchTo(.user)
-                            }
+                            dataModeController.switchTo(mode)
                             dismiss()
                         }
                     )) {

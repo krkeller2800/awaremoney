@@ -213,26 +213,61 @@ final class PurchaseManager: ObservableObject {
         return "Trial imports used. Unlock Lifetime Premium for unlimited local planning."
     }
 
-    func synchronizeInitialFreeImportUsage(existingImportCount: Int) {
-        guard !hasMigratedFreeImportAllowance else { return }
+    func synchronizeInitialFreeImportUsage(
+        existingImportCount: Int,
+        source: String = #function,
+        file: StaticString = #fileID,
+        line: UInt = #line
+    ) {
+        let alreadyMigrated = hasMigratedFreeImportAllowance
         let migratedUsage = min(max(existingImportCount, 0), freeImportLimit)
+        AMLogging.log(
+            "Free import sync requested source=\(source) location=\(file):\(line) existingImportCount=\(existingImportCount) migratedUsage=\(migratedUsage) currentUsed=\(self.freeImportsUsed) alreadyMigrated=\(alreadyMigrated)",
+            component: "PurchaseManager"
+        )
+        guard !alreadyMigrated else { return }
         if migratedUsage > freeImportsUsed {
-            setFreeImportsUsed(migratedUsage)
+            setFreeImportsUsed(
+                migratedUsage,
+                reason: "migration existingImportCount=\(existingImportCount)",
+                source: source,
+                file: file,
+                line: line
+            )
         }
         ImportAllowanceKeychain.saveBool(true, account: freeImportMigrationKey)
+        AMLogging.log(
+            "Free import migration flag saved source=\(source) location=\(file):\(line) used=\(self.freeImportsUsed)",
+            component: "PurchaseManager"
+        )
     }
 
     @discardableResult
-    func recordCompletedImportIfNeeded() -> Bool {
+    func recordCompletedImportIfNeeded(
+        source: String = #function,
+        file: StaticString = #fileID,
+        line: UInt = #line
+    ) -> Bool {
+        AMLogging.log(
+            "Free import record requested source=\(source) location=\(file):\(line) currentUsed=\(self.freeImportsUsed) remaining=\(self.freeImportsRemaining) hasPremiumAccess=\(self.hasPremiumAccess)",
+            component: "PurchaseManager"
+        )
         if hasPremiumAccess { return true }
         guard canUseFreeImport else { return false }
-        setFreeImportsUsed(freeImportsUsed + 1)
+        setFreeImportsUsed(
+            freeImportsUsed + 1,
+            reason: "completed import",
+            source: source,
+            file: file,
+            line: line
+        )
         return true
     }
 
     func resetFreeImportAllowanceForDebug() {
-        setFreeImportsUsed(0)
+        setFreeImportsUsed(0, reason: "debug reset")
         ImportAllowanceKeychain.saveBool(true, account: freeImportMigrationKey)
+        AMLogging.log("Free import migration flag marked migrated after debug reset", component: "PurchaseManager")
     }
 
     #if DEBUG
@@ -250,9 +285,20 @@ final class PurchaseManager: ObservableObject {
     }
     #endif
 
-    private func setFreeImportsUsed(_ value: Int) {
+    private func setFreeImportsUsed(
+        _ value: Int,
+        reason: String,
+        source: String = #function,
+        file: StaticString = #fileID,
+        line: UInt = #line
+    ) {
+        let previousValue = freeImportsUsed
         freeImportsUsed = max(0, min(value, freeImportLimit))
         ImportAllowanceKeychain.saveInt(freeImportsUsed, account: freeImportsUsedKey)
+        AMLogging.log(
+            "Free imports used changed reason=\(reason) source=\(source) location=\(file):\(line) previous=\(previousValue) requested=\(value) saved=\(self.freeImportsUsed) remaining=\(self.freeImportsRemaining)",
+            component: "PurchaseManager"
+        )
     }
 
     // MARK: - Init
@@ -263,6 +309,10 @@ final class PurchaseManager: ObservableObject {
             }
         )
         freeImportsUsed = ImportAllowanceKeychain.loadInt(account: freeImportsUsedKey) ?? 0
+        AMLogging.log(
+            "Free imports loaded from Keychain used=\(self.freeImportsUsed) remaining=\(self.freeImportsRemaining) migrationFlag=\(self.hasMigratedFreeImportAllowance)",
+            component: "PurchaseManager"
+        )
         #if DEBUG
         if let data = UserDefaults.standard.data(forKey: conversionDiagnosticsKey),
            let diagnostics = try? JSONDecoder().decode(PurchaseConversionDiagnostics.self, from: data) {

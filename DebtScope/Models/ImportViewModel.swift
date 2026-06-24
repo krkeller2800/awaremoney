@@ -1503,7 +1503,10 @@ final class ImportViewModel: ObservableObject {
             && !staged.parserId.hasPrefix("sample.")
         if shouldConsumeFreeImportAllowance {
             let existingCompletedImportCount = ((try? context.fetch(FetchDescriptor<ImportBatch>())) ?? [])
-                .filter { !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty }
+                .filter { batch in
+                    batch.dataSetRaw != "sample"
+                        && (!batch.transactions.isEmpty || !batch.balances.isEmpty || !batch.holdings.isEmpty)
+                }
                 .count
             PurchaseManager.shared.synchronizeInitialFreeImportUsage(existingImportCount: existingCompletedImportCount)
             guard PurchaseManager.shared.isPremiumUnlocked else {

@@ -44,8 +44,6 @@ final class DebtScopeDataModeController: ObservableObject {
             UserDefaults.standard.set(mode.rawValue, forKey: Self.defaultsKey)
         }
     }
-    @Published private(set) var sampleDataLoadRequestID: UUID?
-
     var activeContainer: ModelContainer {
         switch mode {
         case .user:
@@ -75,10 +73,6 @@ final class DebtScopeDataModeController: ObservableObject {
         AMLogging.log("Switched data mode to \(mode.rawValue)", component: "App")
     }
 
-    func requestSampleData() {
-        switchTo(.sample)
-        sampleDataLoadRequestID = UUID()
-    }
 }
 
 @main

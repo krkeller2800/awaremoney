@@ -490,6 +490,11 @@ struct QuickStartView: View {
         return groups
     }
 
+    @MainActor
+    private var isUsingActiveModelContext: Bool {
+        ObjectIdentifier(modelContext) == ObjectIdentifier(dataModeController.activeContainer.mainContext)
+    }
+
     private func topicFor(statementType: StatementType?) -> QuickStartTopic? {
         switch statementType {
         case .creditCard, .loan:
@@ -1279,6 +1284,13 @@ struct QuickStartView: View {
             dataModeController.switchTo(.sample)
             return
         }
+        guard isUsingActiveModelContext else {
+            AMLogging.log(
+                "QuickStart deferred sample data load until sample mode context is active",
+                component: "Import"
+            )
+            return
+        }
 
         guard !isLoadingSampleStatements else { return }
 
@@ -1301,10 +1313,13 @@ struct QuickStartView: View {
         }
 
         Task {
+            let sampleVM = ImportViewModel(parsers: ImportViewModel.defaultParsers())
+            let sampleCoordinator = StatementImportCoordinator(vm: sampleVM)
+
             for (resource, url) in sampleResources {
                 let fileName = url.lastPathComponent
-                vm.selectedAccountID = nil
-                vm.newAccountType = resource.accountType
+                sampleVM.selectedAccountID = nil
+                sampleVM.newAccountType = resource.accountType
 
                 let resolved = await StatementIntakeResolver.resolve(
                     url: url,
@@ -1315,33 +1330,35 @@ struct QuickStartView: View {
 
                 let statementType = resolved.detection.type ?? resource.statementType
 
-                await coordinator.importURL(
+                await sampleCoordinator.importURL(
                     resolved.stagedURL,
                     hint: statementType,
                     modelContext: modelContext,
                     settings: settings
                 )
 
-                guard var staged = vm.staged else {
+                guard var staged = sampleVM.staged else {
                     AMLogging.error("Sample statement produced no staged import for \(fileName)", component: "QuickStartView")
                     continue
                 }
 
                 staged.parserId = "sample.\(staged.parserId)"
-                vm.staged = staged
-                vm.userInstitutionName = resolved.detection.institution ?? staged.inferredInstitutionName ?? ""
+                sampleVM.staged = staged
+                sampleVM.userInstitutionName = resolved.detection.institution ?? staged.inferredInstitutionName ?? ""
 
                 do {
-                    try vm.approveAndSave(context: modelContext)
+                    try sampleVM.approveAndSave(context: modelContext)
                     repairSampleLiabilityTerms(
-                        accountID: vm.selectedAccountID,
+                        accountID: sampleVM.selectedAccountID,
                         staged: staged,
                         resource: resource
                     )
                 } catch {
                     AMLogging.error("Failed to save sample statement \(fileName): \(error.localizedDescription)", component: "QuickStartView")
                 }
-                vm.selectedAccountID = nil
+                sampleVM.selectedAccountID = nil
+                sampleVM.staged = nil
+                sampleVM.mappingSession = nil
             }
 
             await MainActor.run {
@@ -1609,7 +1626,7 @@ struct QuickStartView: View {
                 
                 Button {
                     UserDefaults.standard.set(true, forKey: "pendingSampleDataAutoNavigate")
-                    dataModeController.requestSampleData()
+                    dataModeController.switchTo(.sample)
                 } label: {
                     Text(isLoadingSampleStatements ? "Loading Samples" : "See Sample Data")
                         .frame(maxWidth: .infinity)
@@ -1719,7 +1736,7 @@ struct QuickStartView: View {
         } message: {
             Text(importReadyWarningMessage ?? "We couldn't open the import review. Please try again.")
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes, allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 AMLogging.log(
@@ -1729,14 +1746,9 @@ struct QuickStartView: View {
 
                 if let firstURL = urls.first {
                     if dataModeController.mode == .sample {
-                        routeStagedImportsThroughUserMode(urls)
+                        routeStagedImportsThroughUserMode([firstURL])
                     } else {
                         queueImportAfterImporterDismissal(url: firstURL, type: nil, institution: nil)
-                        for url in urls.dropFirst() {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                                queueImport(url: url, type: nil, institution: nil)
-                            }
-                        }
                     }
                 }
 
@@ -1750,8 +1762,12 @@ struct QuickStartView: View {
         }
         .onChange(of: importRouter.quickStartPendingImport?.id, initial: true) { _, _ in
             guard let request = importRouter.quickStartPendingImport else { return }
-            guard dataModeController.mode == .user else {
+            guard dataModeController.mode == .user, isUsingActiveModelContext else {
                 dataModeController.switchTo(.user)
+                AMLogging.log(
+                    "QuickStart deferred pending import until user mode context is active",
+                    component: "Import"
+                )
                 return
             }
 
@@ -1808,10 +1824,6 @@ struct QuickStartView: View {
         }
         .onChange(of: settings.spotlightIndexingOptions) { _, _ in
             refreshSpotlightIndexWithAccounts()
-        }
-        .onChange(of: dataModeController.sampleDataLoadRequestID, initial: true) { _, requestID in
-            guard requestID != nil, dataModeController.mode == .sample else { return }
-            loadSampleData()
         }
         .onReceive(NotificationCenter.default.publisher(for: .accountsDidChange)) { _ in
             refreshSpotlightIndexWithAccounts()

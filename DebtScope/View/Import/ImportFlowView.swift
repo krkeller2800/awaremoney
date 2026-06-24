@@ -1293,8 +1293,9 @@ struct ImportFlowView: View {
             desc.sortBy = [SortDescriptor(\ImportBatch.createdAt, order: .reverse)]
             let fetched = try modelContext.fetch(desc)
             await MainActor.run {
-                let completedImportCount = fetched.filter {
-                    !$0.transactions.isEmpty || !$0.balances.isEmpty || !$0.holdings.isEmpty
+                let completedImportCount = fetched.filter { batch in
+                    batch.dataSetRaw != "sample"
+                        && (!batch.transactions.isEmpty || !batch.balances.isEmpty || !batch.holdings.isEmpty)
                 }.count
                 purchases.synchronizeInitialFreeImportUsage(existingImportCount: completedImportCount)
                 // Track previous IDs across loads to detect newly created batches; avoid auto-nav on initial load
