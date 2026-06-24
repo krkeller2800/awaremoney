@@ -1,0 +1,140 @@
+--- DebtScope/Debt/DebtSummaryView.swift
++++ DebtScope/Debt/DebtSummaryView.swift
+@@ -1158,10 +1158,7 @@
+     @State private var tempStrategy: PayoffStrategy = .minimumsOnly
+     @State private var tempMonthlyBudget: String = ""
+     @State private var tempDiscretionaryReserve: String = ""
+-    @State private var keepForSpendingWasUserEdited = false
+-    @State private var keepForSpendingWasEverUserEdited = false
+-    @State private var isSyncingKeepForSpending = false
+-    @State private var programmaticKeepForSpendingValue: String?
++    @State private var userDefinedKeepForSpending: Decimal? = nil
+ 
+     @State private var tempIncludeNonMonthlyIncomeSpreads: Bool = true
+     @State private var tempOneTimeIncomeDefaultSpreadMonths: Int = 12
+@@ -1219,7 +1216,7 @@
+     }
+ 
+     private var discretionaryReserveFieldIsEditable: Bool {
+-        tempBaselineBudgetSourceRaw == "recurringNet"
++        effectiveEditorStrategy != .minimumsOnly && tempBaselineBudgetSourceRaw == "recurringNet"
+     }
+ 
+     private var budgetFieldTitle: String {
+@@ -1384,41 +1381,31 @@
+ 
+     private func syncDiscretionaryReserveForFixedBudgetIfNeeded() {
+         guard tempBaselineBudgetSourceRaw == "fixed" else { return }
+-        setKeepForSpending(formatAmount(availableAfterBillsAndLoansForTempPlan()), userEdited: false)
++        tempDiscretionaryReserve = formatAmount(availableAfterBillsAndLoansForTempPlan())
+     }
+ 
+     private func syncKeepForSpendingForMinimumsIfNeeded() {
+         guard effectiveEditorStrategy == .minimumsOnly,
+               tempBaselineBudgetSourceRaw == "recurringNet" else { return }
+ 
+         let keepForSpending = max(0, recurringNetAvailableForTempPlan() - feasibilityForTempPlan().minimums)
+-        setKeepForSpending(formatAmount(keepForSpending), userEdited: false)
++        tempDiscretionaryReserve = formatAmount(keepForSpending)
+     }
+ 
+     private func syncMinimumsPlanInputsIfNeeded() {
+         guard effectiveEditorStrategy == .minimumsOnly else { return }
+         syncDisplayedBudgetForCurrentMode()
+         syncKeepForSpendingForMinimumsIfNeeded()
+     }
+ 
+     private func syncKeepForSpendingForStrategyChange() {
+         if effectiveEditorStrategy == .minimumsOnly {
+             syncKeepForSpendingForMinimumsIfNeeded()
+-        } else if tempBaselineBudgetSourceRaw == "recurringNet", !keepForSpendingWasEverUserEdited {
+-            setKeepForSpending(formatAmount(0), userEdited: false)
++        } else if tempBaselineBudgetSourceRaw == "recurringNet" {
++            if let explicitlySet = userDefinedKeepForSpending {
++                tempDiscretionaryReserve = formatAmount(explicitlySet)
++            } else {
++                tempDiscretionaryReserve = formatAmount(0)
++            }
+         }
+-    }
+-
+-    private func setKeepForSpending(_ value: String, userEdited: Bool) {
+-        isSyncingKeepForSpending = true
+-        programmaticKeepForSpendingValue = value
+-        tempDiscretionaryReserve = value
+-        keepForSpendingWasUserEdited = userEdited
+-        if userEdited {
+-            keepForSpendingWasEverUserEdited = true
+-        }
+-        isSyncingKeepForSpending = false
+     }
+ 
+     private var discretionaryReserveAmount: Decimal {
+@@ -1595,9 +1582,9 @@
+     private var discretionaryReserveInput: some View {
+         HStack(alignment: .firstTextBaseline, spacing: 12) {
+             inlinePlanLabel(
+-                title: discretionaryReserveFieldIsEditable ? "Keep for Spending" : "Cash Left After Debt",
+-                hint: discretionaryReserveFieldIsEditable
++                title: tempBaselineBudgetSourceRaw == "recurringNet" ? "Keep for Spending" : "Cash Left After Debt",
++                hint: tempBaselineBudgetSourceRaw == "recurringNet"
+                     ? "Cash to keep available for spending"
+                     : "Amount left after monthly bills and debt payments"
+             )
+@@ -1612,14 +1599,12 @@
+                 .submitLabel(.done)
+                 .onSubmit { commitAndDismissKeyboard() }
+                 .onChange(of: tempDiscretionaryReserve) { _, newValue in
+-                    if programmaticKeepForSpendingValue == newValue {
+-                        programmaticKeepForSpendingValue = nil
+-                        return
+-                    }
+-                    if !isSyncingKeepForSpending, discretionaryReserveFieldIsEditable {
+-                        keepForSpendingWasUserEdited = true
+-                        keepForSpendingWasEverUserEdited = true
++                    if discretionaryReserveFieldIsEditable {
++                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
++                        if trimmed.isEmpty {
++                            userDefinedKeepForSpending = nil
++                        } else if let parsed = parseCurrencyInput(trimmed) {
++                            userDefinedKeepForSpending = parsed
++                        }
+                     }
+                     autoApplyEmbeddedPlanIfPossible()
+                 }
+@@ -2263,9 +2248,11 @@
+             tempDebtPaymentReinvestmentRate = debtPaymentReinvestmentRate
+             if debtDiscretionaryReserveAmount > 0 {
+                 let savedReserve = NSDecimalNumber(value: debtDiscretionaryReserveAmount).decimalValue
+-                setKeepForSpending(formatAmount(savedReserve), userEdited: true)
++                userDefinedKeepForSpending = savedReserve
++                tempDiscretionaryReserve = formatAmount(savedReserve)
+             } else {
+-                setKeepForSpending("", userEdited: false)
++                userDefinedKeepForSpending = nil
++                tempDiscretionaryReserve = ""
+             }
+             syncDisplayedBudgetForCurrentMode()
+             syncDiscretionaryReserveForFixedBudgetIfNeeded()
+@@ -2795,8 +2782,10 @@
+                 tempBaselineBudgetSourceRaw = newValue
+                 syncDisplayedBudgetForCurrentMode()
+                 syncDiscretionaryReserveForFixedBudgetIfNeeded()
++                syncKeepForSpendingForStrategyChange()
+             }
+         )
+     }
+@@ -3022,9 +3011,11 @@
+         let trimmedReserve = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
+         if !trimmedReserve.isEmpty, let reserve = parseCurrencyInput(trimmedReserve) {
+             debtDiscretionaryReserveAmount = NSDecimalNumber(decimal: reserve).doubleValue
+-            setKeepForSpending(formatAmount(reserve), userEdited: true)
++            userDefinedKeepForSpending = reserve
++            tempDiscretionaryReserve = formatAmount(reserve)
+         } else {
+             debtDiscretionaryReserveAmount = 0
+-            setKeepForSpending("", userEdited: true)
++            userDefinedKeepForSpending = nil
++            tempDiscretionaryReserve = ""
+         }
+         

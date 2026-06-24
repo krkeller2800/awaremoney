@@ -2180,8 +2180,18 @@ struct DebtPayoffDetailView: View {
     var body: some View {
         VStack(spacing: 16) {
             if debtAccounts.isEmpty {
-                Text("Get started by adding your credit accounts")
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 16) {
+                    Text("Add debts to build a payoff plan")
+                        .foregroundStyle(.secondary)
+                    
+                    Button {
+                        importAction()
+                    } label: {
+                        Text("Import Credit Card or Loan Statement")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.vertical, 24)
             }
 
             contentArea

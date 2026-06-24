@@ -8,7 +8,7 @@ struct CashFlowDetailView: View {
     let coordinator: StatementImportCoordinator
     @Binding var externalSelectedAccountID: UUID?
     let onRouteImport: (StatementType?, UUID?) -> Void
-
+    var importAction: () -> Void = {}
     @Binding var pendingExternal: QuickStartPendingImport?
     
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
@@ -1458,8 +1458,18 @@ struct CashFlowDetailView: View {
     var body: some View {
         VStack(spacing: 16) {
             if cashFlowAccounts.isEmpty {
-                Text("Get started by adding your cash flow accounts")
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 16) {
+                    Text("Add cash accounts to track cash flow")
+                        .foregroundStyle(.secondary)
+                    
+                    Button {
+                        importAction()
+                    } label: {
+                        Text("Import Bank Statement")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.vertical, 24)
             }
 
             columnsView

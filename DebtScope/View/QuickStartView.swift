@@ -16,7 +16,19 @@ private enum QuickStartTopic: String, CaseIterable, Identifiable {
     case assistant = "Assistant"
 
     var id: String { rawValue }
-    var title: String { rawValue }
+    var title: String {
+        switch self {
+        case .debtPayoff: return "Debts"
+        case .debtPayoffPlan: return "Payoff Plan"
+        case .compareStrategies: return "Debt Summary"
+        case .netWorth: return "Net Worth"
+        case .cashFlow: return "Cash Accounts"
+        case .incomeBills: return "Add Income & Bills"
+        case .assets: return "Assets"
+        case .statementReview: return "Needs Review"
+        case .assistant: return "Assistant"
+        }
+    }
 }
 
 struct QuickStartPendingImport: Equatable {
@@ -1411,6 +1423,7 @@ struct QuickStartView: View {
                 coordinator: coordinator,
                 externalSelectedAccountID: $debtPayoffSelectedAccountID,
                 onRouteImport: routeImportedAccount,
+                importAction: { showImporter = true },
                 pendingExternal: $quickStartPending
             )
         case .debtPayoffPlan:
@@ -1422,9 +1435,13 @@ struct QuickStartView: View {
                 }
             }
         case .compareStrategies:
-            DebtSummaryView(embeddedInNavigation: true) {
-                routeToIncomeBills(compact: compact)
-            }
+            DebtSummaryView(
+                embeddedInNavigation: true,
+                onManageIncomeBills: {
+                    routeToIncomeBills(compact: compact)
+                },
+                importAction: { showImporter = true }
+            )
         case .netWorth:
             NetWorthView(embeddedInNavigation: compact)
         case .cashFlow:
@@ -1433,6 +1450,7 @@ struct QuickStartView: View {
                 coordinator: coordinator,
                 externalSelectedAccountID: $cashFlowSelectedAccountID,
                 onRouteImport: routeImportedAccount,
+                importAction: { showImporter = true },
                 pendingExternal: $quickStartPending
             )
         case .statementReview:
@@ -1452,8 +1470,123 @@ struct QuickStartView: View {
                 .environmentObject(settings)
         }
     }
-    private var shouldShowImportStartHint: Bool {
-        accounts.isEmpty
+    
+    private struct TimelineStepRow: View {
+        let step: Int
+        let text: String
+        let isLast: Bool
+        
+        var body: some View {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(spacing: 0) {
+                    Text("\(step)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.white)
+                        .frame(width: 24, height: 24)
+                        .background(Color.blue)
+                        .clipShape(Circle())
+                        
+                    if !isLast {
+                        Rectangle()
+                            .fill(Color(uiColor: .separator).opacity(0.5))
+                            .frame(width: 1, height: 24)
+                    }
+                }
+                
+                Text(text)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, isLast ? 0 : 24)
+            }
+        }
+    }
+
+    private struct HowDebtScopeWorksCard: View {
+        var body: some View {
+            VStack(spacing: 20) {
+                Text("How DebtScope Works")
+                    .font(.title3.weight(.bold))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.bottom, 4)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    TimelineStepRow(step: 1, text: "Import a statement", isLast: false)
+                    TimelineStepRow(step: 2, text: "Review account details", isLast: false)
+                    TimelineStepRow(step: 3, text: "See payoff, cash flow,\nand net worth update", isLast: true)
+                }
+            }
+            .padding(24)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(uiColor: .systemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color(uiColor: .separator).opacity(0.5), lineWidth: 1)
+            )
+        }
+    }
+
+    private var hasImportedData: Bool {
+        !accounts.isEmpty || !reviewItems.isEmpty
+    }
+
+    private var shouldShowFirstLookIntro: Bool {
+        !hasImportedData
+    }
+
+    private var firstLookIntro: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Build your debt and cash-flow picture")
+                    .font(.title2.weight(.bold))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                Text("Import a credit card, loan, bank, or brokerage statement. DebtScope reads it locally, creates accounts, and helps you track payoff, cash flow, and net worth.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity)
+
+            HowDebtScopeWorksCard()
+
+            VStack(spacing: 12) {
+                Button {
+                    showImporter = true
+                } label: {
+                    Text("Import Statement")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.blue)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                
+                Button {
+                    showHelp = true
+                } label: {
+                    Text("Watch How to Import")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                
+                Button {
+                    loadSampleData()
+                } label: {
+                    Text(isLoadingSampleStatements ? "Loading Samples" : "Try Sample Data")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .controlSize(.large)
+                .disabled(isLoadingSampleStatements)
+            }
+            .padding(.top, 4)
+        }
+        .padding(.bottom, 20)
     }
 
     @ToolbarContentBuilder
@@ -1471,45 +1604,7 @@ struct QuickStartView: View {
         }
     }
 
-    private var importStartHint: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Import a statement to begin", systemImage: "doc.badge.plus")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
 
-            Text("You can also share statement files from your bank or credit card app to DebtScope. Example in Help.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button {
-                loadSampleData()
-            } label: {
-                Label(
-                    sampleDataButtonTitle,
-                    systemImage: "doc.on.doc"
-                )
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isLoadingSampleStatements)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Import a statement to begin. You can also share statement files from your bank or credit card app to DebtScope. Example in Help. Try Sample Data.")
-    }
-
-    private var sampleDataButtonTitle: String {
-        if isLoadingSampleStatements {
-            return "Loading Samples"
-        }
-
-        return dataModeController.mode == .sample ? "Try Sample Data" : "Switch to Sample Data"
-    }
 
     private var importProgressOverlay: some View {
         HStack(spacing: 10) {
@@ -1683,10 +1778,18 @@ struct QuickStartView: View {
                 VStack(spacing: 12) {
                     sampleDataModeBanner
 
-                    if shouldShowImportStartHint {
-                        importStartHint
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
+                    if shouldShowFirstLookIntro {
+                        firstLookIntro
+                            .padding(.horizontal, 10)
+                        
+                        Text("After import, DebtScope routes you to review or the right section automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 4)
+                            .padding(.bottom, -4)
+                            .padding(.horizontal, 14)
                     }
 
                     quickStartGroupedTopicCard { topic in
@@ -1736,10 +1839,18 @@ struct QuickStartView: View {
                 VStack(spacing: 12) {
                     sampleDataModeBanner
 
-                    if shouldShowImportStartHint {
-                        importStartHint
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    if shouldShowFirstLookIntro {
+                        firstLookIntro
                             .padding(.horizontal, 12)
+
+                        Text("After import, DebtScope routes you to review or the right section automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 4)
+                            .padding(.bottom, -4)
+                            .padding(.horizontal, 14)
                     }
 
                     quickStartGroupedTopicCard { topic in
@@ -1801,8 +1912,7 @@ struct QuickStartView: View {
             .shadow(color: .black.opacity(0.10), radius: 10, y: 3)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 12)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
+            .padding(.top, -8)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Viewing Sample Data. Use My Data.")
         }
@@ -2137,11 +2247,16 @@ private struct QuickStartAssetsDetailView: View {
     private var compactBody: some View {
         Group {
             if assetAccounts.isEmpty {
-                ContentUnavailableView(
-                    "No Assets Yet",
-                    systemImage: "building.columns",
-                    description: Text("Add a property or other tracked asset to see it here.")
-                )
+                ContentUnavailableView {
+                    Label("No Assets Yet", systemImage: "building.columns")
+                } description: {
+                    Text("Add a property or other tracked asset to see it here.")
+                } actions: {
+                    Button("Add Asset") {
+                        showAddAssetSheet = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -2175,11 +2290,16 @@ private struct QuickStartAssetsDetailView: View {
 
                 Group {
                     if assetAccounts.isEmpty {
-                        ContentUnavailableView(
-                            "No Assets Yet",
-                            systemImage: "building.columns",
-                            description: Text("Add a property or other tracked asset to see it here.")
-                        )
+                        ContentUnavailableView {
+                            Label("No Assets Yet", systemImage: "building.columns")
+                        } description: {
+                            Text("Add a property or other tracked asset to see it here.")
+                        } actions: {
+                            Button("Add Asset") {
+                                showAddAssetSheet = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         ScrollView {
@@ -2209,11 +2329,16 @@ private struct QuickStartAssetsDetailView: View {
                 if let asset = selectedAsset {
                     assetDetailContent(for: asset, title: "Details")
                 } else if assetAccounts.isEmpty {
-                    ContentUnavailableView(
-                        "No Assets Yet",
-                        systemImage: "building.columns",
-                        description: Text("Add a property or other tracked asset to see it here.")
-                    )
+                    ContentUnavailableView {
+                        Label("No Assets Yet", systemImage: "building.columns")
+                    } description: {
+                        Text("Add a property or other tracked asset to see it here.")
+                    } actions: {
+                        Button("Add Asset") {
+                            showAddAssetSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     ContentUnavailableView("Select an asset", systemImage: "building.columns")
                 }

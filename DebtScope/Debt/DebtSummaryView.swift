@@ -39,6 +39,7 @@ fileprivate struct NonMonthlyAdjustmentBreakdown {
 struct DebtSummaryView: View {
     var embeddedInNavigation: Bool = false
     var onManageIncomeBills: (() -> Void)? = nil
+    var importAction: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
@@ -458,11 +459,16 @@ struct DebtSummaryView: View {
                 Spacer()
             }
             if accounts.isEmpty {
-                ContentUnavailableView(
-                    "No debts yet",
-                    systemImage: "creditcard",
-                    description: Text("Add liability accounts to compare payoff strategies.")
-                )
+                ContentUnavailableView {
+                    Label("No debts yet", systemImage: "creditcard")
+                } description: {
+                    Text("Add liability accounts to compare payoff strategies.")
+                } actions: {
+                    Button("Import Credit Card or Loan Statement") {
+                        importAction()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
                 .frame(maxWidth: .infinity, minHeight: compact ? 220 : 280)
             } else {
                 headerRow(compact: compact, widths: widths)
@@ -1158,8 +1164,7 @@ struct DebtPlanSheetView: View {
     @State private var tempStrategy: PayoffStrategy = .minimumsOnly
     @State private var tempMonthlyBudget: String = ""
     @State private var tempDiscretionaryReserve: String = ""
-    @State private var keepForSpendingWasUserEdited = false
-    @State private var keepForSpendingWasEverUserEdited = false
+    @State private var userDefinedKeepForSpending: Decimal? = nil
     @State private var isSyncingKeepForSpending = false
     @State private var programmaticKeepForSpendingValue: String?
     @State private var tempDebtPaymentReinvestmentRate: Double = 1
@@ -1220,7 +1225,7 @@ struct DebtPlanSheetView: View {
     }
 
     private var discretionaryReserveFieldIsEditable: Bool {
-        tempBaselineBudgetSourceRaw == "recurringNet"
+        effectiveEditorStrategy != .minimumsOnly && tempBaselineBudgetSourceRaw == "recurringNet"
     }
 
     private var budgetFieldTitle: String {
@@ -1384,7 +1389,7 @@ struct DebtPlanSheetView: View {
 
     private func syncDiscretionaryReserveForFixedBudgetIfNeeded() {
         guard tempBaselineBudgetSourceRaw == "fixed" else { return }
-        setKeepForSpending(formatAmount(availableAfterBillsAndLoansForTempPlan()), userEdited: false)
+        tempDiscretionaryReserve = formatAmount(availableAfterBillsAndLoansForTempPlan())
     }
 
     private func syncKeepForSpendingForMinimumsIfNeeded() {
@@ -1392,7 +1397,7 @@ struct DebtPlanSheetView: View {
               tempBaselineBudgetSourceRaw == "recurringNet" else { return }
 
         let keepForSpending = max(0, recurringNetAvailableForTempPlan() - feasibilityForTempPlan().minimums)
-        setKeepForSpending(formatAmount(keepForSpending), userEdited: false)
+        tempDiscretionaryReserve = formatAmount(keepForSpending)
     }
 
     private func syncMinimumsPlanInputsIfNeeded() {
@@ -1404,28 +1409,18 @@ struct DebtPlanSheetView: View {
     private func syncKeepForSpendingForStrategyChange() {
         if effectiveEditorStrategy == .minimumsOnly {
             syncKeepForSpendingForMinimumsIfNeeded()
-        } else if tempBaselineBudgetSourceRaw == "recurringNet", !keepForSpendingWasEverUserEdited {
-            setKeepForSpending(formatAmount(0), userEdited: false)
+        } else if tempBaselineBudgetSourceRaw == "recurringNet" {
+            if let explicitlySet = userDefinedKeepForSpending {
+                tempDiscretionaryReserve = formatAmount(explicitlySet)
+            } else {
+                tempDiscretionaryReserve = formatAmount(0)
+            }
         }
-    }
-
-    private func setKeepForSpending(_ value: String, userEdited: Bool) {
-        isSyncingKeepForSpending = true
-        programmaticKeepForSpendingValue = value
-        tempDiscretionaryReserve = value
-        keepForSpendingWasUserEdited = userEdited
-        if userEdited {
-            keepForSpendingWasEverUserEdited = true
-        }
-        isSyncingKeepForSpending = false
     }
 
     private var discretionaryReserveAmount: Decimal {
-        let trimmed = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let amount = parseCurrencyInput(trimmed),
-              amount > 0 else { return 0 }
-        return amount
+        if effectiveEditorStrategy == .minimumsOnly { return 0 }
+        return userDefinedKeepForSpending ?? 0
     }
 
     private func isRecurringIncomeForPlan(_ frequency: PaymentFrequency) -> Bool {
@@ -1595,8 +1590,8 @@ struct DebtPlanSheetView: View {
     private var discretionaryReserveInput: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             inlinePlanLabel(
-                title: discretionaryReserveFieldIsEditable ? "Keep for Spending" : "Cash Left After Debt",
-                hint: discretionaryReserveFieldIsEditable
+                title: tempBaselineBudgetSourceRaw == "recurringNet" ? "Keep for Spending" : "Cash Left After Debt",
+                hint: tempBaselineBudgetSourceRaw == "recurringNet"
                     ? "Cash to keep available for spending"
                     : "Amount left after monthly bills and debt payments"
             )
@@ -1612,13 +1607,13 @@ struct DebtPlanSheetView: View {
                 .submitLabel(.done)
                 .onSubmit { commitAndDismissKeyboard() }
                 .onChange(of: tempDiscretionaryReserve) { _, newValue in
-                    if programmaticKeepForSpendingValue == newValue {
-                        programmaticKeepForSpendingValue = nil
-                        return
-                    }
-                    if !isSyncingKeepForSpending, discretionaryReserveFieldIsEditable {
-                        keepForSpendingWasUserEdited = true
-                        keepForSpendingWasEverUserEdited = true
+                    if discretionaryReserveFieldIsEditable {
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty {
+                            userDefinedKeepForSpending = nil
+                        } else if let parsed = parseCurrencyInput(trimmed) {
+                            userDefinedKeepForSpending = parsed
+                        }
                     }
                     autoApplyEmbeddedPlanIfPossible()
                 }
@@ -2263,9 +2258,11 @@ struct DebtPlanSheetView: View {
             tempDebtPaymentReinvestmentRate = debtPaymentReinvestmentRate
             if debtDiscretionaryReserveAmount > 0 {
                 let savedReserve = NSDecimalNumber(value: debtDiscretionaryReserveAmount).decimalValue
-                setKeepForSpending(formatAmount(savedReserve), userEdited: true)
+                userDefinedKeepForSpending = savedReserve
+                tempDiscretionaryReserve = formatAmount(savedReserve)
             } else {
-                setKeepForSpending("", userEdited: false)
+                userDefinedKeepForSpending = nil
+                tempDiscretionaryReserve = ""
             }
             syncDisplayedBudgetForCurrentMode()
             syncDiscretionaryReserveForFixedBudgetIfNeeded()
@@ -3020,11 +3017,14 @@ struct DebtPlanSheetView: View {
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         if let d = parseCurrencyInput(trimmed) { tempMonthlyBudget = formatAmount(d) }
         let trimmedReserve = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parsedReserve = parseCurrencyInput(trimmedReserve)
-        if let reserve = parsedReserve, reserve > 0 {
-            setKeepForSpending(formatAmount(reserve), userEdited: true)
-        } else if trimmedReserve.isEmpty || parsedReserve == nil || (parsedReserve ?? 0) <= 0 {
-            setKeepForSpending("", userEdited: true)
+        if !trimmedReserve.isEmpty, let reserve = parseCurrencyInput(trimmedReserve) {
+            debtDiscretionaryReserveAmount = NSDecimalNumber(decimal: reserve).doubleValue
+            userDefinedKeepForSpending = reserve
+            tempDiscretionaryReserve = formatAmount(reserve)
+        } else {
+            debtDiscretionaryReserveAmount = 0
+            userDefinedKeepForSpending = nil
+            tempDiscretionaryReserve = ""
         }
         focusedField = nil
         autoApplyEmbeddedPlanIfPossible()

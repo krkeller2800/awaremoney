@@ -75,6 +75,21 @@ struct NetWorthView: View {
         List {
             // Consolidated accounts view: single section with one card per account type and its details
             Section("Accounts") {
+                if byAccount.isEmpty {
+                    VStack(spacing: 16) {
+                        Text("Add assets to see net worth")
+                            .foregroundStyle(.secondary)
+                        
+                        Button {
+                            showAddAssetSheet = true
+                        } label: {
+                            Text("Add Asset")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.vertical, 24)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
                 ForEach(accountTypeOrder, id: \.self) { type in
                     let groups = groupsFor(type: type)
                     if !groups.isEmpty {

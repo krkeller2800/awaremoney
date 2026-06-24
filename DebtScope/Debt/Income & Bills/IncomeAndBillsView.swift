@@ -163,14 +163,17 @@ struct IncomeAndBillsView: View {
                         List {
                             if incomes.isEmpty {
                                 Section {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "list.bullet")
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Text("Add income and bills")
+                                            .font(.headline)
+                                        Text("Add your income to compute your debt budget.")
                                             .foregroundStyle(.secondary)
-                                        Text("No income yet")
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
+                                        Button("Add Income") {
+                                            activeSheet = .add(kind: .income)
+                                        }
+                                        .buttonStyle(.borderedProminent)
                                     }
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, 16)
                                     .listRowSeparator(.hidden)
                                 }
                             } else {
@@ -228,14 +231,29 @@ struct IncomeAndBillsView: View {
                         List {
                             if bills.isEmpty {
                                 Section {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "list.bullet")
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Text("Add income and bills")
+                                            .font(.headline)
+                                        Text("Add your recurring bills to compute your debt budget.")
                                             .foregroundStyle(.secondary)
-                                        Text("No bills yet")
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
+                                        Button("Add Bill") {
+                                            let newItem = CashFlowItem(
+                                                kind: .bill,
+                                                name: "",
+                                                amount: 0,
+                                                frequency: .monthly,
+                                                dayOfMonth: nil,
+                                                firstPaymentDate: nil,
+                                                notes: nil,
+                                                ssaWednesday: nil
+                                            )
+                                            modelContext.insert(newItem)
+                                            try? modelContext.save()
+                                            activeSheet = .edit(item: newItem)
+                                        }
+                                        .buttonStyle(.borderedProminent)
                                     }
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, 16)
                                     .listRowSeparator(.hidden)
                                 }
                             } else {
@@ -378,7 +396,17 @@ struct IncomeAndBillsView: View {
             switch effectivePhoneMode {
             case .income:
                 if incomes.isEmpty {
-                    ContentUnavailableView("No income yet", systemImage: "list.bullet", description: Text("Add your income to compute your debt budget."))
+                    ContentUnavailableView {
+                        Label("Add income and bills", systemImage: "plus.circle")
+                    } description: {
+                        Text("Add your income to compute your debt budget.")
+                    } actions: {
+                        Button("Add Income") {
+                            addKind = .income
+                            showAddSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     Section("Income") {
                         ForEach(incomes) { item in
@@ -398,7 +426,28 @@ struct IncomeAndBillsView: View {
                 }
             case .bills:
                 if bills.isEmpty {
-                    ContentUnavailableView("No bills yet", systemImage: "list.bullet", description: Text("Add your recurring bills to compute your debt budget."))
+                    ContentUnavailableView {
+                        Label("Add income and bills", systemImage: "plus.circle")
+                    } description: {
+                        Text("Add your recurring bills to compute your debt budget.")
+                    } actions: {
+                        Button("Add Bill") {
+                            let newItem = CashFlowItem(
+                                kind: .bill,
+                                name: "",
+                                amount: 0,
+                                frequency: .monthly,
+                                dayOfMonth: nil,
+                                firstPaymentDate: nil,
+                                notes: nil,
+                                ssaWednesday: nil
+                            )
+                            modelContext.insert(newItem)
+                            try? modelContext.save()
+                            activeSheet = .edit(item: newItem)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else {
                     Section("Bills") {
                         ForEach(bills) { item in
