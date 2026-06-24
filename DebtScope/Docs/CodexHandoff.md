@@ -1,16 +1,17 @@
 Current state:
-- The "First Look" screen and sample data onboarding flows are fully implemented and refined in `QuickStartView.swift`.
-- First Launch Experience: Addressed confusion around the app skipping the "First Look" intro by verifying that the iOS Simulator was preserving `.sample` mode state in `UserDefaults`. A true fresh install correctly defaults to `.user` mode and displays the "How DebtScope Works" stepper.
-- "See Sample Data" Navigation: Tapping the button now correctly uses `UserDefaults` to memorize the `autoNavigate` intent across the `.sample` mode environment-switch (which recreates the view), reliably routing the user straight into the `Debt Summary` screen.
-- Background Auto-Load: Fallback logic correctly ensures `.sample` mode is never left empty if accessed manually or on background app restarts.
-- Import Safety: The `fileImporter` now proactively forces the app into `.user` mode before processing imports, safeguarding sample data integrity.
-- All layout spacings have been adjusted and the UI identically matches the mockup specifications.
-- The app compiles cleanly on the iOS Simulator without errors.
+- The First Look screen and sample data onboarding flow are implemented in `QuickStartView.swift`.
+- Fresh installs default to `.user` mode and show the "How DebtScope Works" intro when there are no accounts and no pending review items.
+- "See Sample Data" now calls `dataModeController.requestSampleData()`, so it both switches to sample mode and issues a load request when sample mode is already active.
+- Sample data loads into the isolated sample store and auto-routes to `Debt Summary` when launched from the First Look action.
+- Imports started while viewing sample data now stage selected files first, switch to `.user`, and publish pending Quick Start import requests through `ImportOpenRouter` so the rebuilt user-mode `QuickStartView` owns the actual import.
+- Pending Quick Start imports refuse to process in `.sample` mode; they switch to `.user` and leave the request intact for the user-mode view.
+- Normal user-mode imports still use the existing direct queue path.
 
 Validation status:
-- "See Sample Data" button properly routes to the "Debt Summary" screen.
-- Fresh installs correctly show the "First Look" intro.
-- Xcode build completed successfully.
+- `XcodeRefreshCodeIssuesInFile` reported no issues for `QuickStartView.swift`.
+- Full Xcode build succeeded after the import timing and sample request corrections.
+- Current modified files: `DebtScope/View/QuickStartView.swift` and this handoff.
 
 Recommended next step:
-- Move on to the next major feature or bug fix.
+- Manually smoke-test the sample-data-to-user-import path in Simulator: view sample data, tap Import, choose a personal statement, confirm the app returns to My Data/user mode and routes the import review correctly.
+- Commit the completed First Look and import timing changes after smoke testing.
