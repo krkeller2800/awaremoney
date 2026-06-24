@@ -1,37 +1,44 @@
-Continue Fake PDF Generator rollout from `FakePDFGenImpPlan`.
+Continue from the sample-data / first-look preparation work.
 
 Current state:
-- Steps 1, 2, 3, 4, and 5 have been reviewed and committed.
-- Step 6 tool work is implemented and manually validated through the app path.
-- The generated PDF set was built from `/Users/karlkeller/Downloads/DebtScope-Backup-2026-06-09_113052.ambackup` using FakePDFGen recipe generation, render, and verify commands.
-- Manual app-path imports made it through all generated statements after the FakePDFGen fixes.
+- Sample data now lives in a separate sample SwiftData store and can be switched from Settings.
+- Sample data mode shows the `Viewing Sample Data` banner with `Use My Data`.
+- `Try Sample Data` / sample mode loads bundled sample statements directly into the app instead of sending the user through review.
+- Bundled sample PDFs are under `DebtScope/Resources/SampleData`.
+- The sample data version key in `QuickStartView.swift` is used to force a one-time sample reload after bundled sample/default changes.
+- The first-look implementation plan is still pending. Next substantive feature work should start with `DebtScope/Docs/FirstLookImpPlan.md`.
 
-Important Step 6 fixes:
-- `FakeStatementPDFRenderer.swift` now paginates from actual table position so transaction rows do not fall under the footer or overlap summary content.
-- Header rendering was adjusted so issuer name and `Statement` extract on the same logical line.
-- Fake issuer domain URLs such as `www.northstar-credit-union.com` are rendered in the header so the app's existing `StatementIntakeClassifier` can infer fictional institutions without app parser changes.
-- `SampleRecipeBuilder.swift` now normalizes liability statement signs, deduplicates same-date/description/amount identities, and raises generated checking opening balances when needed so statements avoid overdraft endings that the app misreads.
-- `PrivacyTransformer.swift` uses parser-safe fictional transaction labels, including `Courtesy Credit` instead of `Interest Credit` and payment-style credit card credit labels.
-- `TextExtractionVerifier.swift` verifies rendered PDF text against recipes and checks transaction presence, balance reconciliation, summary ending balance, and duplicate import identities.
-- `BackupPackageReader.swift` supports flat `.ambackup` input as well as `.dsbackup` packages.
-- Swift 6 concurrency issues in FakePDFGen were fixed by avoiding shared non-Sendable formatter/attributed-string statics.
-- Generated recipes/PDF outputs remain ignored and must not be bundled yet.
+Recent sample PDF/import fixes:
+- `006-creditCard.pdf` was corrected so PDF text extracts `Minimum Payment Due $51.65`.
+- `FakeStatementPDFRenderer.swift` now renders credit-card summaries with `Minimum Payment Due`.
+- `ImportViewModel.extractCardSummaryFromPDF` now accepts cent-accurate minimum payments like `$51.65` instead of requiring whole-dollar minimums.
+- Sample liability repair now preserves statement-provided payment amounts instead of silently replacing them with an amortizing floor.
 
-Important correction:
-- Temporary app-target parser changes were backed out. Do not modify `StatementImportCoordinator.swift` for this fake statement naming issue. The root cause was FakePDFGen header/extraction shape, and the accepted fix is tool-only.
+Sample payoff UI work:
+- `DebtSummaryView.swift` copy changed from `Hold Back Cash` / `Debt Budget` to:
+  - `Cash Available This Month`
+  - `Keep for Spending`
+  - `Debt Payoff Budget`
+- A read-only `Debt Payoff Budget` / `Minimum Debt Payment` row was added in the Payoff Plan editor directly below `Keep for Spending` and above `Reinvest paid-off payments`.
+- In Minimums mode, the desired conceptual layout is:
+  - `Cash Available This Month`: full available cash
+  - `Keep for Spending`: cash available minus minimum payments
+  - `Minimum Debt Payment`: total required minimums
+- Sample defaults seed `Keep for Spending` to `$500` through `debtDiscretionaryReserveAmount`.
+
+Known unresolved issue:
+- The `Keep for Spending` strategy-switch behavior is still wrong.
+- Desired behavior:
+  - On first sample compare-strategies load, Minimums should show calculated `Keep for Spending` and `Minimum Debt Payment`.
+  - When switching from Minimums to Snowball/Avalanche, a calculated Minimums `Keep for Spending` value should clear to `$0`.
+  - If the user manually edits `Keep for Spending`, preserve that value across Snowball/Avalanche.
+  - Returning to Minimums may temporarily show the calculated Minimums leftover, but it must not cause the next Snowball/Avalanche switch to treat that calculated value as user-entered.
+- Current implementation tried local flags (`keepForSpendingWasUserEdited`, `keepForSpendingWasEverUserEdited`, `programmaticKeepForSpendingValue`) in `DebtSummaryView.swift`, but the behavior is still incorrect. Revisit with a cleaner state model.
 
 Validation status:
-- FakePDFGen `build-recipes`, `render`, and `verify` passed from Terminal with 11 generated PDFs and privacy findings 0.
-- Manual import through the app path passed for all generated statements after rerendering and copying PDFs into the simulator container.
-- If rerunning from Terminal:
-  - `cd /Volumes/XcodeSSD/Users/karldev/Documents/DebtScope/Tools/FakePDFGen`
-  - `swift run FakePDFGen build-recipes --input /Users/karlkeller/Downloads/DebtScope-Backup-2026-06-09_113052.ambackup --recipes Recipes/generated --seed debtscope-first-look-v1`
-  - `swift run FakePDFGen render --recipes Recipes/generated --output Output/PDFs`
-  - `swift run FakePDFGen verify --output Output/PDFs --recipes Recipes/generated`
-  - `APP_CONTAINER=$(xcrun simctl get_app_container booted com.komakode.awaremoney data)`
-  - `mkdir -p "$APP_CONTAINER/Documents/FakePDFs"`
-  - `cp Output/PDFs/*.pdf "$APP_CONTAINER/Documents/FakePDFs/"`
+- Last full Xcode build succeeded after the latest `DebtSummaryView.swift` edits.
+- No final verification was completed for the unresolved `Keep for Spending` strategy-switch behavior.
 
-Current next step:
-- Commit the Step 6 FakePDFGen changes.
-- Then proceed to Step 7: bundle only approved sanitized sample PDFs into DebtScope sample data resources.
+Recommended next step:
+- Either fix the unresolved `Keep for Spending` strategy-switch state with a cleaner model, or pause it and begin `FirstLookImpPlan.md`.
+- For first-look work, start by reading `DebtScope/Docs/FirstLookImpPlan.md` and align the sample-data entry point with that plan.

@@ -547,7 +547,7 @@ struct DebtSummaryView: View {
                 oneTimeIncomeDefaultSpreadMonths: oneTimeIncomeDefaultSpreadMonths,
                 discretionaryReserveAmount: debtDiscretionaryReserveAmount
             ), avail > 0 {
-            return " • Debt Budget: \(formatAmount(avail))"
+            return " • Debt Payoff Budget: \(formatAmount(avail))"
         }
         return ""
     }
@@ -573,9 +573,9 @@ struct DebtSummaryView: View {
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
         if let d = parseCurrencyInput(trimmed) {
-            return " • Debt Budget: \(formatAmount(d))"
+            return " • Debt Payoff Budget: \(formatAmount(d))"
         } else {
-            return " • Debt Budget: —"
+            return " • Debt Payoff Budget: —"
         }
     }
 
@@ -1158,6 +1158,10 @@ struct DebtPlanSheetView: View {
     @State private var tempStrategy: PayoffStrategy = .minimumsOnly
     @State private var tempMonthlyBudget: String = ""
     @State private var tempDiscretionaryReserve: String = ""
+    @State private var keepForSpendingWasUserEdited = false
+    @State private var keepForSpendingWasEverUserEdited = false
+    @State private var isSyncingKeepForSpending = false
+    @State private var programmaticKeepForSpendingValue: String?
     @State private var tempDebtPaymentReinvestmentRate: Double = 1
     
     // NEW: Buffer plan settings locally; do not persist until Set Plan
@@ -1220,15 +1224,12 @@ struct DebtPlanSheetView: View {
     }
 
     private var budgetFieldTitle: String {
-        if effectiveEditorStrategy == .minimumsOnly {
-            return "Minimum Debt Payment"
-        }
-        return tempBaselineBudgetSourceRaw == "recurringNet" ? "Cash Available This Month" : "Debt Payment Budget"
+        return tempBaselineBudgetSourceRaw == "recurringNet" ? "Cash Available This Month" : "Debt Payoff Budget"
     }
 
     private var budgetFieldHint: String {
         if effectiveEditorStrategy == .minimumsOnly {
-            return "required minimums"
+            return "after bills and adjustments"
         }
         return tempBaselineBudgetSourceRaw == "recurringNet"
             ? "after bills and adjustments"
@@ -1243,10 +1244,10 @@ struct DebtPlanSheetView: View {
     }
 
     private func syncDisplayedBudgetForCurrentMode() {
-        if effectiveEditorStrategy == .minimumsOnly {
-            tempMonthlyBudget = formatAmount(feasibilityForTempPlan().minimums)
-        } else if tempBaselineBudgetSourceRaw == "recurringNet" {
+        if tempBaselineBudgetSourceRaw == "recurringNet" {
             tempMonthlyBudget = formatAmount(recurringNetAvailableForTempPlan())
+        } else if effectiveEditorStrategy == .minimumsOnly {
+            tempMonthlyBudget = formatAmount(feasibilityForTempPlan().minimums)
         } else {
             let restored = lastFixedDebtBudgetAmount > 0
                 ? NSDecimalNumber(value: lastFixedDebtBudgetAmount).decimalValue
@@ -1383,7 +1384,40 @@ struct DebtPlanSheetView: View {
 
     private func syncDiscretionaryReserveForFixedBudgetIfNeeded() {
         guard tempBaselineBudgetSourceRaw == "fixed" else { return }
-        tempDiscretionaryReserve = formatAmount(availableAfterBillsAndLoansForTempPlan())
+        setKeepForSpending(formatAmount(availableAfterBillsAndLoansForTempPlan()), userEdited: false)
+    }
+
+    private func syncKeepForSpendingForMinimumsIfNeeded() {
+        guard effectiveEditorStrategy == .minimumsOnly,
+              tempBaselineBudgetSourceRaw == "recurringNet" else { return }
+
+        let keepForSpending = max(0, recurringNetAvailableForTempPlan() - feasibilityForTempPlan().minimums)
+        setKeepForSpending(formatAmount(keepForSpending), userEdited: false)
+    }
+
+    private func syncMinimumsPlanInputsIfNeeded() {
+        guard effectiveEditorStrategy == .minimumsOnly else { return }
+        syncDisplayedBudgetForCurrentMode()
+        syncKeepForSpendingForMinimumsIfNeeded()
+    }
+
+    private func syncKeepForSpendingForStrategyChange() {
+        if effectiveEditorStrategy == .minimumsOnly {
+            syncKeepForSpendingForMinimumsIfNeeded()
+        } else if tempBaselineBudgetSourceRaw == "recurringNet", !keepForSpendingWasEverUserEdited {
+            setKeepForSpending(formatAmount(0), userEdited: false)
+        }
+    }
+
+    private func setKeepForSpending(_ value: String, userEdited: Bool) {
+        isSyncingKeepForSpending = true
+        programmaticKeepForSpendingValue = value
+        tempDiscretionaryReserve = value
+        keepForSpendingWasUserEdited = userEdited
+        if userEdited {
+            keepForSpendingWasEverUserEdited = true
+        }
+        isSyncingKeepForSpending = false
     }
 
     private var discretionaryReserveAmount: Decimal {
@@ -1561,9 +1595,9 @@ struct DebtPlanSheetView: View {
     private var discretionaryReserveInput: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             inlinePlanLabel(
-                title: discretionaryReserveFieldIsEditable ? "Hold Back Cash" : "Cash Left After Debt",
+                title: discretionaryReserveFieldIsEditable ? "Keep for Spending" : "Cash Left After Debt",
                 hint: discretionaryReserveFieldIsEditable
-                    ? "Reduces the cash sent to debt payoff"
+                    ? "Cash to keep available for spending"
                     : "Amount left after monthly bills and debt payments"
             )
             .layoutPriority(1)
@@ -1577,7 +1611,15 @@ struct DebtPlanSheetView: View {
                 .selectAllOnFocus()
                 .submitLabel(.done)
                 .onSubmit { commitAndDismissKeyboard() }
-                .onChange(of: tempDiscretionaryReserve) { _, _ in
+                .onChange(of: tempDiscretionaryReserve) { _, newValue in
+                    if programmaticKeepForSpendingValue == newValue {
+                        programmaticKeepForSpendingValue = nil
+                        return
+                    }
+                    if !isSyncingKeepForSpending, discretionaryReserveFieldIsEditable {
+                        keepForSpendingWasUserEdited = true
+                        keepForSpendingWasEverUserEdited = true
+                    }
                     autoApplyEmbeddedPlanIfPossible()
                 }
                 .disabled(!discretionaryReserveFieldIsEditable)
@@ -1585,6 +1627,39 @@ struct DebtPlanSheetView: View {
                 .frame(minWidth: 120, maxWidth: 180, alignment: .trailing)
         }
         .id("discretionaryReserveField")
+    }
+
+    private var debtPayoffBudgetPreview: Decimal {
+        if effectiveEditorStrategy == .minimumsOnly {
+            return feasibilityForTempPlan().minimums
+        }
+
+        if tempBaselineBudgetSourceRaw == "recurringNet" {
+            return PlanBudgetDisplay.availableForDebt(
+                availableCash: recurringNetAvailableForTempPlan(),
+                discretionaryReserve: discretionaryReserveAmount
+            )
+        }
+
+        return parseCurrencyInput(tempMonthlyBudget) ?? 0
+    }
+
+    private var debtPayoffBudgetPreviewRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            inlinePlanLabel(
+                title: effectiveEditorStrategy == .minimumsOnly ? "Minimum Debt Payment" : "Debt Payoff Budget",
+                hint: "Amount used to pay down debt"
+            )
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
+            Text(formatAmount(debtPayoffBudgetPreview))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .frame(minWidth: 120, maxWidth: 180, alignment: .trailing)
+        }
+        .id("debtPayoffBudgetPreview")
     }
 
     private func embeddedSection<Content: View, Footer: View>(
@@ -1690,6 +1765,8 @@ struct DebtPlanSheetView: View {
 
                 discretionaryReserveInput
 
+                debtPayoffBudgetPreviewRow
+
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Reinvest paid-off payments")
@@ -1744,15 +1821,15 @@ struct DebtPlanSheetView: View {
                         Text("Use Available Cash")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text("Uses cash available after bills and non-monthly adjustments. Enter Hold Back Cash if you do not want all available cash sent to debt.")
+                        Text("Uses cash available after bills and non-monthly adjustments. Enter Keep for Spending for cash you want to leave available.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Divider()
-                        Text("Set Debt Budget")
+                        Text("Set Debt Payoff Budget")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.secondary)
-                        Text("Uses one debt payment budget for snowball and avalanche. Cash left after that budget is calculated for you.")
+                        Text("Uses one debt payoff budget for snowball and avalanche. Cash left after that budget is calculated for you.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1908,6 +1985,8 @@ struct DebtPlanSheetView: View {
 
                             discretionaryReserveInput
 
+                            debtPayoffBudgetPreviewRow
+
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
                                     Text("Reinvest paid-off payments")
@@ -1969,15 +2048,15 @@ struct DebtPlanSheetView: View {
                                     Text("Use Available Cash")
                                         .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.secondary)
-                                    Text("Uses cash available after bills and non-monthly adjustments. Enter Hold Back Cash if you do not want all available cash sent to debt.")
+                                    Text("Uses cash available after bills and non-monthly adjustments. Enter Keep for Spending for cash you want to leave available.")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Divider()
-                                    Text("Set Debt Budget")
+                                    Text("Set Debt Payoff Budget")
                                         .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.secondary)
-                                    Text("Uses one debt payment budget for snowball and avalanche. Cash left after that budget is calculated for you.")
+                                    Text("Uses one debt payoff budget for snowball and avalanche. Cash left after that budget is calculated for you.")
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
@@ -2184,12 +2263,13 @@ struct DebtPlanSheetView: View {
             tempDebtPaymentReinvestmentRate = debtPaymentReinvestmentRate
             if debtDiscretionaryReserveAmount > 0 {
                 let savedReserve = NSDecimalNumber(value: debtDiscretionaryReserveAmount).decimalValue
-                tempDiscretionaryReserve = formatAmount(savedReserve)
+                setKeepForSpending(formatAmount(savedReserve), userEdited: true)
             } else {
-                tempDiscretionaryReserve = ""
+                setKeepForSpending("", userEdited: false)
             }
             syncDisplayedBudgetForCurrentMode()
             syncDiscretionaryReserveForFixedBudgetIfNeeded()
+            syncKeepForSpendingForStrategyChange()
         }
         .onChange(of: settings.defaultPayoffStrategyRaw) { _, newValue in
             guard embeddedInNavigation else { return }
@@ -2206,6 +2286,7 @@ struct DebtPlanSheetView: View {
             }
             syncDisplayedBudgetForCurrentMode()
             syncDiscretionaryReserveForFixedBudgetIfNeeded()
+            syncKeepForSpendingForStrategyChange()
         }
         .toolbar {
             if !embeddedInNavigation {
@@ -2266,8 +2347,16 @@ struct DebtPlanSheetView: View {
     private func loadAccounts() async {
         do {
             let all = try modelContext.fetch(FetchDescriptor<Account>())
-            await MainActor.run { self.accounts = all.filter { $0.type == .loan || $0.type == .creditCard } }
-        } catch { await MainActor.run { self.accounts = [] } }
+            await MainActor.run {
+                self.accounts = all.filter { $0.type == .loan || $0.type == .creditCard }
+                self.syncMinimumsPlanInputsIfNeeded()
+            }
+        } catch {
+            await MainActor.run {
+                self.accounts = []
+                self.syncMinimumsPlanInputsIfNeeded()
+            }
+        }
     }
 
     private func latestBalance(_ account: Account) -> Decimal {
@@ -2585,12 +2674,12 @@ struct DebtPlanSheetView: View {
         }
 
         if tempBaselineBudgetSourceRaw == "fixed" {
-            LabeledContent("Debt Payment Budget") { Text(formatAmount(fixedBudget)) }
+            LabeledContent("Debt Payoff Budget") { Text(formatAmount(fixedBudget)) }
         }
 
-        expandableAmountRow(tempBaselineBudgetSourceRaw == "recurringNet" ? "Hold Back Cash" : "Cash Left After Debt", value: discretionaryReserve) {
+        expandableAmountRow(tempBaselineBudgetSourceRaw == "recurringNet" ? "Keep for Spending" : "Cash Left After Debt", value: discretionaryReserve) {
             Text(tempBaselineBudgetSourceRaw == "recurringNet"
-                 ? "Cash kept out of the debt payoff budget."
+                 ? "Cash you want available for groceries, gas, errands, or surprises."
                  : "Cash available after the fixed debt payment budget.")
         }
 
@@ -2604,14 +2693,14 @@ struct DebtPlanSheetView: View {
             Text("Income Set Aside minus Bill Reserve for this plan month.")
         }
 
-        expandableAmountRow("Debt Budget This Month", value: availableForDebt) {
-            formulaRow(tempBaselineBudgetSourceRaw == "fixed" ? "Debt Payment Budget" : "Cash Available This Month", amount: tempBaselineBudgetSourceRaw == "fixed" ? fixedBudget : availableCash)
+        expandableAmountRow("Debt Payoff Budget", value: availableForDebt) {
+            formulaRow(tempBaselineBudgetSourceRaw == "fixed" ? "Debt Payoff Budget" : "Cash Available This Month", amount: tempBaselineBudgetSourceRaw == "fixed" ? fixedBudget : availableCash)
             if tempBaselineBudgetSourceRaw == "recurringNet" {
-                formulaRow("Hold Back Cash", amount: -discretionaryReserve, signed: true)
+                formulaRow("Keep for Spending", amount: -discretionaryReserve, signed: true)
             } else {
                 formulaRow("Net Non-Monthly Adjustment", amount: planAdjustment, signed: true)
             }
-            Text("This is the amount the payoff plan can use this month.")
+            Text("This is the debt payoff budget for this month.")
         }
 
         if tempBaselineBudgetSourceRaw == "fixed" {
@@ -2638,10 +2727,10 @@ struct DebtPlanSheetView: View {
         }
 
         if reserveGap > 0 {
-            expandableAmountRow("Below Holdback Target This Month", value: reserveGap, valueColor: .red) {
-                formulaRow("Hold Back Cash", amount: discretionaryReserve)
+            expandableAmountRow("Below Spending Target This Month", value: reserveGap, valueColor: .red) {
+                formulaRow("Keep for Spending", amount: discretionaryReserve)
                 formulaRow("Cash Left After Debt", amount: discretionaryRemaining)
-                Text("This is how far the selected plan leaves this month below the holdback target.")
+                Text("This is how far the selected plan leaves this month below the amount you wanted to keep for spending.")
             }
         }
 
@@ -2672,8 +2761,8 @@ struct DebtPlanSheetView: View {
                     Text("Projected cash left after the planned debt payment in the first full month after the next payoff.")
                 }
                 if futureReserveStatus.reserveGap > 0 {
-                    expandableAmountRow("Projected Holdback Gap After Payoff", value: futureReserveStatus.reserveGap, valueColor: .red) {
-                        formulaRow("Hold Back Cash", amount: discretionaryReserve)
+                    expandableAmountRow("Projected Spending Gap After Payoff", value: futureReserveStatus.reserveGap, valueColor: .red) {
+                        formulaRow("Keep for Spending", amount: discretionaryReserve)
                         formulaRow("Projected Cash Left After Debt", amount: futureReserveStatus.discretionaryRemaining)
                         Text("Projected gap in the first full month after the next payoff.")
                     }
@@ -2692,8 +2781,8 @@ struct DebtPlanSheetView: View {
         }
 
         if fixedBudgetExcess > 0 {
-            expandableAmountRow("Debt Budget Over Available Cash", value: fixedBudgetExcess, valueColor: .red) {
-                formulaRow("Debt Payment Budget", amount: fixedBudget)
+            expandableAmountRow("Debt Payoff Budget Over Available Cash", value: fixedBudgetExcess, valueColor: .red) {
+                formulaRow("Debt Payoff Budget", amount: fixedBudget)
                 formulaRow("Cash Available This Month", amount: -availableCash, signed: true)
                 Text("The debt payment budget is higher than cash available this month.")
             }
@@ -2702,10 +2791,13 @@ struct DebtPlanSheetView: View {
         if isInfeasible {
             expandableAmountRow("Shortfall", value: feas.shortfall, valueColor: .red) {
                 formulaRow("Minimums Due", amount: feas.minimums)
-                formulaRow("Debt Budget This Month", amount: -availableForDebt, signed: true)
+                formulaRow("Debt Payoff Budget", amount: -availableForDebt, signed: true)
                 Text("Minimum payments are higher than the debt budget this month.")
             }
-            Button("Switch to Minimums Only") { tempStrategy = .minimumsOnly }
+            Button("Switch to Minimums Only") {
+                tempStrategy = .minimumsOnly
+                syncKeepForSpendingForStrategyChange()
+            }
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
         }
@@ -2738,14 +2830,14 @@ struct DebtPlanSheetView: View {
         expandableAmountRow("Available Cash This Month", value: availableCash) {
             formulaRow("Recurring Cash After Bills", amount: netForDebt)
             formulaRow("Net Non-Monthly Adjustment", amount: cashAdjustment, signed: true)
-            Text("This is the cash available for debt payoff or holdback this month.")
+            Text("This is the cash available before choosing what to keep for spending.")
         }
         if reserveSeed > 0 {
             expandableAmountRow("Reserve Seed This Month", value: reserveSeed) {
                 Text("System calculated: amount needed to keep non-monthly bill reserves on track. (Info Only)")
             }
         }
-        Button("Use Available Cash as Debt Budget") {
+        Button("Use Available Cash as Debt Payoff Budget") {
             if availableCash > 0 {
                 tempMonthlyBudget = formatAmount(availableCash)
                 autoApplyEmbeddedPlanIfPossible()
@@ -2762,7 +2854,7 @@ struct DebtPlanSheetView: View {
         guard tempStrategy != .minimumsOnly else { return "" }
         let trimmed = tempMonthlyBudget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
-        if let d = parseCurrencyInput(trimmed) { return " • Debt Budget: \(formatAmount(d))" } else { return " • Debt Budget: —" }
+        if let d = parseCurrencyInput(trimmed) { return " • Debt Payoff Budget: \(formatAmount(d))" } else { return " • Debt Payoff Budget: —" }
     }
 
     @discardableResult
@@ -2930,9 +3022,9 @@ struct DebtPlanSheetView: View {
         let trimmedReserve = tempDiscretionaryReserve.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsedReserve = parseCurrencyInput(trimmedReserve)
         if let reserve = parsedReserve, reserve > 0 {
-            tempDiscretionaryReserve = formatAmount(reserve)
+            setKeepForSpending(formatAmount(reserve), userEdited: true)
         } else if trimmedReserve.isEmpty || parsedReserve == nil || (parsedReserve ?? 0) <= 0 {
-            tempDiscretionaryReserve = ""
+            setKeepForSpending("", userEdited: true)
         }
         focusedField = nil
         autoApplyEmbeddedPlanIfPossible()
@@ -3049,7 +3141,7 @@ struct DebtPlanSheetView: View {
                         let incomeColor = Color(red: 0.0, green: 0.5, blue: 0.0)
                         let billsColor  = Color(red: 0.8, green: 0.0, blue: 0.0)
                         HStack {
-                            column(title: "Debt Budget", value: budgetForMonth, color: .primary)
+                            column(title: "Debt Payoff Budget", value: budgetForMonth, color: .primary)
                             Image(systemName: "equal").foregroundStyle(.secondary)
                             column(title: "Base Budget", value: baselineForMonth, color: .primary)
                             Image(systemName: "plus").foregroundStyle(.secondary)

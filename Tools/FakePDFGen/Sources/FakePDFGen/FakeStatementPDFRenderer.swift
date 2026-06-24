@@ -274,7 +274,7 @@ struct FakeStatementPDFRenderer {
                 ("Purchases", currency(purchases)),
                 ("Interest and Fees", currency(0)),
                 ("New Balance", currency(recipe.summary.endingBalance)),
-                ("Minimum Payment", minimumPayment),
+                ("Minimum Payment Due", minimumPayment),
                 ("Payment Due Date", dueDate),
                 ("APR", apr)
             ]

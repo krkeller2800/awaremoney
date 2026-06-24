@@ -407,22 +407,23 @@ final class ImportViewModel: ObservableObject {
             return nil
         }
 
-        // Secondary plausibility filter for Minimum Payment: prefer whole-dollar >= $25 and 1.0%–10% of New Balance
+        // Secondary plausibility filter for Minimum Payment: prefer statement-like amounts
+        // in the normal 1.0%–10% of balance range.
         if newBal > 0 {
-            func isWholeDollar(_ amount: Decimal) -> Bool {
-                let cents = ((amount as NSDecimalNumber).multiplying(byPowerOf10: 2)).intValue % 100
-                return cents == 0
-            }
             func fraction(of amount: Decimal, relativeTo total: Decimal) -> Double? {
                 let totalDouble = (total as NSDecimalNumber).doubleValue
                 guard totalDouble > 0 else { return nil }
                 return (amount as NSDecimalNumber).doubleValue / totalDouble
             }
+            func isPlausibleMinimumPayment(_ amount: Decimal) -> Bool {
+                guard let f = fraction(of: amount, relativeTo: newBal) else { return false }
+                return amount >= 25 && f >= 0.01 && f <= 0.10
+            }
 
             // Only refine if the currently found minPay is missing or implausible
             let existingIsPlausible: Bool = {
-                guard let mp = minPay, let f = fraction(of: mp, relativeTo: newBal) else { return false }
-                return isWholeDollar(mp) && mp >= 25 && f >= 0.01 && f <= 0.10
+                guard let mp = minPay else { return false }
+                return isPlausibleMinimumPayment(mp)
             }()
 
             if !existingIsPlausible {
@@ -524,7 +525,7 @@ final class ImportViewModel: ObservableObject {
                 // Apply plausibility preferences
                 let plausible = candidates.compactMap { amt -> (Decimal, Double)? in
                     guard let f = fraction(of: amt, relativeTo: newBal) else { return nil }
-                    if isWholeDollar(amt) && amt >= 25 && f >= 0.01 && f <= 0.10 {
+                    if isPlausibleMinimumPayment(amt) {
                         return (amt, f)
                     }
                     return nil
@@ -537,8 +538,8 @@ final class ImportViewModel: ObservableObject {
             }
             // Enforce plausibility: if still implausible after refinement, discard it
             let finalIsPlausible: Bool = {
-                guard let mp = minPay, let f = fraction(of: mp, relativeTo: newBal) else { return false }
-                return isWholeDollar(mp) && mp >= 25 && f >= 0.01 && f <= 0.10
+                guard let mp = minPay else { return false }
+                return isPlausibleMinimumPayment(mp)
             }()
             if !finalIsPlausible {
                 AMLogging.log("ImportViewModel: extractCardSummaryFromPDF — discarding implausible Minimum Payment=\(String(describing: minPay)) for newBalance=\(newBal)", component: "ImportViewModel")

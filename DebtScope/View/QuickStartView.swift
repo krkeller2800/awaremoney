@@ -365,6 +365,8 @@ private struct SampleCashFlowItem {
 }
 
 private enum SampleDataIdentity {
+    nonisolated static let dataVersionDefaultsKey = "DebtScope.sampleDataVersion"
+    nonisolated static let currentDataVersion = "2026-06-24.sample-payoff-budget-copy"
     nonisolated static let statementFileNames = Set(SampleStatementResource.allCases.map(\.rawValue))
     nonisolated static let institutionNames: Set<String> = Set([
         "Harborview Bank",
@@ -760,6 +762,7 @@ struct QuickStartView: View {
         defaults.set("recurringNet", forKey: "baselineBudgetSourceRaw")
         defaults.set(false, forKey: "useFixedDebtBudget")
         defaults.set(0.0, forKey: "debtBudgetOverrideAmount")
+        defaults.set(500.0, forKey: "debtDiscretionaryReserveAmount")
         defaults.set(true, forKey: "includeNonMonthlyIncomeSpreads")
         defaults.set(1.0, forKey: "debtPaymentReinvestmentRate")
         defaults.synchronize()
@@ -1019,8 +1022,12 @@ struct QuickStartView: View {
         apr: Decimal?,
         proposedPayment: Decimal?
     ) -> Decimal {
+        if let proposedPayment, proposedPayment > 0 {
+            return proposedPayment
+        }
+
         let absoluteBalance = absDecimal(balance)
-        let proposed = proposedPayment.flatMap { $0 > 0 ? $0 : nil } ?? fallbackSamplePayment(for: balance)
+        let proposed = fallbackSamplePayment(for: balance)
         let balanceFloor = roundedCurrency(absoluteBalance * (Decimal(string: "0.08") ?? Decimal(0.08)))
 
         let interestFloor: Decimal = {
@@ -1297,11 +1304,24 @@ struct QuickStartView: View {
 
             await MainActor.run {
                 repairExistingSampleLiabilityTerms()
+                markCurrentSampleDataLoaded()
                 isLoadingSampleStatements = false
                 endImportProgress()
                 routeToTopic(.compareStrategies)
             }
         }
+    }
+
+    private func loadSampleDataIfVersionChanged() {
+        guard dataModeController.mode == .sample else { return }
+        guard !isLoadingSampleStatements else { return }
+        let loadedVersion = UserDefaults.standard.string(forKey: SampleDataIdentity.dataVersionDefaultsKey)
+        guard loadedVersion != SampleDataIdentity.currentDataVersion else { return }
+        loadSampleData()
+    }
+
+    private func markCurrentSampleDataLoaded() {
+        UserDefaults.standard.set(SampleDataIdentity.currentDataVersion, forKey: SampleDataIdentity.dataVersionDefaultsKey)
     }
 
     private var isCompactLayout: Bool {
@@ -1615,6 +1635,7 @@ struct QuickStartView: View {
         }
         .onAppear {
             loadPersistedReviewStateIfNeeded()
+            loadSampleDataIfVersionChanged()
             if let pendingRoute = DebtScopeAppSectionRequestStore.consumePendingRoute() {
                 routeToAppSection(pendingRoute.section, accountID: pendingRoute.accountID, focus: pendingRoute.focus)
             }
