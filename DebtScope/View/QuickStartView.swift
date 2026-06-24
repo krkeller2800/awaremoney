@@ -1246,6 +1246,34 @@ struct QuickStartView: View {
         }
     }
 
+    private func routeStagedImportsThroughUserMode(_ urls: [URL]) {
+        let requests = urls.map { url in
+            let stagedURL = ImportFileStaging.stageToCaches(url)
+            AMLogging.log(
+                "QuickStart staged user-mode import file=\(stagedURL.lastPathComponent) path=\(stagedURL.path) readable=\(FileManager.default.isReadableFile(atPath: stagedURL.path))",
+                component: "Import"
+            )
+            return ImportOpenRouter.QuickStartImportRequest(
+                url: stagedURL,
+                type: nil,
+                institution: nil
+            )
+        }
+
+        guard !requests.isEmpty else { return }
+
+        showImporter = false
+        if dataModeController.mode == .sample {
+            dataModeController.switchTo(.user)
+        }
+
+        for (index, request) in requests.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35 + (Double(index) * 0.35)) {
+                importRouter.quickStartPendingImport = request
+            }
+        }
+    }
+
     private func loadSampleData(autoNavigate: Bool = false) {
         guard dataModeController.mode == .sample else {
             dataModeController.switchTo(.sample)
@@ -1581,7 +1609,7 @@ struct QuickStartView: View {
                 
                 Button {
                     UserDefaults.standard.set(true, forKey: "pendingSampleDataAutoNavigate")
-                    dataModeController.switchTo(.sample)
+                    dataModeController.requestSampleData()
                 } label: {
                     Text(isLoadingSampleStatements ? "Loading Samples" : "See Sample Data")
                         .frame(maxWidth: .infinity)
@@ -1701,13 +1729,13 @@ struct QuickStartView: View {
 
                 if let firstURL = urls.first {
                     if dataModeController.mode == .sample {
-                        dataModeController.switchTo(.user)
-                    }
-                    
-                    queueImportAfterImporterDismissal(url: firstURL, type: nil, institution: nil)
-                    for url in urls.dropFirst() {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            queueImport(url: url, type: nil, institution: nil)
+                        routeStagedImportsThroughUserMode(urls)
+                    } else {
+                        queueImportAfterImporterDismissal(url: firstURL, type: nil, institution: nil)
+                        for url in urls.dropFirst() {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                                queueImport(url: url, type: nil, institution: nil)
+                            }
                         }
                     }
                 }
@@ -1722,6 +1750,10 @@ struct QuickStartView: View {
         }
         .onChange(of: importRouter.quickStartPendingImport?.id, initial: true) { _, _ in
             guard let request = importRouter.quickStartPendingImport else { return }
+            guard dataModeController.mode == .user else {
+                dataModeController.switchTo(.user)
+                return
+            }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 queueImport(
