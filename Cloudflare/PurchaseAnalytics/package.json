@@ -1,0 +1,14 @@
+{
+  "name": "debtscope-purchase-analytics",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "d1:migrate:local": "wrangler d1 migrations apply debtscope_purchase_analytics --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply debtscope_purchase_analytics --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
