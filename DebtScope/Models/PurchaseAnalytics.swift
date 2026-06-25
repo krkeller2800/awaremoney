@@ -138,7 +138,7 @@ enum PurchaseAnalyticsAppInfo {
     }
 
     nonisolated static func defaultAnalyticsEnabled(for channel: PurchaseAnalyticsChannel) -> Bool {
-        channel == .testflight
+        channel == .testflight || channel == .production
     }
 
     nonisolated static func analyticsEnabled(defaults: UserDefaults = .standard) -> Bool {

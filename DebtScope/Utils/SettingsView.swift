@@ -115,7 +115,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
 
                     Toggle("Share purchase analytics", isOn: $settings.analyticsEnabled)
-                    Text("Sends purchase funnel and StoreKit reliability events only, using a random app install ID. DebtScope never sends financial data, account names, payees, balances, document names, assistant prompts, or responses for analytics.")
+                    Text("Sends purchase funnel and StoreKit reliability events only, using a random app install ID. You can turn this off at any time. DebtScope never sends financial data, account names, payees, balances, document names, assistant prompts, or responses for analytics.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -317,7 +317,7 @@ struct SettingsView: View {
         settings.showHintBars = true
         settings.hapticsEnabled = true
         settings.useReserveProcessingForBills = true
-        settings.analyticsEnabled = false
+        settings.analyticsEnabled = PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled
         settings.assistantEnabled = false
         settings.assistantIncludeTransactions = false
         settings.assistantRetainConversationHistory = false

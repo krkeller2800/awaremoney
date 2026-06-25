@@ -2,15 +2,15 @@
 
 ## Scope
 
-This document captures the privacy policy and App Store Connect disclosure decisions for DebtScope purchase analytics before any user-facing analytics enablement.
+This document captures the privacy policy and App Store Connect disclosure decisions for DebtScope purchase analytics.
 
-Purchase analytics remains disabled by default. Users can control it in Settings > Data & Privacy > Share purchase analytics.
+Purchase analytics is enabled by default in distributed TestFlight and production builds after backend and privacy release gates are complete. Users can turn it off in Settings > Data & Privacy > Share purchase analytics.
 
 ## Privacy Policy Copy For komakode.com
 
 Add or update a DebtScope analytics section with this substance:
 
-DebtScope may collect limited purchase analytics when the user enables Share purchase analytics in Settings. The analytics are used to understand whether the paywall is shown, whether purchase or restore actions are attempted, whether StoreKit returns successful, cancelled, pending, unverified, failed, restored, or none-found results, and whether StoreKit product loading succeeds, returns empty results, or fails.
+DebtScope may collect limited purchase analytics unless the user turns off Share purchase analytics in Settings. The analytics are used to understand whether the paywall is shown, whether purchase or restore actions are attempted, whether StoreKit returns successful, cancelled, pending, unverified, failed, restored, or none-found results, and whether StoreKit product loading succeeds, returns empty results, or fails.
 
 DebtScope purchase analytics may include:
 
@@ -43,7 +43,7 @@ Analytics are sent to DebtScope infrastructure at `komakode.com` and stored in C
 
 Recommended App Privacy response for this analytics rollout:
 
-- Data collected: Yes, only if Share purchase analytics can be enabled in the distributed build.
+- Data collected: Yes, when Share purchase analytics is enabled in the distributed build. Users can turn it off in Settings.
 - Data type: Usage Data > Product Interaction.
 - Purpose: Analytics and App Functionality/Product Reliability, if App Store Connect presents the current purpose options that match these terms.
 - Linked to user: No. The app sends a random install ID; the server stores a peppered hash of that ID and does not store Apple ID, email, name, account data, or financial content.
@@ -59,6 +59,6 @@ Before enabling analytics in TestFlight or production:
 
 - Publish the updated privacy policy on `komakode.com`.
 - Publish the matching App Store Connect App Privacy answers.
-- Confirm the distributed app still defaults Share purchase analytics to off.
+- Confirm the distributed app defaults Share purchase analytics to on only after backend ingestion, privacy policy, and App Store Connect privacy answers are live.
 - Confirm Settings includes the user-facing disclosure and toggle.
 - Reconfirm payloads contain only fields listed in this document.

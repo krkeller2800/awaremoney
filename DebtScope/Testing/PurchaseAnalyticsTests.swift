@@ -51,9 +51,9 @@ final class PurchaseAnalyticsTests: XCTestCase {
         XCTAssertEqual(first, second)
     }
 
-    func testDefaultAnalyticsEnabledOnlyForTestFlight() {
+    func testDefaultAnalyticsEnabledForDistributedBuilds() {
         XCTAssertTrue(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .testflight))
-        XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .production))
+        XCTAssertTrue(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .production))
         XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .debug))
         XCTAssertFalse(PurchaseAnalyticsAppInfo.defaultAnalyticsEnabled(for: .sandbox))
     }
