@@ -364,10 +364,6 @@ struct DebtPayoffDetailView: View {
             QAccountsListView(
                 accounts: debtAccounts,
                 selectedAccountID: $selectedAccountID,
-                onEdit: { account in
-                    selectedAccountID = account.id
-                    updateLastImportedURL(for: account.id)
-                },
                 onPaymentImpact: { account in
                     selectedAccountID = account.id
                     updateLastImportedURL(for: account.id)
@@ -425,25 +421,28 @@ struct DebtPayoffDetailView: View {
         )
         .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
         .padding(.horizontal)
-        .navigationDestination(isPresented: $showCompactPayoffDetail) {
-            VStack(spacing: 0) {
-                payoffImpactPanel
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity,
-                   maxHeight: .infinity,
-                   alignment: .top)
-            .navigationTitle("Payment Impact")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-
-                    Button("Done") {
-                        commitAndDismissKeyboard()
+        .sheet(isPresented: $showCompactPayoffDetail) {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    payoffImpactPanel
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .navigationTitle("Payment Impact")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { commitAndDismissKeyboard() }
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showCompactPayoffDetail = false }
                     }
                 }
             }
+#if os(iOS) || os(visionOS)
+            .applyFormSheetSizing()
+#endif
         }
     }
 
@@ -2238,7 +2237,7 @@ struct DebtPayoffDetailView: View {
                         }
                     }
             }
-            .applySheetSizing()
+            .applyFormSheetSizing()
         }
 #else
         .sheet(item: $editingAccount) { item in

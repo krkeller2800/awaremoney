@@ -8,7 +8,7 @@ struct QAccountsListView: View {
     var title: String = "Liability Accounts"
     var showsDebtTools: Bool = true
     @Binding var selectedAccountID: UUID?
-    var onEdit: (Account) -> Void
+    var onEdit: ((Account) -> Void)? = nil
     var onPaymentImpact: ((Account) -> Void)? = nil
     var onDeleteConfirmed: (Account) -> Void
     var onSelectionChanged: (UUID?) -> Void = { _ in }
@@ -68,7 +68,8 @@ struct QAccountsListView: View {
                                     } label: {
                                         Label("Payment Impact", systemImage: "slider.horizontal.3")
                                     }
-                                } else {
+                                }
+                                if let onEdit {
                                     Button {
                                         onEdit(account)
                                     } label: {
@@ -100,12 +101,8 @@ struct QAccountsListView: View {
                     .background(selectedAccountID == account.id ? Color.accentColor.opacity(0.08) : Color.clear)
                     .contentShape(Rectangle())
                     .simultaneousGesture(TapGesture().onEnded {
-                        if onPaymentImpact != nil {
-                            onEdit(account)
-                        } else {
-                            selectedAccountID = account.id
-                            onSelectionChanged(selectedAccountID)
-                        }
+                        selectedAccountID = account.id
+                        onSelectionChanged(selectedAccountID)
                     })
                     // Context menu (all platforms)
                     .contextMenu {
@@ -115,7 +112,8 @@ struct QAccountsListView: View {
                             } label: {
                                 Label("Payment Impact", systemImage: "slider.horizontal.3")
                             }
-                        } else {
+                        }
+                        if let onEdit {
                             Button {
                                 onEdit(account)
                             } label: {
@@ -138,8 +136,10 @@ struct QAccountsListView: View {
                             } label: {
                                 Label("Impact", systemImage: "slider.horizontal.3")
                             }
-                            .tint(.blue)
-                        } else {
+                            .tint(.indigo)
+                        }
+                        
+                        if let onEdit {
                             Button {
                                 onEdit(account)
                             } label: {
