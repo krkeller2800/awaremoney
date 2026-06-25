@@ -15,6 +15,7 @@ struct DebtPayoffDetailView: View {
     @Query(sort: [SortDescriptor(\Account.name, order: .forward)]) private var accounts: [Account]
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
+    @State private var usesPortraitCompactLayout = false
     @EnvironmentObject private var settings: SettingsStore
     @State private var showImporter = false
     @State private var lastDetection: IntakeDetection?
@@ -333,6 +334,23 @@ struct DebtPayoffDetailView: View {
         }
     }
 
+    private let twoColumnWidthThreshold: CGFloat = 660
+
+    private var isCompactDebtLayout: Bool {
+        horizontalSizeClass == .compact || usesPortraitCompactLayout
+    }
+
+    private func isCompactDebtLayout(for size: CGSize) -> Bool {
+        horizontalSizeClass == .compact || size.width < twoColumnWidthThreshold
+    }
+
+    private func updatePortraitCompactLayout(for size: CGSize) {
+        let shouldUseCompactLayout = size.width < twoColumnWidthThreshold
+        if usesPortraitCompactLayout != shouldUseCompactLayout {
+            usesPortraitCompactLayout = shouldUseCompactLayout
+        }
+    }
+
     private static let importTypes: [UTType] = {
         var types: [UTType] = [.pdf, .commaSeparatedText, .tabSeparatedText, .text, .data]
         let exts = ["qfx","ofx","qbo","qif","xlsx","xls","csv","tsv","txt","zip"]
@@ -431,10 +449,19 @@ struct DebtPayoffDetailView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        if horizontalSizeClass == .compact {
-            compactDebtView
-        } else {
-            columnsView
+        GeometryReader { proxy in
+            let usesCompact = isCompactDebtLayout(for: proxy.size)
+            Group {
+                if usesCompact {
+                    compactDebtView
+                } else {
+                    columnsView
+                }
+            }
+            .onAppear { updatePortraitCompactLayout(for: proxy.size) }
+            .onChange(of: proxy.size) { _, newSize in
+                updatePortraitCompactLayout(for: newSize)
+            }
         }
     }
 
@@ -457,7 +484,7 @@ struct DebtPayoffDetailView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    if horizontalSizeClass == .compact {
+                    if isCompactDebtLayout {
                         Button {
                             editingAccount = EditingAccount(id: account.id)
                         } label: {

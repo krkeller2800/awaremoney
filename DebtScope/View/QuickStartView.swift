@@ -2158,17 +2158,33 @@ struct QuickStartView: View {
 private struct QuickStartIncomeBillsDetailView: View {
     @Binding var planSheetMode: QuickStartView.PlanSheetMode
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var usesPortraitCompactLayout = false
+
+    private let twoColumnWidthThreshold: CGFloat = 660
 
     private var isCompactLayout: Bool {
-        horizontalSizeClass == .compact
+        horizontalSizeClass == .compact || usesPortraitCompactLayout
+    }
+
+    private func isCompactLayout(for size: CGSize) -> Bool {
+        horizontalSizeClass == .compact || size.width < twoColumnWidthThreshold
+    }
+
+    private func updatePortraitCompactLayout(for size: CGSize) {
+        let shouldUseCompactLayout = size.width < twoColumnWidthThreshold
+        if usesPortraitCompactLayout != shouldUseCompactLayout {
+            usesPortraitCompactLayout = shouldUseCompactLayout
+        }
     }
 
     var body: some View {
-        Group {
-            if isCompactLayout {
-                IncomeAndBillsView(embeddedInNavigation: true)
-            } else {
-                VStack(spacing: 0) {
+        GeometryReader { proxy in
+            let usesCompact = isCompactLayout(for: proxy.size)
+            Group {
+                if usesCompact {
+                    IncomeAndBillsView(embeddedInNavigation: true)
+                } else {
+                    VStack(spacing: 0) {
                     Picker("Plan Mode", selection: $planSheetMode) {
                         Text("Income & Bills").tag(QuickStartView.PlanSheetMode.incomeBills)
                         Text("Summary").tag(QuickStartView.PlanSheetMode.summary)
@@ -2187,6 +2203,11 @@ private struct QuickStartIncomeBillsDetailView: View {
                         }
                     }
                 }
+            }
+        }
+            .onAppear { updatePortraitCompactLayout(for: proxy.size) }
+            .onChange(of: proxy.size) { _, newSize in
+                updatePortraitCompactLayout(for: newSize)
             }
         }
     }
@@ -2211,6 +2232,7 @@ private struct QuickStartAssetsDetailView: View {
     @EnvironmentObject private var settings: SettingsStore
 
     @State private var selectedAssetPersistentID: PersistentIdentifier? = nil
+    @State private var usesPortraitCompactLayout = false
     @State private var showAddAssetSheet = false
     @State private var assetBalanceDraft: String = ""
     @State private var assetBalanceDraftAccountID: UUID? = nil
@@ -2235,16 +2257,36 @@ private struct QuickStartAssetsDetailView: View {
         return assetAccounts.first(where: { $0.persistentModelID == selectedAssetPersistentID })
     }
 
+    private let twoColumnWidthThreshold: CGFloat = 660
+
     private var isCompactLayout: Bool {
-        horizontalSizeClass == .compact
+        horizontalSizeClass == .compact || usesPortraitCompactLayout
+    }
+
+    private func isCompactLayout(for size: CGSize) -> Bool {
+        horizontalSizeClass == .compact || size.width < twoColumnWidthThreshold
+    }
+
+    private func updatePortraitCompactLayout(for size: CGSize) {
+        let shouldUseCompactLayout = size.width < twoColumnWidthThreshold
+        if usesPortraitCompactLayout != shouldUseCompactLayout {
+            usesPortraitCompactLayout = shouldUseCompactLayout
+        }
     }
 
     var body: some View {
-        Group {
-            if isCompactLayout {
-                compactBody
-            } else {
-                regularBody
+        GeometryReader { proxy in
+            let usesCompact = isCompactLayout(for: proxy.size)
+            Group {
+                if usesCompact {
+                    compactBody
+                } else {
+                    regularBody
+                }
+            }
+            .onAppear { updatePortraitCompactLayout(for: proxy.size) }
+            .onChange(of: proxy.size) { _, newSize in
+                updatePortraitCompactLayout(for: newSize)
             }
         }
         .toolbar {
@@ -2343,28 +2385,37 @@ private struct QuickStartAssetsDetailView: View {
     }
 
     private var regularBody: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                Text("Assets")
-                    .font(.title2.bold())
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 16)
-                    .padding(.bottom, 12)
+        Group {
+            if assetAccounts.isEmpty {
+                VStack(spacing: 0) {
+                    Text("Assets")
+                        .font(.title2.bold())
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 16)
+                        .padding(.bottom, 12)
 
-                Group {
-                    if assetAccounts.isEmpty {
-                        ContentUnavailableView {
-                            Label("No Assets Yet", systemImage: "building.columns")
-                        } description: {
-                            Text("Add a property or other tracked asset to see it here.")
-                        } actions: {
-                            Button("Add Asset") {
-                                showAddAssetSheet = true
-                            }
-                            .buttonStyle(.borderedProminent)
+                    ContentUnavailableView {
+                        Label("No Assets Yet", systemImage: "building.columns")
+                    } description: {
+                        Text("Add a property or other tracked asset to see it here.")
+                    } actions: {
+                        Button("Add Asset") {
+                            showAddAssetSheet = true
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .background(.quaternary.opacity(0.05))
+            } else {
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        Text("Assets")
+                            .font(.title2.bold())
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 16)
+                            .padding(.bottom, 12)
+
                         ScrollView {
                             VStack(spacing: 14) {
                                 ForEach(assetAccounts, id: \.persistentModelID) { account in
@@ -2381,33 +2432,22 @@ private struct QuickStartAssetsDetailView: View {
                             .padding(.bottom, 16)
                         }
                     }
-                }
-            }
-            .frame(minWidth: 280, maxWidth: 360)
-            .background(.quaternary.opacity(0.05))
+                    .frame(minWidth: 280, maxWidth: 360)
+                    .background(.quaternary.opacity(0.05))
 
-            Divider()
+                    Divider()
 
-            Group {
-                if let asset = selectedAsset {
-                    assetDetailContent(for: asset, title: "Details")
-                } else if assetAccounts.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Assets Yet", systemImage: "building.columns")
-                    } description: {
-                        Text("Add a property or other tracked asset to see it here.")
-                    } actions: {
-                        Button("Add Asset") {
-                            showAddAssetSheet = true
+                    Group {
+                        if let asset = selectedAsset {
+                            assetDetailContent(for: asset, title: "Details")
+                        } else {
+                            ContentUnavailableView("Select an asset", systemImage: "building.columns")
                         }
-                        .buttonStyle(.borderedProminent)
                     }
-                } else {
-                    ContentUnavailableView("Select an asset", systemImage: "building.columns")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.quaternary.opacity(0.05))
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.quaternary.opacity(0.05))
         }
     }
 

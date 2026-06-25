@@ -14,6 +14,12 @@ struct DebtPayoffPlanView: View {
     @State private var debtSummary: AssistantDebtSummary?
     @State private var errorMessage: String?
 
+    private let currentPlanColumnWidth: CGFloat = 360
+    private let compactCurrentPlanColumnWidth: CGFloat = 300
+    private let payoffOrderMinimumWidth: CGFloat = 320
+    private let twoColumnSpacingAndPadding: CGFloat = 48
+    private let twoColumnWidthThreshold: CGFloat = 660
+
     var body: some View {
         payoffPlanContent
             .navigationTitle("Payoff Plan")
@@ -35,10 +41,14 @@ struct DebtPayoffPlanView: View {
                 )
             }
         } else if let planSummary {
-            if usesTwoColumnLayout {
-                twoColumnPlanContent(planSummary)
-            } else {
-                singleColumnPlanContent(planSummary)
+            GeometryReader { proxy in
+                let usesTwoColumns = usesTwoColumnLayout(for: proxy.size)
+                let leftColumnWidth = currentPlanColumnWidth(for: proxy.size)
+                if usesTwoColumns {
+                    twoColumnPlanContent(planSummary, leftColumnWidth: leftColumnWidth)
+                } else {
+                    singleColumnPlanContent(planSummary)
+                }
             }
         } else {
             List {
@@ -47,8 +57,12 @@ struct DebtPayoffPlanView: View {
         }
     }
 
-    private var usesTwoColumnLayout: Bool {
-        horizontalSizeClass == .regular
+    private func currentPlanColumnWidth(for size: CGSize) -> CGFloat {
+        size.width < 760 ? compactCurrentPlanColumnWidth : currentPlanColumnWidth
+    }
+
+    private func usesTwoColumnLayout(for size: CGSize) -> Bool {
+        horizontalSizeClass == .regular && size.width >= twoColumnWidthThreshold
     }
 
     private func singleColumnPlanContent(_ planSummary: AssistantPayoffPlanSummary) -> some View {
@@ -61,7 +75,7 @@ struct DebtPayoffPlanView: View {
         }
     }
 
-    private func twoColumnPlanContent(_ planSummary: AssistantPayoffPlanSummary) -> some View {
+    private func twoColumnPlanContent(_ planSummary: AssistantPayoffPlanSummary, leftColumnWidth: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 16) {
             List {
                 planOverviewSection(planSummary)
@@ -71,7 +85,7 @@ struct DebtPayoffPlanView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .frame(minWidth: 320, idealWidth: 360, maxWidth: 420, maxHeight: .infinity)
+            .frame(width: leftColumnWidth, alignment: .top)
 
             List {
                 payoffOrderSection(planSummary)
@@ -114,13 +128,23 @@ struct DebtPayoffPlanView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        HStack(spacing: 12) {
-                            Text(formatCurrency(debt.startingBalance, code: summary.currencyCode))
-                            Text("APR \(formatAPR(debt.apr))")
-                            Text("Min \(formatCurrency(debt.minimumPayment, code: summary.currencyCode))")
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 12) {
+                                Text(formatCurrency(debt.startingBalance, code: summary.currencyCode))
+                                Text("APR \(formatAPR(debt.apr))")
+                                Text("Min \(formatCurrency(debt.minimumPayment, code: summary.currencyCode))")
+                            }
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(formatCurrency(debt.startingBalance, code: summary.currencyCode))
+                                Text("APR \(formatAPR(debt.apr))")
+                                Text("Min \(formatCurrency(debt.minimumPayment, code: summary.currencyCode))")
+                            }
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     }
                     .padding(.vertical, 4)
                 }

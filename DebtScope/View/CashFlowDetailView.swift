@@ -15,6 +15,7 @@ struct CashFlowDetailView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var settings: SettingsStore
+    @State private var usesPortraitCompactLayout = false
     @State private var showImporter = false
     @State private var lastDetection: IntakeDetection?
     @State private var importError: Error?
@@ -82,6 +83,23 @@ struct CashFlowDetailView: View {
         }
     }
 
+    private let twoColumnWidthThreshold: CGFloat = 660
+
+    private var isCompactCashFlowLayout: Bool {
+        horizontalSizeClass == .compact || usesPortraitCompactLayout
+    }
+
+    private func isCompactCashFlowLayout(for size: CGSize) -> Bool {
+        horizontalSizeClass == .compact || size.width < twoColumnWidthThreshold
+    }
+
+    private func updatePortraitCompactLayout(for size: CGSize) {
+        let shouldUseCompactLayout = size.width < twoColumnWidthThreshold
+        if usesPortraitCompactLayout != shouldUseCompactLayout {
+            usesPortraitCompactLayout = shouldUseCompactLayout
+        }
+    }
+
     private func statementType(for accountType: Account.AccountType) -> StatementType? {
         switch accountType {
         case .creditCard:
@@ -118,23 +136,32 @@ struct CashFlowDetailView: View {
 
     @ViewBuilder
     private var columnsView: some View {
-        if horizontalSizeClass == .compact {
-            accountsList
-                .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
-                .padding(.horizontal)
-        } else {
-            HStack(spacing: 0) {
-                accountsList
-                    .frame(minWidth: 280, maxWidth: 360, maxHeight: .infinity, alignment: .topLeading)
-                    .padding([.top, .horizontal])
+        GeometryReader { proxy in
+            let usesCompact = isCompactCashFlowLayout(for: proxy.size)
+            Group {
+                if usesCompact {
+                    accountsList
+                        .frame(maxWidth: .infinity, minHeight: 280, alignment: .topLeading)
+                        .padding(.horizontal)
+                } else {
+                    HStack(spacing: 0) {
+                        accountsList
+                            .frame(minWidth: 280, maxWidth: 360, maxHeight: .infinity, alignment: .topLeading)
+                            .padding([.top, .horizontal])
 
-                Divider()
+                        Divider()
 
-                inlineStatementPreview
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.quaternary.opacity(0.05))
+                        inlineStatementPreview
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(.quaternary.opacity(0.05))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 300)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 300)
+            .onAppear { updatePortraitCompactLayout(for: proxy.size) }
+            .onChange(of: proxy.size) { _, newSize in
+                updatePortraitCompactLayout(for: newSize)
+            }
         }
     }
 
@@ -1540,7 +1567,7 @@ struct CashFlowDetailView: View {
             }
         }
         .toolbar {
-            if horizontalSizeClass == .compact {
+            if isCompactCashFlowLayout {
                 ToolbarItem(placement: .topBarLeading) {
                     PlanToolbarButton(statementActionTitle, fixedWidth: statementActionWidth) {
                         showStatementSheet = true

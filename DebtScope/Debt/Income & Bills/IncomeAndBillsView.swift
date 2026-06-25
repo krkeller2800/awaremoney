@@ -99,17 +99,25 @@ struct IncomeAndBillsView: View {
     @State private var didRunSSAMigration = false
 
     var body: some View {
-        Group {
-            if isPad {
-                iPadBody
-                    .onAppear {
-                        migrateSSATokensIfNeeded()
-                    }
-            } else {
-                iPhoneBody
-                    .onAppear {
-                        migrateSSATokensIfNeeded()
-                    }
+        GeometryReader { proxy in
+            let usesEmbeddedCompactLayout = usesEmbeddedIPadCompactLayout(for: proxy.size)
+            Group {
+                if usesEmbeddedCompactLayout {
+                    iPhoneBody
+                        .onAppear {
+                            migrateSSATokensIfNeeded()
+                        }
+                } else if isPad {
+                    iPadBody
+                        .onAppear {
+                            migrateSSATokensIfNeeded()
+                        }
+                } else {
+                    iPhoneBody
+                        .onAppear {
+                            migrateSSATokensIfNeeded()
+                        }
+                }
             }
         }
     }
@@ -138,6 +146,17 @@ struct IncomeAndBillsView: View {
     private var isPad: Bool {
         #if os(iOS)
         return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
+
+    private let twoColumnWidthThreshold: CGFloat = 660
+
+    private func usesEmbeddedIPadCompactLayout(for size: CGSize) -> Bool {
+        #if os(iOS)
+        guard embeddedInNavigation, UIDevice.current.userInterfaceIdiom == .pad else { return false }
+        return size.width < twoColumnWidthThreshold
         #else
         return false
         #endif

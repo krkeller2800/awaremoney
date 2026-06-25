@@ -93,6 +93,16 @@ struct DebtSummaryView: View {
         #endif
     }
     private var isEditing: Bool { focusedField != nil }
+
+    private func shouldShowSummaryLandscapeHint(for size: CGSize) -> Bool {
+        #if os(iOS)
+        let idiom = UIDevice.current.userInterfaceIdiom
+        guard idiom == .phone || idiom == .pad else { return false }
+        return size.height > size.width
+        #else
+        return false
+        #endif
+    }
     
     // Added @AppStorage properties for IncomeScheduler settings
     // (already declared above)
@@ -241,18 +251,18 @@ struct DebtSummaryView: View {
         GeometryReader { proxy in
             let compact = isCompactLayout(proxy.size)
             let isPortrait = proxy.size.height > proxy.size.width
+            let showLandscapeHint = shouldShowSummaryLandscapeHint(for: proxy.size)
 //                let toolbarCompact = !((hSizeClass == .regular) && proxy.size.width >= 844)
             ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
-                        // Portrait hint for iPhone
-                        if isPhone && isPortrait {
+                        if showLandscapeHint {
                             HStack(alignment: .center, spacing: 12) {
                                 Image(systemName: "rotate.left.fill")
                                     .font(.title2.weight(.bold))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Rotate to Landscape")
                                         .font(.headline.weight(.bold))
-                                    Text("This table is much easier to read sideways on iPhone.")
+                                    Text("This table is much easier to read sideways.")
                                         .font(.subheadline)
                                 }
                                 Spacer(minLength: 0)
@@ -1187,7 +1197,8 @@ struct DebtPlanSheetView: View {
     private var isEditing: Bool { focusedField != nil }
     private var shouldShowPlanLandscapeHint: Bool {
         #if os(iOS)
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return false }
+        let idiom = UIDevice.current.userInterfaceIdiom
+        guard idiom == .phone || idiom == .pad else { return false }
         let bounds = UIScreen.main.bounds
         return bounds.height > bounds.width
         #else
@@ -1883,7 +1894,7 @@ struct DebtPlanSheetView: View {
                     if showLandscapeHint {
                         HStack {
                             Text("Plan by Month")
-                            Label("Rotate iPhone", systemImage: "rotate.left.fill")
+                            Label("Rotate to Landscape", systemImage: "rotate.left.fill")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -2114,7 +2125,7 @@ struct DebtPlanSheetView: View {
                                     if showLandscapeHint {
                                         HStack {
                                             Text("Plan by Month")
-                                            Label("Rotate iPhone", systemImage: "rotate.left.fill")
+                                            Label("Rotate to Landscape", systemImage: "rotate.left.fill")
                                                 .font(.footnote)
                                                 .foregroundStyle(.secondary)
                                                 .frame(maxWidth: .infinity, alignment: .center)
