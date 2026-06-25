@@ -289,7 +289,7 @@ struct FakeStatementPDFRenderer {
                 ("Opening Balance", currency(recipe.openingBalance)),
                 ("Recent Payments", currency(abs(payments))),
                 ("Interest and Fees", currency(charges)),
-                ("Payment Amount", paymentAmount),
+                ("Monthly Payment", paymentAmount),
                 ("Payment Due Date", dueDate),
                 ("Interest Rate", apr)
             ]

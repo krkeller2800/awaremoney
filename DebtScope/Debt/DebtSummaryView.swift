@@ -241,6 +241,7 @@ struct DebtSummaryView: View {
         GeometryReader { proxy in
             let compact = isCompactLayout(proxy.size)
             let isPortrait = proxy.size.height > proxy.size.width
+            let usesIconOnlyToolbarButtons = isPhone && isPortrait
 //                let toolbarCompact = !((hSizeClass == .regular) && proxy.size.width >= 844)
             ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -295,7 +296,7 @@ struct DebtSummaryView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    if isPhone {
+                    if usesIconOnlyToolbarButtons {
                         Button {
                             showDebtSchedule = true
                         } label: {
@@ -304,14 +305,14 @@ struct DebtSummaryView: View {
                         .labelStyle(.iconOnly)
                         .accessibilityIdentifier("showDebtScheduleButton")
                     } else {
-                        PlanToolbarButton("Schedule", fixedWidth: 90) {
+                        PlanToolbarButton("Schedule", systemImage: "calendar", fixedWidth: 132) {
                             showDebtSchedule = true
                         }
                         .accessibilityIdentifier("showDebtScheduleButton")
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    if isPhone {
+                    if usesIconOnlyToolbarButtons {
                         Button {
                             showDebtChart = true
                         } label: {
@@ -320,7 +321,7 @@ struct DebtSummaryView: View {
                         .labelStyle(.iconOnly)
                         .accessibilityIdentifier("showDebtChartButton")
                     } else {
-                        PlanToolbarButton("Chart", fixedWidth: 70) {
+                        PlanToolbarButton("Chart", systemImage: "chart.line.uptrend.xyaxis", fixedWidth: 112) {
                             showDebtChart = true
                         }
                         .accessibilityIdentifier("showDebtChartButton")

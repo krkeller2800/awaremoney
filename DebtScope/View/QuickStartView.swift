@@ -297,7 +297,7 @@ private enum QuickStartReviewStorage {
 private enum SampleStatementResource: String, CaseIterable {
     case loanOne = "001-genericLoan.pdf"
     case checkingOne = "002-checking.pdf"
-    case creditCardOne = "003-creditCard.pdf"
+    // 003-creditCard.pdf is intentionally not imported: it duplicates the Crescent liability sample.
     case checkingTwo = "004-checking.pdf"
     case checkingThree = "005-checking.pdf"
     case creditCardTwo = "006-creditCard.pdf"
@@ -321,7 +321,7 @@ private enum SampleStatementResource: String, CaseIterable {
         switch self {
         case .loanOne, .loanTwo, .loanThree:
             return .loan
-        case .creditCardOne, .creditCardTwo, .creditCardThree, .creditCardFour, .creditCardFive:
+        case .creditCardTwo, .creditCardThree, .creditCardFour, .creditCardFive:
             return .creditCard
         case .checkingOne, .checkingTwo, .checkingThree:
             return .bank
@@ -334,16 +334,16 @@ private enum SampleStatementResource: String, CaseIterable {
 
     var sampleAccountName: String {
         switch self {
-        case .loanOne, .creditCardFive:
+        case .loanOne, .checkingOne, .creditCardTwo:
             return "Summit"
-        case .checkingOne, .creditCardOne, .creditCardFour:
-            return "Harborview"
-        case .checkingTwo, .loanTwo:
+        case .loanTwo:
             return "Crescent"
-        case .checkingThree, .creditCardTwo:
-            return "Northstar"
         case .creditCardThree, .loanThree:
             return "Pinecrest"
+        case .checkingTwo, .creditCardFour:
+            return "Northstar"
+        case .checkingThree, .creditCardFive:
+            return "Harborview"
         }
     }
 
@@ -393,7 +393,7 @@ private struct SampleCashFlowItem {
 
 private enum SampleDataIdentity {
     nonisolated static let dataVersionDefaultsKey = "DebtScope.sampleDataVersion"
-    nonisolated static let currentDataVersion = "2026-06-25.short-sample-account-names"
+    nonisolated static let currentDataVersion = "2026-06-25.remove-crescent-card-sample"
     nonisolated static let statementFileNames = Set(SampleStatementResource.allCases.map(\.rawValue))
     nonisolated static let institutionNames: Set<String> = Set([
         "Harborview",
@@ -404,6 +404,7 @@ private enum SampleDataIdentity {
         "Harborview Bank",
         "Summit Trail Finance",
         "Crescent Valley Lending",
+        "Pinecrest Bank",
         "Northstar Credit Union"
     ].map(normalizedText))
 
