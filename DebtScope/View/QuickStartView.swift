@@ -20,7 +20,7 @@ private enum QuickStartTopic: String, CaseIterable, Identifiable {
         switch self {
         case .debtPayoff: return "Debts"
         case .debtPayoffPlan: return "Payoff Plan"
-        case .compareStrategies: return "Debt Summary"
+        case .compareStrategies: return "Compare Strategies"
         case .netWorth: return "Net Worth"
         case .cashFlow: return "Cash Accounts"
         case .incomeBills: return "Add Income & Bills"
@@ -332,6 +332,21 @@ private enum SampleStatementResource: String, CaseIterable {
         statementType.defaultAccountType
     }
 
+    var sampleAccountName: String {
+        switch self {
+        case .loanOne, .creditCardFive:
+            return "Summit"
+        case .checkingOne, .creditCardOne, .creditCardFour:
+            return "Harborview"
+        case .checkingTwo, .loanTwo:
+            return "Crescent"
+        case .checkingThree, .creditCardTwo:
+            return "Northstar"
+        case .creditCardThree, .loanThree:
+            return "Pinecrest"
+        }
+    }
+
     private var url: URL? {
         let name = URL(fileURLWithPath: rawValue).deletingPathExtension().lastPathComponent
         return Bundle.main.url(forResource: name, withExtension: "pdf", subdirectory: "SampleData")
@@ -378,9 +393,14 @@ private struct SampleCashFlowItem {
 
 private enum SampleDataIdentity {
     nonisolated static let dataVersionDefaultsKey = "DebtScope.sampleDataVersion"
-    nonisolated static let currentDataVersion = "2026-06-24.sample-payoff-budget-copy"
+    nonisolated static let currentDataVersion = "2026-06-25.short-sample-account-names"
     nonisolated static let statementFileNames = Set(SampleStatementResource.allCases.map(\.rawValue))
     nonisolated static let institutionNames: Set<String> = Set([
+        "Harborview",
+        "Summit",
+        "Crescent",
+        "Northstar",
+        "Pinecrest",
         "Harborview Bank",
         "Summit Trail Finance",
         "Crescent Valley Lending",
@@ -867,6 +887,27 @@ struct QuickStartView: View {
         }
     }
 
+    private func renameSampleAccount(
+        accountID: UUID?,
+        staged: StagedImport,
+        resource: SampleStatementResource
+    ) {
+        guard let account = sampleAccount(id: accountID, accountType: resource.accountType, staged: staged) else {
+            AMLogging.error("Could not find sample account to rename for \(staged.sourceFileName)", component: "QuickStartView")
+            return
+        }
+
+        account.name = resource.sampleAccountName
+        account.institutionName = resource.sampleAccountName
+        account.dataSetRaw = "sample"
+
+        do {
+            try modelContext.save()
+        } catch {
+            AMLogging.error("Failed to rename sample account for \(staged.sourceFileName): \(error.localizedDescription)", component: "QuickStartView")
+        }
+    }
+
     private func repairSampleLiabilityTerms(
         accountID: UUID?,
         staged: StagedImport,
@@ -1348,6 +1389,11 @@ struct QuickStartView: View {
 
                 do {
                     try sampleVM.approveAndSave(context: modelContext)
+                    renameSampleAccount(
+                        accountID: sampleVM.selectedAccountID,
+                        staged: staged,
+                        resource: resource
+                    )
                     repairSampleLiabilityTerms(
                         accountID: sampleVM.selectedAccountID,
                         staged: staged,

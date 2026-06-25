@@ -94,16 +94,6 @@ struct DebtSummaryView: View {
     }
     private var isEditing: Bool { focusedField != nil }
 
-    private func shouldShowSummaryLandscapeHint(for size: CGSize) -> Bool {
-        #if os(iOS)
-        let idiom = UIDevice.current.userInterfaceIdiom
-        guard idiom == .phone || idiom == .pad else { return false }
-        return size.height > size.width
-        #else
-        return false
-        #endif
-    }
-    
     // Added @AppStorage properties for IncomeScheduler settings
     // (already declared above)
 
@@ -251,39 +241,12 @@ struct DebtSummaryView: View {
         GeometryReader { proxy in
             let compact = isCompactLayout(proxy.size)
             let isPortrait = proxy.size.height > proxy.size.width
-            let showLandscapeHint = shouldShowSummaryLandscapeHint(for: proxy.size)
 //                let toolbarCompact = !((hSizeClass == .regular) && proxy.size.width >= 844)
             ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if showLandscapeHint {
-                            HStack(alignment: .center, spacing: 12) {
-                                Image(systemName: "rotate.left.fill")
-                                    .font(.title2.weight(.bold))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Rotate to Landscape")
-                                        .font(.headline.weight(.bold))
-                                    Text("This table is much easier to read sideways.")
-                                        .font(.subheadline)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 14)
-                            .background(Color.orange, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .shadow(color: Color.orange.opacity(0.35), radius: 8, x: 0, y: 4)
-                            .padding(.horizontal, compact ? 6 : 12)
-                            .padding(.bottom, compact ? 8 : 10)
-                        }
-
                         if isPortrait && proxy.size.width < 844 {
-                            let paddingH: CGFloat = compact ? 6 : 12
-                            let contentWidth: CGFloat = 844 - 2 * paddingH
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                summaryStack(compact: compact, availableWidth: contentWidth)
-                                    .padding(.horizontal, paddingH)
-                                    .frame(width: 844, alignment: .topLeading)
-                            }
+                            portraitSummaryStack(compact: compact)
+                                .padding(.horizontal, compact ? 10 : 16)
                         } else {
                             let outerPadding: CGFloat = embeddedInNavigation ? (compact ? 18 : 28) : (compact ? 6 : 12)
                             let maxContentWidth: CGFloat = compact ? 900 : 980
@@ -301,27 +264,27 @@ struct DebtSummaryView: View {
                     .padding(.vertical, 8)
                 }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Debt Summary")
+            .navigationTitle("Compare Strategies")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
-                        Text("Debt Summary")
-                            .font(.headline)
+                        Text(isPhone ? "Strategies" : "Compare Strategies")
+                            .font(isPhone ? .subheadline.weight(.bold) : .headline)
                             .lineLimit(1)
                             .allowsTightening(true)
-                            .minimumScaleFactor(isPhone ? 0.8 : 1)
+                            .minimumScaleFactor(isPhone ? 0.75 : 1)
                         Text(planSubtitleText)
-                            .font(.subheadline)
+                            .font(isPhone ? .caption : .subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .lineLimit(isPhone ? 1 : 2)
                             .allowsTightening(true)
-                            .minimumScaleFactor(isPhone ? 0.75 : 1)
+                            .minimumScaleFactor(isPhone ? 0.72 : 1)
                             .fixedSize(horizontal: false, vertical: !isPhone)
                             .layoutPriority(1)
                     }
-                    .frame(minWidth: isPhone ? 260 : nil)
+                    .frame(minWidth: isPhone ? 160 : nil)
                 }
                 if !embeddedInNavigation {
                     ToolbarItem(placement: .topBarLeading) {
@@ -332,16 +295,36 @@ struct DebtSummaryView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    PlanToolbarButton("Schedule", fixedWidth: 90) {
-                        showDebtSchedule = true
+                    if isPhone {
+                        Button {
+                            showDebtSchedule = true
+                        } label: {
+                            Label("Schedule", systemImage: "calendar")
+                        }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("showDebtScheduleButton")
+                    } else {
+                        PlanToolbarButton("Schedule", fixedWidth: 90) {
+                            showDebtSchedule = true
+                        }
+                        .accessibilityIdentifier("showDebtScheduleButton")
                     }
-                    .accessibilityIdentifier("showDebtScheduleButton")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    PlanToolbarButton("Chart", fixedWidth: 70) {
-                        showDebtChart = true
+                    if isPhone {
+                        Button {
+                            showDebtChart = true
+                        } label: {
+                            Label("Chart", systemImage: "chart.line.uptrend.xyaxis")
+                        }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("showDebtChartButton")
+                    } else {
+                        PlanToolbarButton("Chart", fixedWidth: 70) {
+                            showDebtChart = true
+                        }
+                        .accessibilityIdentifier("showDebtChartButton")
                     }
-                    .accessibilityIdentifier("showDebtChartButton")
                 }
             }
             .sheet(isPresented: $showDebtChart) {
@@ -513,6 +496,290 @@ struct DebtSummaryView: View {
             )
             .padding(.top, compact ? 10 : 14)
             .id("planSettingsPanel")
+        }
+    }
+
+    private func portraitSummaryStack(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            landscapeHintCard
+
+            Picker("Strategy", selection: inlineStrategyBinding) {
+                Text("Minimums").tag(PayoffStrategy.minimumsOnly)
+                Text("Snowball").tag(PayoffStrategy.snowball)
+                Text("Avalanche").tag(PayoffStrategy.avalanche)
+            }
+            .pickerStyle(.segmented)
+
+            if accounts.isEmpty {
+                ContentUnavailableView {
+                    Label("No debts yet", systemImage: "creditcard")
+                } description: {
+                    Text("Add liability accounts to compare payoff strategies.")
+                } actions: {
+                    Button("Import Credit Card or Loan Statement") {
+                        importAction()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                portraitMetricCards
+                portraitPayoffOrder
+                portraitPlanSettingsSummary
+            }
+        }
+        .padding(.bottom, 16)
+    }
+
+    private var landscapeHintCard: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "rotate.left.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Landscape gives the full table")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("Portrait shows the key numbers first.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.blue.opacity(0.18))
+        )
+    }
+
+    private var portraitMetricCards: some View {
+        let totals = totalsForAccounts(accounts)
+        let debtFreeDate = projectedDebtFreeDate()
+        return HStack(spacing: 8) {
+            portraitMetricCard(title: "Total Debt", value: formatAmount(totals.balance), valueColor: .red)
+            portraitMetricCard(title: "Monthly", value: formatAmount(totals.payment), valueColor: .primary)
+            portraitMetricCard(title: "Debt-Free", value: formatMonthYear(debtFreeDate), valueColor: .primary)
+        }
+    }
+
+    private func portraitMetricCard(title: String, value: String, valueColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(valueColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.12))
+        )
+    }
+
+    private var portraitPayoffOrder: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Payoff Order")
+                .font(.headline)
+
+            ForEach(Array(sortedAccountsByPayoffDate().enumerated()), id: \.element.id) { index, account in
+                portraitPayoffRow(account: account, index: index + 1)
+            }
+        }
+    }
+
+    private func portraitPayoffRow(account: Account, index: Int) -> some View {
+        let balance = startingBalanceForDisplay(account)
+        let payment = plannedPaymentForDisplay(account, balance: balance)
+        let payoff = projectedPayoffDate(for: account)
+
+        return HStack(alignment: .top, spacing: 8) {
+            Text("\(index)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.blue)
+                .frame(width: 22, height: 22)
+                .background(Color.blue.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(account.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(portraitAccountTypeDisplay(account.type))
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .lineLimit(1)
+
+                    Spacer(minLength: 4)
+                    Text(formatAmount(balance))
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.red)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Text(formatAPR(account.loanTerms?.apr, scale: account.loanTerms?.aprScale, compact: true)) + Text(" APR")
+                        Text("Payment \(formatAmount(payment))")
+                        Text("Payoff \(formatMonthYear(payoff))")
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(formatAPR(account.loanTerms?.apr, scale: account.loanTerms?.aprScale, compact: true)) + Text(" APR")
+                        Text("Payment \(formatAmount(payment))")
+                        Text("Payoff \(formatMonthYear(payoff))")
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.secondary.opacity(0.12))
+        )
+    }
+
+    private var portraitPlanSettingsSummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Plan Settings")
+                    .font(.headline)
+                Spacer()
+                Text("Edit in landscape")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 0) {
+                portraitSettingsRow("Start", value: appliedPlanStartDisplay)
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Strategy", value: appliedStrategyDisplay)
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Budget Source", value: budgetSourceDisplay)
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Cash Available", value: formatAmount(availableCashForAppliedStartMonth()))
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Keep for Spending", value: formatAmount(PlanBudgetDisplay.discretionaryReserve(from: debtDiscretionaryReserveAmount)))
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Minimum Debt Payment", value: formatAmount(totalMinimumDebtPayment()))
+                Divider().padding(.leading, 12)
+                portraitSettingsRow("Reinvest Payments", value: formatPercent(Decimal(debtPaymentReinvestmentRate)))
+            }
+            .background(.background, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.12))
+            )
+        }
+    }
+
+    private func portraitSettingsRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+    }
+
+    private var appliedPlanStartDisplay: String {
+        if appliedPlanMode == .projectedAtDate, let appliedPlanDate {
+            return formatMonthYear(appliedPlanDate)
+        }
+        return "Now"
+    }
+
+    private var budgetSourceDisplay: String {
+        baselineBudgetSourceRaw == "fixed" ? "Fixed Budget" : "Available Cash"
+    }
+
+    private func startingBalanceForDisplay(_ account: Account) -> Decimal {
+        let baseBalance = absDecimal(latestBalance(account))
+        return usesProjectedBalances(mode: appliedPlanMode, date: appliedPlanDate)
+            ? absProjectedOrBase(for: account, planDate: appliedStartMonth(), base: baseBalance)
+            : baseBalance
+    }
+
+    private func plannedPaymentForDisplay(_ account: Account, balance: Decimal) -> Decimal {
+        currentPlan?.months.first?.payments[account.id] ?? monthlyPayment(for: account, balance: balance)
+    }
+
+    private func projectedDebtFreeDate() -> Date? {
+        let dates = accounts.compactMap { projectedPayoffDate(for: $0) }
+        guard !accounts.isEmpty, dates.count == accounts.count else { return nil }
+        return dates.max()
+    }
+
+    private func totalMinimumDebtPayment() -> Decimal {
+        accounts.reduce(0) { total, account in
+            total + monthlyPayment(for: account, balance: startingBalanceForDisplay(account))
+        }
+    }
+
+    private func availableCashForAppliedStartMonth() -> Decimal {
+        let startMonth = appliedStartMonth()
+        return budgetSchedule(start: startMonth, months: 1, baselineOverride: baselineSource)[startMonth] ?? 0
+    }
+
+    private func formatMonthYear(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM yyyy"
+        return formatter.string(from: date)
+    }
+
+    private func formatPercent(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .percent
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "\(value)"
+    }
+
+    private func portraitAccountTypeDisplay(_ type: Account.AccountType) -> String {
+        switch type {
+        case .creditCard:
+            return "Card"
+        case .loan:
+            return "Loan"
+        default:
+            return "Debt"
         }
     }
 
