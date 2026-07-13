@@ -31,6 +31,7 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
         subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
         durationSeconds = Self.decodeDuration(from: container)
 
+        // Website compatibility: keep the remote manifest schema backward compatible.
         // Support multiple JSON shapes:
         // 1) legacy: "url": "https://..."
         // 2) recommended: "urls": { "iphone": "...", "ipad": "..." }
@@ -82,7 +83,7 @@ struct HelpVideo: Identifiable, Hashable, Decodable {
         }
     }
 
-    // Resolve the best URL for the current device
+    // Resolve the best URL for media URLs published by the KomoKode manifest.
     var urlForCurrentDevice: URL? {
         #if os(iOS)
         switch UIDevice.current.userInterfaceIdiom {
@@ -117,6 +118,7 @@ final class HelpVideosViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published private var durations: [String: TimeInterval] = [:]
 
+    // Permanent KomoKode app contract; released apps fetch this exact manifest path.
     private let feedURL = URL(string: "https://komakode.com/videos/DebtScope-help-videos.json")!
 
     func loadVideos() async {
@@ -124,6 +126,7 @@ final class HelpVideosViewModel: ObservableObject {
         errorMessage = nil
 
         do {
+            // The manifest is a top-level JSON array; media URLs inside it must stay reachable.
             let (data, response) = try await URLSession.shared.data(from: feedURL)
 
             if let httpResponse = response as? HTTPURLResponse,
@@ -131,6 +134,7 @@ final class HelpVideosViewModel: ObservableObject {
                 throw URLError(.badServerResponse)
             }
 
+            // Decode leniently so website maintenance can add optional fields without an app update.
             let decoder = JSONDecoder()
             var decoded = try decoder.decode([HelpVideo].self, from: data)
             decoded = decoded.filter { $0.isAvailableOnCurrentDevice }

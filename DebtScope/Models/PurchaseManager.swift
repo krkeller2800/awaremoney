@@ -605,8 +605,10 @@ final class PurchaseManager: ObservableObject {
         productLoadState: PurchaseAnalyticsProductLoadState? = nil,
         storefrontCountry: String? = nil
     ) {
+        // Purchase analytics intentionally stays app-facing and opt-out via Settings.
         guard PurchaseAnalyticsAppInfo.analyticsEnabled() else { return }
 
+        // Field names are part of the KomoKode Worker compatibility contract.
         let event = PurchaseAnalyticsEvent(
             installId: PurchaseAnalyticsInstallID.current(),
             sessionId: analyticsSessionID,

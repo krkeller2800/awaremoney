@@ -34,6 +34,7 @@ struct AboutView: View {
         return attributes[.modificationDate] as? Date
     }
 
+    // KomoKode support/privacy URLs are visible app contracts; keep paths reachable or redirected.
     private let supportURL = URL(string: "mailto:support@komakode.com?subject=Debt%20Scope%20support")!
     private let privacyPolicyURL = URL(string: "https://komakode.com/Privacy%20Policy")!
     private let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!

@@ -43,6 +43,7 @@ enum PurchaseAnalyticsChannel: String, Codable, CaseIterable, Sendable {
 }
 
 struct PurchaseAnalyticsEvent: Codable, Equatable, Sendable {
+    // App-facing compatibility payload for the KomoKode purchase-events endpoint.
     var installId: String
     var sessionId: String?
     var eventName: PurchaseAnalyticsEventName
@@ -89,6 +90,7 @@ struct PurchaseAnalyticsEvent: Codable, Equatable, Sendable {
 }
 
 enum PurchaseAnalyticsInstallID {
+    // Local analytics identifier only; the Worker hashes it with a server-side pepper.
     private static let key = "purchase_analytics_install_id"
 
     static func current(defaults: UserDefaults = .standard) -> String {
@@ -103,6 +105,7 @@ enum PurchaseAnalyticsInstallID {
 }
 
 enum PurchaseAnalyticsAppInfo {
+    // UserDefaults key mirrored by SettingsStore and the Settings privacy toggle.
     nonisolated static let analyticsEnabledKey = "analytics_enabled"
 
     static var appVersion: String? {
@@ -204,6 +207,7 @@ actor PurchaseAnalyticsQueue {
 }
 
 actor PurchaseAnalyticsClient {
+    // Protected app-facing KomoKode endpoint; website deploys must not shadow this Worker route.
     static let defaultEndpointURL = URL(string: "https://komakode.com/api/debtscope/purchase-events")!
 
     private let endpointURL: URL
@@ -252,6 +256,7 @@ actor PurchaseAnalyticsClient {
     }
 
     private func send(_ event: PurchaseAnalyticsEvent) async throws {
+        // Keep method, headers, timeout, and encoded field names stable for released app/Worker compatibility.
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 5
