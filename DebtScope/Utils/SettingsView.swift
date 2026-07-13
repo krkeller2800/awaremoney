@@ -95,27 +95,26 @@ struct SettingsView: View {
 
                 Section("Data & Privacy") {
                     Toggle("DebtScope Assistant", isOn: $settings.assistantEnabled)
-                    Toggle("Allow transaction details", isOn: $settings.assistantIncludeTransactions)
-                        .disabled(!settings.assistantEnabled)
-                    Toggle("Keep assistant history", isOn: $settings.assistantRetainConversationHistory)
-                        .disabled(!settings.assistantEnabled)
-                    Text("When available, the assistant uses on-device Apple Intelligence and receives only scoped DebtScope summaries instead of direct database access.")
+                    if settings.assistantEnabled {
+                        Toggle("Allow transaction details", isOn: $settings.assistantIncludeTransactions)
+                        Toggle("Keep assistant history", isOn: $settings.assistantRetainConversationHistory)
+                    }
+                    Text("Uses on-device Apple Intelligence when available. DebtScope shares scoped summaries, not direct database access.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Toggle("Allow financial details in Spotlight", isOn: $settings.spotlightAllowsSensitiveFinancialIndexing)
-                    Group {
+                    if settings.spotlightAllowsSensitiveFinancialIndexing {
                         Toggle("Show account names", isOn: $settings.spotlightIncludesAccountNames)
                         Toggle("Show bill names", isOn: $settings.spotlightIncludesBillNames)
                         Toggle("Show transaction payees", isOn: $settings.spotlightIncludesTransactionPayees)
                         Toggle("Show debt and payoff names", isOn: $settings.spotlightIncludesDebtPayoffNames)
                     }
-                    .disabled(!settings.spotlightAllowsSensitiveFinancialIndexing)
-                    Text("Spotlight indexes generic DebtScope sections by default. Optional financial results include names only, never amounts, balances, dates, memos, or account numbers.")
+                    Text("Spotlight always indexes generic app sections. Financial results can include names only, never amounts or account numbers.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
                     Toggle("Share purchase analytics", isOn: $settings.analyticsEnabled)
-                    Text("Sends purchase funnel and StoreKit reliability events only, using a random app install ID. You can turn this off at any time. DebtScope never sends financial data, account names, payees, balances, document names, assistant prompts, or responses for analytics.")
+                    Text("Shares purchase and StoreKit reliability events with a random install ID. Never sends financial data, document names, or assistant chats.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 

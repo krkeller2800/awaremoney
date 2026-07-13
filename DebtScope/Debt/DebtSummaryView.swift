@@ -399,10 +399,10 @@ struct DebtSummaryView: View {
         let gaps = 6 // number of gaps between 7 columns
         let totalSpacing = gap * CGFloat(gaps)
         let usable = max(0, safeTotalWidth - totalSpacing)
-        // Baseline widths taken from existing fixed widths to preserve proportions
+        // Keep numeric columns tight enough for typical currency/date values and give extra room to account names.
         let base: [CGFloat] = compact
-            ? [84, 60, 100, 100, 100, 110, 110]
-            : [132, 90, 120, 120, 120, 140, 130]
+            ? [128, 48, 88, 88, 84, 106, 112]
+            : [160, 72, 112, 112, 108, 128, 128]
         let sum = base.reduce(0, +)
         let factor: CGFloat = sum > 0 ? (usable / sum) : 1
         func w(_ i: Int) -> CGFloat { max(0, base[i] * factor) }
@@ -865,7 +865,7 @@ struct DebtSummaryView: View {
 
     private func headerRow(compact: Bool, widths: ColumnWidths) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
-            Text("Account")
+            Text("Debt")
                 .frame(width: widths.account, alignment: .leading)
                 .font(compact ? .caption2 : .caption)
                 .foregroundStyle(.secondary)
@@ -936,12 +936,22 @@ struct DebtSummaryView: View {
         let totalInterestToPayoff = totalInterestUntilPayoff(for: account, startingBalance: usedBal, fallbackPayment: payment)
 
         return HStack(alignment: .firstTextBaseline, spacing: compact ? 2 : 12) {
-            Text(account.name)
-                .font(compact ? .subheadline : .headline)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .truncationMode(.tail)
-                .frame(width: widths.account, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: compact ? 3 : 5) {
+                Image(systemName: account.type == .creditCard ? "creditcard" : "doc.text")
+                    .font(compact ? .caption2 : .caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: compact ? 13 : 16)
+                    .accessibilityHidden(true)
+
+                Text(account.name)
+                    .font(compact ? .subheadline : .headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .truncationMode(.tail)
+            }
+            .frame(width: widths.account, alignment: .leading)
+            .clipped()
+            .accessibilityLabel("\(portraitAccountTypeDisplay(account.type)) \(account.name)")
 
             Text(formatAPR(apr, scale: account.loanTerms?.aprScale, compact: compact))
                 .font(compact ? .footnote : .body)
